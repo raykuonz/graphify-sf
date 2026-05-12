@@ -6,6 +6,7 @@ Splits oversized communities. Returns cohesion scores.
 Adapted from Graphify's cluster.py — logic is identical; just updated
 module name in docstrings.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -29,6 +30,7 @@ def _partition(G: nx.Graph) -> dict[str, int]:
     """
     try:
         from graspologic.partition import leiden
+
         old_stderr = sys.stderr
         try:
             sys.stderr = io.StringIO()

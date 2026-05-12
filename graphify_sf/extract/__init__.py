@@ -4,6 +4,7 @@ Two-pass pipeline:
   Pass 1: per-file structural extraction (optionally parallel)
   Pass 2: cross-file reference resolution (EXTRACTED → INFERRED if target unknown)
 """
+
 from __future__ import annotations
 
 import sys
@@ -137,6 +138,7 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
             callee_class = call["callee_class"]
             callee_method = call["callee_method"]
             from ._ids import apex_class_id, apex_method_id
+
             method_nid = apex_method_id(callee_class, callee_method)
             class_nid = apex_class_id(callee_class)
             source_file = node.get("source_file", "")
@@ -149,18 +151,20 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
             else:
                 confidence, score = "INFERRED", 0.5
                 target = class_nid
-            additional_edges.append({
-                "source": caller_id,
-                "target": target,
-                "relation": "calls",
-                "confidence": confidence,
-                "confidence_score": score,
-                "source_file": source_file,
-                "source_location": None,
-                "weight": 1.0,
-                "_src": caller_id,
-                "_tgt": target,
-            })
+            additional_edges.append(
+                {
+                    "source": caller_id,
+                    "target": target,
+                    "relation": "calls",
+                    "confidence": confidence,
+                    "confidence_score": score,
+                    "source_file": source_file,
+                    "source_location": None,
+                    "weight": 1.0,
+                    "_src": caller_id,
+                    "_tgt": target,
+                }
+            )
 
     # Downgrade EXTRACTED edges pointing to unknown nodes → INFERRED
     resolved_edges: list[dict] = []
