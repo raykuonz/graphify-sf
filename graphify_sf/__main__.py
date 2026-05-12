@@ -1032,9 +1032,9 @@ def _cmd_install(platform: str = "claude", scope: str = "global", link: bool = F
         )
         sys.exit(1)
 
-    skill_src = Path(__file__).parent / "skill.md"
+    skill_src = Path(__file__).parent / "_bundled_skill.md"
     if not skill_src.exists():
-        print("error: skill.md not found in package — reinstall graphify-sf", file=sys.stderr)
+        print("error: _bundled_skill.md not found in package — reinstall graphify-sf", file=sys.stderr)
         sys.exit(1)
 
     # --link: write canonical to .agents/skills/ and symlink from platform path
