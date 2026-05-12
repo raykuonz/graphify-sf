@@ -263,7 +263,21 @@ pip install graphify-sf[llm]
 
 Install a `/graphify-sf` skill that lets any supported AI coding assistant run the full pipeline and explore the graph through natural language.
 
-### Install (Claude Code — global, all projects)
+### Zero-dependency install via npx (no Python required)
+
+Uses the [open agent skills ecosystem](https://github.com/vercel-labs/skills) — works across 55+ AI coding agents.
+
+```bash
+# Install globally (all projects)
+npx skills add raykuonz/graphify-sf
+
+# Install for this project only
+npx skills add raykuonz/graphify-sf --project
+```
+
+The skill instructs your agent to run `graphify-sf` via `uvx` or `pipx run` on demand — no permanent Python install needed.
+
+### Install via Python CLI
 
 ```bash
 graphify-sf install
