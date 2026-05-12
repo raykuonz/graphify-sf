@@ -1,0 +1,7 @@
+<template>
+    <lightning-card title="Accounts">
+        <template for:each={accounts} for:item="account">
+            <p key={account.Id}>{account.Name}</p>
+        </template>
+    </lightning-card>
+</template>

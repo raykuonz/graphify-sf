@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.installed.cfg
+MANIFEST
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+
+# Type checkers
+.mypy_cache/
+.pytype/
+
+# Distribution / packaging
+*.tar.gz
+*.whl
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / editor
+.idea/
+*.swp
+*.swo
+*~
+
+# AI coding assistant state (local to each developer)
+.omc/
+.claude/settings.local.json
+.sfdx/
+
+# Local dev files
+.env
+.env.local
+continue_impl.sh
+
+# MCP config (contains absolute local paths)
+.mcp.json
+
+# graphify-sf generated output (when running the tool on this repo itself)
+graphify-sf-out/
+
+# uv
+.python-version

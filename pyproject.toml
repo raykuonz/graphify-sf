@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphify-sf"
+version = "0.1.0"
+description = "Turn any Salesforce SFDX project into a queryable knowledge graph — fully offline, no org connection required."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Ray Kuo" },
+]
+keywords = [
+    "salesforce", "sfdx", "knowledge-graph", "metadata", "apex",
+    "flow", "lwc", "agentforce", "graphrag",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "networkx>=3.0",
+    "datasketch>=1.6",
+    "rapidfuzz>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/raykuo/graphify-sf"
+Repository = "https://github.com/raykuo/graphify-sf"
+"Bug Tracker" = "https://github.com/raykuo/graphify-sf/issues"
+Changelog = "https://github.com/raykuo/graphify-sf/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+leiden = ["graspologic; python_version < '3.13'"]
+neo4j = ["neo4j"]
+svg = ["matplotlib"]
+watch = ["watchdog>=3.0"]
+mcp = ["mcp>=1.0"]
+# LLM backend extras — install the one matching your chosen --backend
+claude = ["anthropic>=0.30"]
+kimi = ["openai>=1.0"]
+gemini = ["openai>=1.0"]
+openai = ["openai>=1.0"]
+bedrock = ["boto3>=1.28"]
+ollama = ["openai>=1.0"]
+llm = ["openai>=1.0", "anthropic>=0.30"]  # openai-compat + claude
+all = [
+    "graspologic; python_version < '3.13'",
+    "neo4j", "matplotlib", "watchdog>=3.0", "mcp>=1.0",
+    "openai>=1.0", "anthropic>=0.30", "boto3>=1.28",
+]
+dev = ["pytest>=7.0", "ruff>=0.4", "pip-audit>=2.7"]
+
+[project.scripts]
+graphify-sf = "graphify_sf.__main__:main"
+
+[tool.setuptools]
+packages = ["graphify_sf", "graphify_sf.extract"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+graphify_sf = ["skill.md"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = [
+    "E501",  # line-length handled by formatter
+    "E702",  # multiple statements on one line (semicolons) — used in compact arg-parsing loops
+]
+
+[tool.uv]
+package = true
