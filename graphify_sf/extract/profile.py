@@ -1,4 +1,5 @@
 """Profile and PermissionSet extractor — uses iterparse for large file efficiency."""
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -13,13 +14,17 @@ def _strip_ns(tag: str) -> str:
     return tag
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -35,14 +40,16 @@ def _extract_permissions(path: Path, node_id_fn, sf_type: str) -> dict:
     perm_name = stem
     perm_nid = node_id_fn(perm_name)
 
-    nodes: list[dict] = [{
-        "id": perm_nid,
-        "label": perm_name,
-        "sf_type": sf_type,
-        "file_type": "profile",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": perm_nid,
+            "label": perm_name,
+            "sf_type": sf_type,
+            "file_type": "profile",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
     seen: set[str] = set()
 
@@ -60,13 +67,25 @@ def _extract_permissions(path: Path, node_id_fn, sf_type: str) -> dict:
         for event, el in ET.iterparse(str_path, events=("start", "end")):
             tag = _strip_ns(el.tag)
             if event == "start":
-                if tag in ("objectPermissions", "fieldPermissions", "classAccesses",
-                           "pageAccesses", "tabVisibilities", "userPermissions"):
+                if tag in (
+                    "objectPermissions",
+                    "fieldPermissions",
+                    "classAccesses",
+                    "pageAccesses",
+                    "tabVisibilities",
+                    "userPermissions",
+                ):
                     current_section = tag
                     current_data = {}
             elif event == "end":
-                if tag in ("objectPermissions", "fieldPermissions", "classAccesses",
-                           "pageAccesses", "tabVisibilities", "userPermissions"):
+                if tag in (
+                    "objectPermissions",
+                    "fieldPermissions",
+                    "classAccesses",
+                    "pageAccesses",
+                    "tabVisibilities",
+                    "userPermissions",
+                ):
                     # Process collected data
                     if current_section == "objectPermissions":
                         obj = current_data.get("object") or current_data.get("objectApiName")

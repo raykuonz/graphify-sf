@@ -2,6 +2,7 @@
 
 Uses tmp_path for inline XML fixtures — no dependency on the simple_project fixture.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -159,8 +160,7 @@ def test_extract_bot_version_planner_reference(tmp_path):
     version_file.write_text(BOT_VERSION_XML)
 
     result = extract_bot_version(version_file)
-    planner_edges = [e for e in result["edges"]
-                     if e["relation"] == "references" and "genaiplanner" in e["target"]]
+    planner_edges = [e for e in result["edges"] if e["relation"] == "references" and "genaiplanner" in e["target"]]
     assert len(planner_edges) == 1
     assert "salesplanner" in planner_edges[0]["target"]
 
@@ -441,39 +441,47 @@ def test_extract_prompt_template_missing_file():
 # _ids helpers
 # ---------------------------------------------------------------------------
 
+
 def test_bot_id():
     from graphify_sf.extract._ids import bot_id
+
     assert bot_id("MySalesAgent") == "bot_mysalesagent"
 
 
 def test_bot_version_id():
     from graphify_sf.extract._ids import bot_version_id
+
     assert bot_version_id("MySalesAgent", "v1") == "botversion_mysalesagent_v1"
 
 
 def test_gen_ai_plugin_id():
     from graphify_sf.extract._ids import gen_ai_plugin_id
+
     assert gen_ai_plugin_id("ProductQueries") == "genaiplugin_productqueries"
 
 
 def test_gen_ai_function_id():
     from graphify_sf.extract._ids import gen_ai_function_id
+
     assert gen_ai_function_id("GetProductDetails") == "genaifunction_getproductdetails"
 
 
 def test_gen_ai_planner_id():
     from graphify_sf.extract._ids import gen_ai_planner_id
+
     assert gen_ai_planner_id("SalesPlanner") == "genaiplanner_salesplanner"
 
 
 def test_prompt_template_id():
     from graphify_sf.extract._ids import prompt_template_id
+
     assert prompt_template_id("AccountSummary") == "prompttemplate_accountsummary"
 
 
 # ---------------------------------------------------------------------------
 # detect — file type classification
 # ---------------------------------------------------------------------------
+
 
 def test_detect_classifies_agentforce_files(tmp_path):
     from graphify_sf.detect import SFFileType, detect
