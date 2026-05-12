@@ -1,4 +1,5 @@
 """Flow XML extractor."""
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -38,13 +39,17 @@ def _find_all(root: ET.Element, tag: str, ns: str = "") -> list[ET.Element]:
     return result
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": 1.0, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": 1.0,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -57,7 +62,7 @@ def extract_flow(path: Path) -> dict:
     # Derive flow name from stem: "Create_Account.flow-meta" → "Create_Account"
     stem = path.stem
     if stem.endswith(".flow-meta"):
-        stem = stem[:-len(".flow-meta")]
+        stem = stem[: -len(".flow-meta")]
     flow_name = stem
     flow_nid = flow_id(flow_name)
 
@@ -75,16 +80,18 @@ def extract_flow(path: Path) -> dict:
     process_type = _find_text(root_el, "processType", ns) or "Flow"
     trigger_type = _find_text(root_el, "triggerType", ns)
 
-    nodes.append({
-        "id": flow_nid,
-        "label": flow_name,
-        "sf_type": "Flow",
-        "file_type": "flow",
-        "source_file": str_path,
-        "source_location": None,
-        "process_type": process_type,
-        **({"trigger_type": trigger_type} if trigger_type else {}),
-    })
+    nodes.append(
+        {
+            "id": flow_nid,
+            "label": flow_name,
+            "sf_type": "Flow",
+            "file_type": "flow",
+            "source_file": str_path,
+            "source_location": None,
+            "process_type": process_type,
+            **({"trigger_type": trigger_type} if trigger_type else {}),
+        }
+    )
 
     # Action calls (Apex, email alerts, etc.)
     for action in _find_all(root_el, "actionCalls", ns):
@@ -128,14 +135,16 @@ def extract_flow(path: Path) -> dict:
             elem_label = _find_text(el, "label", ns) or elem_name
             if elem_name:
                 elem_nid = make_sf_id("flowelement", flow_name, elem_name)
-                nodes.append({
-                    "id": elem_nid,
-                    "label": elem_label,
-                    "sf_type": sf_type,
-                    "file_type": "flow",
-                    "source_file": str_path,
-                    "source_location": None,
-                })
+                nodes.append(
+                    {
+                        "id": elem_nid,
+                        "label": elem_label,
+                        "sf_type": sf_type,
+                        "file_type": "flow",
+                        "source_file": str_path,
+                        "source_location": None,
+                    }
+                )
                 edges.append(_make_edge(flow_nid, elem_nid, "contains", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}

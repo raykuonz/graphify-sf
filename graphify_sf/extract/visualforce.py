@@ -1,4 +1,5 @@
 """VisualForce page and component extractor."""
+
 from __future__ import annotations
 
 import re
@@ -11,13 +12,17 @@ _EXTENSIONS_RE = re.compile(r'extensions\s*=\s*["\']([^"\']+)["\']', re.IGNORECA
 _ACTION_RE = re.compile(r'action\s*=\s*["\']{\s*!\s*(\w+)\.', re.IGNORECASE)
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -29,14 +34,16 @@ def extract_vf_page(path: Path) -> dict:
     page_name = stem
     page_nid = page_id(page_name)
 
-    nodes: list[dict] = [{
-        "id": page_nid,
-        "label": page_name,
-        "sf_type": "ApexPage",
-        "file_type": "visualforce",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": page_nid,
+            "label": page_name,
+            "sf_type": "ApexPage",
+            "file_type": "visualforce",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     try:
@@ -67,14 +74,16 @@ def extract_vf_component(path: Path) -> dict:
     comp_name = path.stem
     comp_nid = make_sf_id("vfcomponent", comp_name)
 
-    nodes: list[dict] = [{
-        "id": comp_nid,
-        "label": comp_name,
-        "sf_type": "ApexComponent",
-        "file_type": "visualforce",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": comp_nid,
+            "label": comp_name,
+            "sf_type": "ApexComponent",
+            "file_type": "visualforce",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     try:

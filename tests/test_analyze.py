@@ -1,4 +1,5 @@
 """Tests for graph analysis."""
+
 from __future__ import annotations
 
 import networkx as nx

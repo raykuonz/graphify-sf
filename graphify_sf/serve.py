@@ -23,6 +23,7 @@ Resources exposed:
 Install with: pip install graphify-sf[mcp]
 (Uses the `mcp` package when available; falls back to raw JSON-RPC otherwise.)
 """
+
 from __future__ import annotations
 
 import json
@@ -210,6 +211,7 @@ def _ensure_graph(graph_path: str) -> None:
     import json as _json
 
     from graphify_sf.__main__ import _load_graph_from_json
+
     gp = Path(graph_path)
     _G, _ = _load_graph_from_json(gp)
     # Re-derive communities from node attribute
@@ -220,6 +222,7 @@ def _ensure_graph(graph_path: str) -> None:
             _communities.setdefault(int(cid), []).append(nid)
     if not _communities:
         from graphify_sf.cluster import cluster
+
         _communities.update(cluster(_G))
     # Load labels sidecar
     labels_path = gp.parent / ".graphify_sf_labels.json"
@@ -273,8 +276,10 @@ def _find_node(label: str):
 
 # ── Tool handlers ─────────────────────────────────────────────────────────────
 
+
 def _tool_graph_stats(args: dict) -> dict:
     from collections import Counter
+
     sf_types = Counter(d.get("sf_type", "") for _, d in _G.nodes(data=True) if d.get("sf_type"))
     return {
         "nodes": _G.number_of_nodes(),
@@ -287,6 +292,7 @@ def _tool_graph_stats(args: dict) -> dict:
 
 def _tool_query(args: dict) -> dict:
     from collections import deque
+
     question = args["question"]
     use_dfs = args.get("mode", "bfs") == "dfs"
     budget = int(args.get("budget", 2000))
@@ -340,15 +346,18 @@ def _tool_get_node(args: dict) -> dict:
         return {"found": False, "message": f"No node matching '{label}'"}
     data = _G.nodes[nid]
     from graphify_sf.build import edge_data
+
     neighbors = []
     for nb in sorted(_G.neighbors(nid), key=lambda n: _G.degree(n), reverse=True)[:20]:
         edata = edge_data(_G, nid, nb)
-        neighbors.append({
-            "id": nb,
-            "label": _G.nodes[nb].get("label", nb),
-            "relation": edata.get("relation", ""),
-            "confidence": edata.get("confidence", ""),
-        })
+        neighbors.append(
+            {
+                "id": nb,
+                "label": _G.nodes[nb].get("label", nb),
+                "relation": edata.get("relation", ""),
+                "confidence": edata.get("confidence", ""),
+            }
+        )
     return {
         "found": True,
         "id": nid,
@@ -372,6 +381,7 @@ def _tool_get_neighbors(args: dict) -> dict:
     if nid is None:
         return {"found": False, "message": f"No node matching '{label}'"}
     from graphify_sf.build import edge_data
+
     neighbors = []
     for nb in sorted(_G.neighbors(nid), key=lambda n: _G.degree(n), reverse=True):
         if len(neighbors) >= limit:
@@ -380,13 +390,15 @@ def _tool_get_neighbors(args: dict) -> dict:
         rel = edata.get("relation", "")
         if relation_filter and rel.lower() != relation_filter:
             continue
-        neighbors.append({
-            "id": nb,
-            "label": _G.nodes[nb].get("label", nb),
-            "sf_type": _G.nodes[nb].get("sf_type", ""),
-            "relation": rel,
-            "confidence": edata.get("confidence", ""),
-        })
+        neighbors.append(
+            {
+                "id": nb,
+                "label": _G.nodes[nb].get("label", nb),
+                "sf_type": _G.nodes[nb].get("sf_type", ""),
+                "relation": rel,
+                "confidence": edata.get("confidence", ""),
+            }
+        )
     return {
         "found": True,
         "node": _G.nodes[nid].get("label", nid),
@@ -400,6 +412,7 @@ def _tool_shortest_path(args: dict) -> dict:
     import networkx as nx
 
     from graphify_sf.build import edge_data
+
     src_nid = _find_node(args["source"])
     tgt_nid = _find_node(args["target"])
     if src_nid is None:
@@ -414,12 +427,14 @@ def _tool_shortest_path(args: dict) -> dict:
     for i in range(len(path_nodes) - 1):
         u, v = path_nodes[i], path_nodes[i + 1]
         edata = edge_data(_G, u, v)
-        hops.append({
-            "from": _G.nodes[u].get("label", u),
-            "to": _G.nodes[v].get("label", v),
-            "relation": edata.get("relation", ""),
-            "confidence": edata.get("confidence", ""),
-        })
+        hops.append(
+            {
+                "from": _G.nodes[u].get("label", u),
+                "to": _G.nodes[v].get("label", v),
+                "relation": edata.get("relation", ""),
+                "confidence": edata.get("confidence", ""),
+            }
+        )
     return {
         "found": True,
         "source": _G.nodes[src_nid].get("label", src_nid),
@@ -431,29 +446,34 @@ def _tool_shortest_path(args: dict) -> dict:
 
 def _tool_god_nodes(args: dict) -> dict:
     from graphify_sf.analyze import god_nodes as _god_nodes
+
     limit = int(args.get("limit", 10))
     gods = _god_nodes(_G)
     result = []
     for nid, deg in gods[:limit]:
         data = _G.nodes[nid]
-        result.append({
-            "label": data.get("label", nid),
-            "sf_type": data.get("sf_type", ""),
-            "degree": deg,
-            "community": data.get("community"),
-            "community_label": _community_labels.get(data.get("community"), ""),
-        })
+        result.append(
+            {
+                "label": data.get("label", nid),
+                "sf_type": data.get("sf_type", ""),
+                "degree": deg,
+                "community": data.get("community"),
+                "community_label": _community_labels.get(data.get("community"), ""),
+            }
+        )
     return {"god_nodes": result}
 
 
 def _tool_list_communities(args: dict) -> dict:
     result = []
     for cid, members in sorted(_communities.items()):
-        result.append({
-            "id": cid,
-            "label": _community_labels.get(cid, f"Community {cid}"),
-            "member_count": len(members),
-        })
+        result.append(
+            {
+                "id": cid,
+                "label": _community_labels.get(cid, f"Community {cid}"),
+                "member_count": len(members),
+            }
+        )
     return {"communities": result}
 
 
@@ -471,7 +491,8 @@ def _tool_get_community(args: dict) -> dict:
         best_score = -1
         for c, lbl in _community_labels.items():
             if lbl.lower() == label_arg:
-                best = c; break
+                best = c
+                break
             if label_arg in lbl.lower():
                 if len(lbl) > best_score:
                     best_score = len(lbl)
@@ -487,12 +508,14 @@ def _tool_get_community(args: dict) -> dict:
     members = []
     for nid in sorted(members_raw, key=lambda n: _G.degree(n), reverse=True):
         data = _G.nodes.get(nid, {})
-        members.append({
-            "id": nid,
-            "label": data.get("label", nid),
-            "sf_type": data.get("sf_type", ""),
-            "degree": _G.degree(nid),
-        })
+        members.append(
+            {
+                "id": nid,
+                "label": data.get("label", nid),
+                "sf_type": data.get("sf_type", ""),
+                "degree": _G.degree(nid),
+            }
+        )
     return {
         "found": True,
         "community_id": cid,
@@ -516,6 +539,7 @@ _TOOL_HANDLERS = {
 
 # ── Resource read handlers ────────────────────────────────────────────────────
 
+
 def _read_resource(uri: str, graph_path: str) -> str:
     """Return the text content for an MCP resource URI."""
     gp = Path(graph_path)
@@ -535,23 +559,26 @@ def _read_resource(uri: str, graph_path: str) -> str:
 
     if uri == "graphify-sf://surprises":
         from graphify_sf.analyze import surprising_connections
+
         surprises = surprising_connections(_G, _communities)
         return json.dumps({"surprising_connections": surprises}, indent=2)
 
     if uri == "graphify-sf://audit":
         from collections import Counter
-        confidences = Counter(
-            d.get("confidence", "EXTRACTED") or "EXTRACTED"
-            for _, _, d in _G.edges(data=True)
-        )
+
+        confidences = Counter(d.get("confidence", "EXTRACTED") or "EXTRACTED" for _, _, d in _G.edges(data=True))
         total = sum(confidences.values()) or 1
-        return json.dumps({
-            "total_edges": total,
-            "breakdown": {k: {"count": v, "pct": round(v / total * 100)} for k, v in confidences.items()},
-        }, indent=2)
+        return json.dumps(
+            {
+                "total_edges": total,
+                "breakdown": {k: {"count": v, "pct": round(v / total * 100)} for k, v in confidences.items()},
+            },
+            indent=2,
+        )
 
     if uri == "graphify-sf://questions":
         from graphify_sf.analyze import suggest_questions
+
         questions = suggest_questions(_G, _communities, _community_labels)
         return json.dumps({"suggested_questions": questions}, indent=2)
 
@@ -559,6 +586,7 @@ def _read_resource(uri: str, graph_path: str) -> str:
 
 
 # ── JSON-RPC helpers ──────────────────────────────────────────────────────────
+
 
 def _send(obj: dict) -> None:
     line = json.dumps(obj, ensure_ascii=False)
@@ -576,6 +604,7 @@ def _ok(req_id, result) -> dict:
 
 # ── Blank-line stdin filter ───────────────────────────────────────────────────
 
+
 def _filtered_stdin():
     """Yield non-empty lines from stdin.
 
@@ -591,6 +620,7 @@ def _filtered_stdin():
 
 # ── MCP protocol handlers ─────────────────────────────────────────────────────
 
+
 def _handle(msg: dict, graph_path: str) -> dict | None:
     req_id = msg.get("id")
     method = msg.get("method", "")
@@ -601,11 +631,14 @@ def _handle(msg: dict, graph_path: str) -> dict | None:
         return None
 
     if method == "initialize":
-        return _ok(req_id, {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}, "resources": {}},
-            "serverInfo": {"name": "graphify-sf", "version": "0.1"},
-        })
+        return _ok(
+            req_id,
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}, "resources": {}},
+                "serverInfo": {"name": "graphify-sf", "version": "0.1"},
+            },
+        )
 
     if method == "tools/list":
         return _ok(req_id, {"tools": _TOOLS})
@@ -618,9 +651,7 @@ def _handle(msg: dict, graph_path: str) -> dict | None:
         try:
             content = _read_resource(uri, graph_path)
             mime = next((r["mimeType"] for r in _RESOURCES if r["uri"] == uri), "text/plain")
-            return _ok(req_id, {
-                "contents": [{"uri": uri, "mimeType": mime, "text": content}]
-            })
+            return _ok(req_id, {"contents": [{"uri": uri, "mimeType": mime, "text": content}]})
         except Exception as exc:
             return _error(req_id, -32603, f"Resource read error: {exc}")
 
@@ -633,9 +664,12 @@ def _handle(msg: dict, graph_path: str) -> dict | None:
         try:
             _ensure_graph(graph_path)
             result = handler(tool_args)
-            return _ok(req_id, {
-                "content": [{"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}],
-            })
+            return _ok(
+                req_id,
+                {
+                    "content": [{"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}],
+                },
+            )
         except Exception as exc:
             return _error(req_id, -32603, str(exc))
 

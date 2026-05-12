@@ -1,4 +1,5 @@
 """Layout extractor."""
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -17,13 +18,17 @@ def _find_all(root: ET.Element, tag: str, ns: str = "") -> list[ET.Element]:
     return result
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -41,14 +46,16 @@ def extract_layout(path: Path) -> dict:
     layout_nid = layout_id(layout_name)
     obj_nid = object_id(obj_name)
 
-    nodes: list[dict] = [{
-        "id": layout_nid,
-        "label": layout_name,
-        "sf_type": "Layout",
-        "file_type": "layout",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": layout_nid,
+            "label": layout_name,
+            "sf_type": "Layout",
+            "file_type": "layout",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = [
         _make_edge(layout_nid, obj_nid, "references", "EXTRACTED", str_path),
     ]
@@ -67,10 +74,16 @@ def extract_layout(path: Path) -> dict:
                 field_name = field_el.text.strip()
                 if field_name and field_name not in seen_fields:
                     seen_fields.add(field_name)
-                    edges.append(_make_edge(
-                        layout_nid, field_id(obj_name, field_name),
-                        "uses", "EXTRACTED", str_path, 0.5,
-                    ))
+                    edges.append(
+                        _make_edge(
+                            layout_nid,
+                            field_id(obj_name, field_name),
+                            "uses",
+                            "EXTRACTED",
+                            str_path,
+                            0.5,
+                        )
+                    )
     except ET.ParseError:
         pass
 

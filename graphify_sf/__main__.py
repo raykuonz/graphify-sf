@@ -1,4 +1,5 @@
 """graphify-sf CLI — Salesforce SFDX project → knowledge graph."""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 
 try:
     from importlib.metadata import version as _pkg_version
+
     __version__ = _pkg_version("graphify-sf")
 except Exception:
     __version__ = "dev"
@@ -22,6 +24,7 @@ def _default_graph_path() -> str:
 def _load_graph_from_json(path: Path):
     """Load a NetworkX graph from graph.json."""
     from networkx.readwrite import json_graph as _jg
+
     raw = json.loads(path.read_text(encoding="utf-8"))
     if "links" not in raw and "edges" in raw:
         raw = dict(raw, links=raw["edges"])
@@ -35,6 +38,7 @@ def _derive_community_labels(G, communities: dict) -> dict[int, str]:
     """Derive community label from the highest-degree non-method node."""
     labels: dict[int, str] = {}
     from graphify_sf.analyze import _is_file_node
+
     for cid, nodes in communities.items():
         real_nodes = [n for n in nodes if not _is_file_node(G, n)]
         if not real_nodes:
@@ -87,8 +91,7 @@ def _run_llm_extraction(
 
     if effective_backend not in BACKENDS:
         print(
-            f"[graphify-sf] unknown backend '{effective_backend}'. "
-            f"Available: {sorted(BACKENDS)}",
+            f"[graphify-sf] unknown backend '{effective_backend}'. Available: {sorted(BACKENDS)}",
             file=sys.stderr,
         )
         return
@@ -222,9 +225,7 @@ def _run_pipeline(
     # Phase 2b: LLM semantic extraction (optional — only when --backend is given)
     token_cost: dict = {"input": 0, "output": 0}
     if backend:
-        _run_llm_extraction(
-            target, detection, extraction, backend, token_budget, token_cost
-        )
+        _run_llm_extraction(target, detection, extraction, backend, token_budget, token_cost)
 
     # Dedup by label
     nodes, edges = deduplicate_by_label(extraction["nodes"], extraction["edges"])
@@ -258,10 +259,17 @@ def _run_pipeline(
 
     # Report
     from graphify_sf.export import _git_head
+
     commit = _git_head()
     report = generate(
-        G, communities, cohesion, labels,
-        gods, surprises, detection, token_cost,
+        G,
+        communities,
+        cohesion,
+        labels,
+        gods,
+        surprises,
+        detection,
+        token_cost,
         str(target),
         suggested_questions=questions,
         built_at_commit=commit,
@@ -275,7 +283,10 @@ def _run_pipeline(
     if written:
         print(f"[graphify-sf] wrote {graph_json_path}")
     else:
-        print("[graphify-sf] WARNING: graph.json not updated (new graph is smaller — use --force to override)", file=sys.stderr)
+        print(
+            "[graphify-sf] WARNING: graph.json not updated (new graph is smaller — use --force to override)",
+            file=sys.stderr,
+        )
 
     # Write community labels sidecar
     labels_path = out_dir / ".graphify_sf_labels.json"
@@ -298,8 +309,13 @@ def _run_pipeline(
         print("[graphify-sf] skipped graph.html (--no-viz)")
     else:
         try:
-            to_html(G, communities, str(html_path), community_labels=labels,
-                    node_limit=int(os.environ.get("GRAPHIFY_SF_VIZ_NODE_LIMIT", "5000")))
+            to_html(
+                G,
+                communities,
+                str(html_path),
+                community_labels=labels,
+                node_limit=int(os.environ.get("GRAPHIFY_SF_VIZ_NODE_LIMIT", "5000")),
+            )
             print(f"[graphify-sf] wrote {html_path}")
         except ValueError as exc:
             print(f"[graphify-sf] WARNING: {exc}", file=sys.stderr)
@@ -350,9 +366,15 @@ def _cmd_cluster_only(target: Path, out_dir: Path, *, no_viz: bool = False, grap
     token_cost = {"input": 0, "output": 0}
     commit = _git_head()
     report = generate(
-        G, communities, cohesion, labels,
-        gods, surprises, {"warning": "cluster-only mode — file stats not available"},
-        token_cost, str(target),
+        G,
+        communities,
+        cohesion,
+        labels,
+        gods,
+        surprises,
+        {"warning": "cluster-only mode — file stats not available"},
+        token_cost,
+        str(target),
         suggested_questions=questions,
         built_at_commit=commit,
     )
@@ -406,6 +428,7 @@ def _cmd_query(question: str, graph_path: Path, *, use_dfs: bool = False, budget
     result_lines.append("")
 
     from collections import deque
+
     queue: deque[tuple[str, int]] = deque([(top_nid, 0)])
     char_budget = budget * 4  # rough tokens→chars
 
@@ -433,6 +456,7 @@ def _cmd_query(question: str, graph_path: Path, *, use_dfs: bool = False, budget
 def _cmd_path(source_label: str, target_label: str, graph_path: Path) -> None:
     """Shortest path between two nodes."""
     import networkx as _nx
+
     G, _ = _load_graph_from_json(graph_path)
 
     def _find(label: str) -> str | None:
@@ -464,6 +488,7 @@ def _cmd_path(source_label: str, target_label: str, graph_path: Path) -> None:
         sys.exit(0)
 
     from graphify_sf.build import edge_data
+
     hops = len(path_nodes) - 1
     segments = []
     for i in range(len(path_nodes) - 1):
@@ -511,12 +536,10 @@ def _cmd_explain(label: str, graph_path: Path, relation: str | None = None) -> N
     neighbors = list(G.neighbors(nid))
     if neighbors:
         from graphify_sf.build import edge_data
+
         if relation:
             # Filter to matching relation — show ALL matches (no cap)
-            filtered = [
-                nb for nb in neighbors
-                if edge_data(G, nid, nb).get("relation") == relation
-            ]
+            filtered = [nb for nb in neighbors if edge_data(G, nid, nb).get("relation") == relation]
             print(f"\nConnections with relation={relation} ({len(filtered)}):")
             for nb in sorted(filtered, key=lambda n: G.degree(n), reverse=True):
                 edata = edge_data(G, nid, nb)
@@ -538,6 +561,7 @@ def _cmd_explain(label: str, graph_path: Path, relation: str | None = None) -> N
 def _cmd_stats(graph_path: Path) -> None:
     """Print detailed graph statistics: type distribution, density, degree stats."""
     from collections import Counter
+
     G, _ = _load_graph_from_json(graph_path)
 
     n_nodes = G.number_of_nodes()
@@ -693,6 +717,7 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
 
     # Load all graphs
     import networkx as nx
+
     merged = nx.Graph()
     for gp in graph_paths:
         print(f"[graphify-sf] loading {gp}...")
@@ -728,9 +753,15 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
     token_cost = {"input": 0, "output": 0}
     commit = _git_head()
     report = generate(
-        G, communities, cohesion, labels,
-        gods, surprises, {"warning": f"merged from {len(graph_paths)} graphs"},
-        token_cost, "merged",
+        G,
+        communities,
+        cohesion,
+        labels,
+        gods,
+        surprises,
+        {"warning": f"merged from {len(graph_paths)} graphs"},
+        token_cost,
+        "merged",
         suggested_questions=questions,
         built_at_commit=commit,
     )
@@ -740,6 +771,7 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
     to_json(G, communities, str(out_path), force=True, built_at_commit=commit)
 
     import json as _json
+
     labels_path = out_dir / ".graphify_sf_labels.json"
     labels_path.write_text(
         _json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False),
@@ -827,7 +859,7 @@ def _cmd_merge_driver_setup(action: str) -> None:
     gitconfig = git_root / ".git" / "config"
 
     _DRIVER_ATTR = "graph.json merge=graphify-sf-merge"
-    _DRIVER_CONF = "[merge \"graphify-sf-merge\"]\n\tname = graphify-sf graph.json merge driver\n\tdriver = graphify-sf merge-driver run %O %A %B\n"
+    _DRIVER_CONF = '[merge "graphify-sf-merge"]\n\tname = graphify-sf graph.json merge driver\n\tdriver = graphify-sf merge-driver run %O %A %B\n'
 
     if action == "install":
         # .gitattributes
@@ -851,6 +883,7 @@ def _cmd_merge_driver_setup(action: str) -> None:
 
     elif action == "uninstall":
         import re as _re
+
         if gitattributes.exists():
             content = gitattributes.read_text(encoding="utf-8")
             updated = "\n".join(ln for ln in content.splitlines() if "graphify-sf-merge" not in ln)
@@ -877,21 +910,21 @@ def _cmd_merge_driver_setup(action: str) -> None:
 # All platforms (including Cursor) use SKILL.md — no per-platform transforms needed.
 # ---------------------------------------------------------------------------
 _PLATFORM_SKILLS_DIR: dict[str, str] = {
-    "claude":      ".claude/skills/graphify-sf",
-    "codex":       ".agents/skills/graphify-sf",
-    "cursor":      ".cursor/skills/graphify-sf",
-    "opencode":    ".config/opencode/skills/graphify-sf",
-    "aider":       ".aider/graphify-sf",
-    "copilot":     ".copilot/skills/graphify-sf",
-    "kiro":        ".kiro/skills/graphify-sf",
-    "gemini":      ".gemini/skills/graphify-sf",
-    "trae":        ".trae/skills/graphify-sf",
-    "trae-cn":     ".trae-cn/skills/graphify-sf",
-    "hermes":      ".hermes/skills/graphify-sf",
-    "droid":       ".factory/skills/graphify-sf",
-    "pi":          ".pi/agent/skills/graphify-sf",
+    "claude": ".claude/skills/graphify-sf",
+    "codex": ".agents/skills/graphify-sf",
+    "cursor": ".cursor/skills/graphify-sf",
+    "opencode": ".config/opencode/skills/graphify-sf",
+    "aider": ".aider/graphify-sf",
+    "copilot": ".copilot/skills/graphify-sf",
+    "kiro": ".kiro/skills/graphify-sf",
+    "gemini": ".gemini/skills/graphify-sf",
+    "trae": ".trae/skills/graphify-sf",
+    "trae-cn": ".trae-cn/skills/graphify-sf",
+    "hermes": ".hermes/skills/graphify-sf",
+    "droid": ".factory/skills/graphify-sf",
+    "pi": ".pi/agent/skills/graphify-sf",
     "antigravity": ".agents/skills/graphify-sf",
-    "kimi":        ".kimi/skills/graphify-sf",
+    "kimi": ".kimi/skills/graphify-sf",
 }
 
 _ALL_PLATFORMS = sorted(_PLATFORM_SKILLS_DIR)
@@ -900,6 +933,7 @@ _ALL_PLATFORMS = sorted(_PLATFORM_SKILLS_DIR)
 def _atomic_write(dest: Path, src: Path) -> None:
     """Copy src → dest atomically using a temp file + os.replace()."""
     import shutil
+
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
         shutil.copy2(src, tmp)
@@ -913,9 +947,7 @@ def _atomic_write(dest: Path, src: Path) -> None:
 
 
 # Platforms whose install dir IS .agents/skills/graphify-sf — the canonical location
-_AGENTS_NATIVE_PLATFORMS = {
-    k for k, v in _PLATFORM_SKILLS_DIR.items() if v == ".agents/skills/graphify-sf"
-}
+_AGENTS_NATIVE_PLATFORMS = {k for k, v in _PLATFORM_SKILLS_DIR.items() if v == ".agents/skills/graphify-sf"}
 
 
 def _install_with_link(platform: str, scope: str, skill_src: Path) -> None:
@@ -995,8 +1027,7 @@ def _cmd_install(platform: str = "claude", scope: str = "global", link: bool = F
 
     if platform not in _ALL_PLATFORMS:
         print(
-            f"error: unknown platform '{platform}'.\n"
-            f"Supported: {', '.join(_ALL_PLATFORMS)}",
+            f"error: unknown platform '{platform}'.\nSupported: {', '.join(_ALL_PLATFORMS)}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1051,6 +1082,7 @@ def _print_install_footer(scope: str) -> None:
 # uninstall
 # ---------------------------------------------------------------------------
 
+
 def _cmd_uninstall(platform: str = "claude", scope: str = "global") -> None:
     """Remove the graphify-sf skill from the agentic IDE config directory."""
     if scope not in ("global", "project"):
@@ -1059,8 +1091,7 @@ def _cmd_uninstall(platform: str = "claude", scope: str = "global") -> None:
 
     if platform not in _ALL_PLATFORMS:
         print(
-            f"error: unknown platform '{platform}'.\n"
-            f"Supported: {', '.join(_ALL_PLATFORMS)}",
+            f"error: unknown platform '{platform}'.\nSupported: {', '.join(_ALL_PLATFORMS)}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1158,6 +1189,7 @@ def _cmd_claude(action: str, scope: str = "global") -> None:
             print(f"graphify-sf section not found in {claude_md} — nothing to remove")
             return
         import re as _re
+
         updated = _re.sub(
             r"\n*<!-- graphify-sf -->.*?<!-- /graphify-sf -->\n?",
             "",
@@ -1227,6 +1259,7 @@ def _cmd_agents(action: str) -> None:
             print("graphify-sf section not found in AGENTS.md — nothing to remove")
             return
         import re as _re
+
         updated = _re.sub(
             r"\n*<!-- graphify-sf -->.*?<!-- /graphify-sf -->\n?",
             "",
@@ -1276,7 +1309,8 @@ fi
 [ -z "$GSF_PYTHON" ] && exit 0
 """
 
-_HOOK_BLOCK = """\
+_HOOK_BLOCK = (
+    """\
 # graphify-sf-hook-start
 # Auto-rebuild Salesforce metadata graph after each commit.
 # Installed by: graphify-sf hook install
@@ -1292,7 +1326,9 @@ GSF_CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | \\
     grep -cE '\\.(cls|trigger|flow-meta\\.xml|.*-meta\\.xml)$' || true)
 [ "${GSF_CHANGED:-0}" -eq 0 ] && exit 0
 
-""" + _PYTHON_DETECT + """
+"""
+    + _PYTHON_DETECT
+    + """
 _GSF_LOG="${HOME}/.cache/graphify-sf-rebuild.log"
 mkdir -p "$(dirname "$_GSF_LOG")"
 echo "[graphify-sf hook] ${GSF_CHANGED} metadata file(s) changed — rebuilding graph in background..."
@@ -1301,8 +1337,10 @@ nohup "$GSF_PYTHON" -m graphify_sf . --update --no-viz \\
 disown 2>/dev/null || true
 # graphify-sf-hook-end
 """
+)
 
-_CHECKOUT_HOOK_BLOCK = """\
+_CHECKOUT_HOOK_BLOCK = (
+    """\
 # graphify-sf-checkout-hook-start
 # Auto-rebuild Salesforce metadata graph when switching branches.
 # Installed by: graphify-sf hook install
@@ -1324,7 +1362,9 @@ GIT_DIR_PATH=$(git rev-parse --git-dir 2>/dev/null)
 [ -f "${GIT_DIR_PATH}/MERGE_HEAD" ]    && exit 0
 [ -f "${GIT_DIR_PATH}/CHERRY_PICK_HEAD" ] && exit 0
 
-""" + _PYTHON_DETECT + """
+"""
+    + _PYTHON_DETECT
+    + """
 _GSF_LOG="${HOME}/.cache/graphify-sf-rebuild.log"
 mkdir -p "$(dirname "$_GSF_LOG")"
 echo "[graphify-sf hook] branch switched — rebuilding graph in background..."
@@ -1333,6 +1373,7 @@ nohup "$GSF_PYTHON" -m graphify_sf . --update --no-viz \\
 disown 2>/dev/null || true
 # graphify-sf-checkout-hook-end
 """
+)
 
 
 def _find_git_root() -> Path | None:
@@ -1350,6 +1391,7 @@ def _find_git_root() -> Path | None:
 def _hooks_dir(git_root: Path) -> Path:
     """Return the git hooks directory, respecting core.hooksPath (Husky compatibility)."""
     import configparser as _cp
+
     try:
         cfg = _cp.RawConfigParser()
         cfg.read(git_root / ".git" / "config", encoding="utf-8")
@@ -1370,8 +1412,7 @@ def _hooks_dir(git_root: Path) -> Path:
                 return p
     except (_cp.Error, OSError) as exc:
         print(
-            f"[graphify-sf hooks] could not read core.hooksPath from "
-            f"{git_root / '.git' / 'config'}: {exc}",
+            f"[graphify-sf hooks] could not read core.hooksPath from {git_root / '.git' / 'config'}: {exc}",
             file=sys.stderr,
         )
     d = git_root / ".git" / "hooks"
@@ -1396,9 +1437,7 @@ def _install_single_hook(hooks_dir: Path, name: str, script: str, marker: str) -
     return f"installed at {hook_path}"
 
 
-def _uninstall_single_hook(
-    hooks_dir: Path, name: str, marker_start: str, marker_end: str
-) -> str:
+def _uninstall_single_hook(hooks_dir: Path, name: str, marker_start: str, marker_end: str) -> str:
     """Remove the graphify-sf section from hooks_dir/name."""
     hook_path = hooks_dir / name
     if not hook_path.exists():
@@ -1407,6 +1446,7 @@ def _uninstall_single_hook(
     if marker_start not in content:
         return f"graphify-sf section not found in {name}"
     import re as _re
+
     updated = _re.sub(
         rf"\n*{_re.escape(marker_start)}\n.*?{_re.escape(marker_end)}\n?",
         "",
@@ -1436,6 +1476,7 @@ def _cmd_hook(action: str) -> None:
     hdir = _hooks_dir(git_root)
 
     if action == "status":
+
         def _check(name: str, marker: str) -> str:
             p = hdir / name
             if not p.exists():
@@ -1445,15 +1486,14 @@ def _cmd_hook(action: str) -> None:
                 if marker in p.read_text(encoding="utf-8")
                 else "not installed (hook file exists but graphify-sf section not found)"
             )
+
         print(f"post-commit:   {_check('post-commit', _HOOK_MARKER_START)}")
         print(f"post-checkout: {_check('post-checkout', _CHECKOUT_MARKER_START)}")
         return
 
     if action == "install":
         commit_msg = _install_single_hook(hdir, "post-commit", _HOOK_BLOCK, _HOOK_MARKER_START)
-        checkout_msg = _install_single_hook(
-            hdir, "post-checkout", _CHECKOUT_HOOK_BLOCK, _CHECKOUT_MARKER_START
-        )
+        checkout_msg = _install_single_hook(hdir, "post-checkout", _CHECKOUT_HOOK_BLOCK, _CHECKOUT_MARKER_START)
         print(f"post-commit:   {commit_msg}")
         print(f"post-checkout: {checkout_msg}")
         print()
@@ -1462,12 +1502,8 @@ def _cmd_hook(action: str) -> None:
         return
 
     if action == "uninstall":
-        commit_msg = _uninstall_single_hook(
-            hdir, "post-commit", _HOOK_MARKER_START, _HOOK_MARKER_END
-        )
-        checkout_msg = _uninstall_single_hook(
-            hdir, "post-checkout", _CHECKOUT_MARKER_START, _CHECKOUT_MARKER_END
-        )
+        commit_msg = _uninstall_single_hook(hdir, "post-commit", _HOOK_MARKER_START, _HOOK_MARKER_END)
+        checkout_msg = _uninstall_single_hook(hdir, "post-checkout", _CHECKOUT_MARKER_START, _CHECKOUT_MARKER_END)
         print(f"post-commit:   {commit_msg}")
         print(f"post-checkout: {checkout_msg}")
 
@@ -1568,15 +1604,15 @@ def main() -> None:
         print("    --no-viz                         skip graph.html")
         print("    --graph <path>                   explicit graph.json path")
         print()
-        print("  graphify-sf query \"<question>\"    BFS traversal for a question")
+        print('  graphify-sf query "<question>"    BFS traversal for a question')
         print("    --dfs                            use DFS instead of BFS")
         print("    --budget N                       token budget (default 2000)")
         print("    --graph <path>                   explicit graph.json path")
         print()
-        print("  graphify-sf path \"<A>\" \"<B>\"      shortest path between two nodes")
+        print('  graphify-sf path "<A>" "<B>"      shortest path between two nodes')
         print("    --graph <path>                   explicit graph.json path")
         print()
-        print("  graphify-sf explain \"<node>\"      node details and neighbors")
+        print('  graphify-sf explain "<node>"      node details and neighbors')
         print("    --graph <path>                   explicit graph.json path")
         print()
         print("  graphify-sf stats                 detailed graph statistics (type distribution, density)")
@@ -1618,15 +1654,20 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--platform" and i + 1 < len(args):
-                platform = args[i + 1]; i += 2
+                platform = args[i + 1]
+                i += 2
             elif a.startswith("--platform="):
-                platform = a.split("=", 1)[1]; i += 1
+                platform = a.split("=", 1)[1]
+                i += 1
             elif a == "--scope" and i + 1 < len(args):
-                scope = args[i + 1]; i += 2
+                scope = args[i + 1]
+                i += 2
             elif a.startswith("--scope="):
-                scope = a.split("=", 1)[1]; i += 1
+                scope = a.split("=", 1)[1]
+                i += 1
             elif a == "--link":
-                link = True; i += 1
+                link = True
+                i += 1
             else:
                 i += 1
         _cmd_install(platform, scope, link)
@@ -1640,13 +1681,17 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--platform" and i + 1 < len(args):
-                platform = args[i + 1]; i += 2
+                platform = args[i + 1]
+                i += 2
             elif a.startswith("--platform="):
-                platform = a.split("=", 1)[1]; i += 1
+                platform = a.split("=", 1)[1]
+                i += 1
             elif a == "--scope" and i + 1 < len(args):
-                scope = args[i + 1]; i += 2
+                scope = args[i + 1]
+                i += 2
             elif a.startswith("--scope="):
-                scope = a.split("=", 1)[1]; i += 1
+                scope = a.split("=", 1)[1]
+                i += 1
             else:
                 i += 1
         _cmd_uninstall(platform, scope)
@@ -1663,9 +1708,11 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--scope" and i + 1 < len(args):
-                scope = args[i + 1]; i += 2
+                scope = args[i + 1]
+                i += 2
             elif a.startswith("--scope="):
-                scope = a.split("=", 1)[1]; i += 1
+                scope = a.split("=", 1)[1]
+                i += 1
             else:
                 i += 1
         _cmd_claude(action, scope)
@@ -1695,11 +1742,14 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--out" and i + 1 < len(args):
-                out_dir_str = args[i + 1]; i += 2
+                out_dir_str = args[i + 1]
+                i += 2
             elif a.startswith("--out="):
-                out_dir_str = a.split("=", 1)[1]; i += 1
+                out_dir_str = a.split("=", 1)[1]
+                i += 1
             elif not a.startswith("-"):
-                target_str = a; i += 1
+                target_str = a
+                i += 1
             else:
                 i += 1
         _cmd_check_update(Path(target_str).resolve(), Path(out_dir_str))
@@ -1714,17 +1764,24 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--out" and i + 1 < len(args):
-                out_path_str = args[i + 1]; i += 2
+                out_path_str = args[i + 1]
+                i += 2
             elif a.startswith("--out="):
-                out_path_str = a.split("=", 1)[1]; i += 1
+                out_path_str = a.split("=", 1)[1]
+                i += 1
             elif a == "--no-viz":
-                no_viz = True; i += 1
+                no_viz = True
+                i += 1
             elif not a.startswith("-"):
-                graph_path_args.append(Path(a)); i += 1
+                graph_path_args.append(Path(a))
+                i += 1
             else:
                 i += 1
         if len(graph_path_args) < 2:
-            print("Usage: graphify-sf merge-graphs <graph1.json> <graph2.json> [...] [--out merged.json] [--no-viz]", file=sys.stderr)
+            print(
+                "Usage: graphify-sf merge-graphs <graph1.json> <graph2.json> [...] [--out merged.json] [--no-viz]",
+                file=sys.stderr,
+            )
             sys.exit(1)
         _cmd_merge_graphs(graph_path_args, Path(out_path_str), no_viz=no_viz)
         return
@@ -1736,9 +1793,11 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--graph" and i + 1 < len(args):
-                graph_path = Path(args[i + 1]); i += 2
+                graph_path = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_path = Path(a.split("=", 1)[1]); i += 1
+                graph_path = Path(a.split("=", 1)[1])
+                i += 1
             else:
                 i += 1
         if not graph_path.exists():
@@ -1777,23 +1836,31 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--out" and i + 1 < len(args):
-                out_dir_str = args[i + 1]; i += 2
+                out_dir_str = args[i + 1]
+                i += 2
             elif a.startswith("--out="):
-                out_dir_str = a.split("=", 1)[1]; i += 1
+                out_dir_str = a.split("=", 1)[1]
+                i += 1
             elif a == "--debounce" and i + 1 < len(args):
-                debounce = float(args[i + 1]); i += 2
+                debounce = float(args[i + 1])
+                i += 2
             elif a.startswith("--debounce="):
-                debounce = float(a.split("=", 1)[1]); i += 1
+                debounce = float(a.split("=", 1)[1])
+                i += 1
             elif a == "--directed":
-                directed = True; i += 1
+                directed = True
+                i += 1
             elif a == "--viz":
-                no_viz = False; i += 1
+                no_viz = False
+                i += 1
             elif not a.startswith("-"):
-                target_str = a; i += 1
+                target_str = a
+                i += 1
             else:
                 i += 1
 
         from graphify_sf.watch import watch as _watch
+
         _watch(
             Path(target_str).resolve(),
             Path(out_dir_str),
@@ -1810,24 +1877,40 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--graph" and i + 1 < len(args):
-                graph_path = Path(args[i + 1]); i += 2
+                graph_path = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_path = Path(a.split("=", 1)[1]); i += 1
+                graph_path = Path(a.split("=", 1)[1])
+                i += 1
             else:
                 i += 1
         if not graph_path.exists():
             print(f"error: graph not found: {graph_path}", file=sys.stderr)
             sys.exit(1)
         from graphify_sf.serve import serve as _serve
+
         _serve(str(graph_path))
         return
 
     # ── Main pipeline ──────────────────────────────────────────────
     if not cmd.startswith("-") and cmd not in (
-        "cluster-only", "query", "path", "explain", "export",
-        "install", "uninstall", "claude", "agents", "hook", "--version",
-        "check-update", "merge-graphs", "watch", "serve",
-        "stats", "merge-driver",
+        "cluster-only",
+        "query",
+        "path",
+        "explain",
+        "export",
+        "install",
+        "uninstall",
+        "claude",
+        "agents",
+        "hook",
+        "--version",
+        "check-update",
+        "merge-graphs",
+        "watch",
+        "serve",
+        "stats",
+        "merge-driver",
     ):
         # Positional arg: SFDX project path
         target = Path(cmd).resolve()
@@ -1848,35 +1931,48 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--out" and i + 1 < len(args):
-                out_dir_str = args[i + 1]; i += 2
+                out_dir_str = args[i + 1]
+                i += 2
             elif a.startswith("--out="):
-                out_dir_str = a.split("=", 1)[1]; i += 1
+                out_dir_str = a.split("=", 1)[1]
+                i += 1
             elif a == "--update":
-                update = True; i += 1
+                update = True
+                i += 1
             elif a == "--directed":
-                directed = True; i += 1
+                directed = True
+                i += 1
             elif a == "--no-viz":
-                no_viz = True; i += 1
+                no_viz = True
+                i += 1
             elif a == "--force":
-                force = True; i += 1
+                force = True
+                i += 1
             elif a == "--max-workers" and i + 1 < len(args):
-                max_workers = int(args[i + 1]); i += 2
+                max_workers = int(args[i + 1])
+                i += 2
             elif a.startswith("--max-workers="):
-                max_workers = int(a.split("=", 1)[1]); i += 1
+                max_workers = int(a.split("=", 1)[1])
+                i += 1
             elif a == "--backend" and i + 1 < len(args):
-                backend = args[i + 1]; i += 2
+                backend = args[i + 1]
+                i += 2
             elif a.startswith("--backend="):
-                backend = a.split("=", 1)[1]; i += 1
+                backend = a.split("=", 1)[1]
+                i += 1
             elif a == "--token-budget" and i + 1 < len(args):
-                token_budget = int(args[i + 1]); i += 2
+                token_budget = int(args[i + 1])
+                i += 2
             elif a.startswith("--token-budget="):
-                token_budget = int(a.split("=", 1)[1]); i += 1
+                token_budget = int(a.split("=", 1)[1])
+                i += 1
             else:
                 i += 1
 
         out_dir = Path(out_dir_str)
         _run_pipeline(
-            target, out_dir,
+            target,
+            out_dir,
             update=update,
             directed=directed,
             no_viz=no_viz,
@@ -1903,17 +1999,23 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--no-viz":
-                no_viz = True; i += 1
+                no_viz = True
+                i += 1
             elif a == "--out" and i + 1 < len(args):
-                out_dir_str = args[i + 1]; i += 2
+                out_dir_str = args[i + 1]
+                i += 2
             elif a.startswith("--out="):
-                out_dir_str = a.split("=", 1)[1]; i += 1
+                out_dir_str = a.split("=", 1)[1]
+                i += 1
             elif a == "--graph" and i + 1 < len(args):
-                graph_override = Path(args[i + 1]); i += 2
+                graph_override = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_override = Path(a.split("=", 1)[1]); i += 1
+                graph_override = Path(a.split("=", 1)[1])
+                i += 1
             elif not a.startswith("-"):
-                target_str = a; i += 1
+                target_str = a
+                i += 1
             else:
                 i += 1
 
@@ -1924,7 +2026,7 @@ def main() -> None:
     # ── query ──────────────────────────────────────────────────────
     if cmd == "query":
         if len(args) < 2:
-            print("Usage: graphify-sf query \"<question>\" [--dfs] [--budget N] [--graph path]", file=sys.stderr)
+            print('Usage: graphify-sf query "<question>" [--dfs] [--budget N] [--graph path]', file=sys.stderr)
             sys.exit(1)
         question = args[1]
         use_dfs = "--dfs" in args
@@ -1935,13 +2037,17 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--budget" and i + 1 < len(args):
-                budget = int(args[i + 1]); i += 2
+                budget = int(args[i + 1])
+                i += 2
             elif a.startswith("--budget="):
-                budget = int(a.split("=", 1)[1]); i += 1
+                budget = int(a.split("=", 1)[1])
+                i += 1
             elif a == "--graph" and i + 1 < len(args):
-                graph_path = Path(args[i + 1]); i += 2
+                graph_path = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_path = Path(a.split("=", 1)[1]); i += 1
+                graph_path = Path(a.split("=", 1)[1])
+                i += 1
             else:
                 i += 1
 
@@ -1954,7 +2060,7 @@ def main() -> None:
     # ── path ───────────────────────────────────────────────────────
     if cmd == "path":
         if len(args) < 3:
-            print("Usage: graphify-sf path \"<source>\" \"<target>\" [--graph path]", file=sys.stderr)
+            print('Usage: graphify-sf path "<source>" "<target>" [--graph path]', file=sys.stderr)
             sys.exit(1)
         source_label = args[1]
         target_label = args[2]
@@ -1964,9 +2070,11 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--graph" and i + 1 < len(args):
-                graph_path = Path(args[i + 1]); i += 2
+                graph_path = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_path = Path(a.split("=", 1)[1]); i += 1
+                graph_path = Path(a.split("=", 1)[1])
+                i += 1
             else:
                 i += 1
 
@@ -1979,7 +2087,7 @@ def main() -> None:
     # ── explain ────────────────────────────────────────────────────
     if cmd == "explain":
         if len(args) < 2:
-            print("Usage: graphify-sf explain \"<node>\" [--relation <rel>] [--graph path]", file=sys.stderr)
+            print('Usage: graphify-sf explain "<node>" [--relation <rel>] [--graph path]', file=sys.stderr)
             sys.exit(1)
         label = args[1]
         graph_path = Path(_default_graph_path())
@@ -1989,13 +2097,17 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--graph" and i + 1 < len(args):
-                graph_path = Path(args[i + 1]); i += 2
+                graph_path = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_path = Path(a.split("=", 1)[1]); i += 1
+                graph_path = Path(a.split("=", 1)[1])
+                i += 1
             elif a == "--relation" and i + 1 < len(args):
-                explain_relation = args[i + 1]; i += 2
+                explain_relation = args[i + 1]
+                i += 2
             elif a.startswith("--relation="):
-                explain_relation = a.split("=", 1)[1]; i += 1
+                explain_relation = a.split("=", 1)[1]
+                i += 1
             else:
                 i += 1
 
@@ -2008,7 +2120,10 @@ def main() -> None:
     # ── export ─────────────────────────────────────────────────────
     if cmd == "export":
         if len(args) < 2:
-            print("Usage: graphify-sf export <html|obsidian|graphml|cypher|json> [--graph path] [--out dir]", file=sys.stderr)
+            print(
+                "Usage: graphify-sf export <html|obsidian|graphml|cypher|json> [--graph path] [--out dir]",
+                file=sys.stderr,
+            )
             sys.exit(1)
         fmt = args[1]
         graph_path = Path(_default_graph_path())
@@ -2018,13 +2133,17 @@ def main() -> None:
         while i < len(args):
             a = args[i]
             if a == "--graph" and i + 1 < len(args):
-                graph_path = Path(args[i + 1]); i += 2
+                graph_path = Path(args[i + 1])
+                i += 2
             elif a.startswith("--graph="):
-                graph_path = Path(a.split("=", 1)[1]); i += 1
+                graph_path = Path(a.split("=", 1)[1])
+                i += 1
             elif a == "--out" and i + 1 < len(args):
-                out_dir = Path(args[i + 1]); i += 2
+                out_dir = Path(args[i + 1])
+                i += 2
             elif a.startswith("--out="):
-                out_dir = Path(a.split("=", 1)[1]); i += 1
+                out_dir = Path(a.split("=", 1)[1])
+                i += 1
             else:
                 i += 1
 
@@ -2043,21 +2162,29 @@ def main() -> None:
             while j < len(args):
                 a2 = args[j]
                 if a2 == "--uri" and j + 1 < len(args):
-                    neo4j_uri = args[j + 1]; j += 2
+                    neo4j_uri = args[j + 1]
+                    j += 2
                 elif a2.startswith("--uri="):
-                    neo4j_uri = a2.split("=", 1)[1]; j += 1
+                    neo4j_uri = a2.split("=", 1)[1]
+                    j += 1
                 elif a2 == "--user" and j + 1 < len(args):
-                    neo4j_user = args[j + 1]; j += 2
+                    neo4j_user = args[j + 1]
+                    j += 2
                 elif a2.startswith("--user="):
-                    neo4j_user = a2.split("=", 1)[1]; j += 1
+                    neo4j_user = a2.split("=", 1)[1]
+                    j += 1
                 elif a2 == "--password" and j + 1 < len(args):
-                    neo4j_password = args[j + 1]; j += 2
+                    neo4j_password = args[j + 1]
+                    j += 2
                 elif a2.startswith("--password="):
-                    neo4j_password = a2.split("=", 1)[1]; j += 1
+                    neo4j_password = a2.split("=", 1)[1]
+                    j += 1
                 elif a2 == "--database" and j + 1 < len(args):
-                    neo4j_db = args[j + 1]; j += 2
+                    neo4j_db = args[j + 1]
+                    j += 2
                 elif a2.startswith("--database="):
-                    neo4j_db = a2.split("=", 1)[1]; j += 1
+                    neo4j_db = a2.split("=", 1)[1]
+                    j += 1
                 else:
                     j += 1
             G_n, _ = _load_graph_from_json(graph_path)
@@ -2065,15 +2192,20 @@ def main() -> None:
             out_dir.mkdir(parents=True, exist_ok=True)
             if push:
                 from graphify_sf.export import push_to_neo4j
+
                 stats = push_to_neo4j(
-                    G_n, cypher_out,
-                    uri=neo4j_uri, user=neo4j_user, password=neo4j_password,
+                    G_n,
+                    cypher_out,
+                    uri=neo4j_uri,
+                    user=neo4j_user,
+                    password=neo4j_password,
                     database=neo4j_db,
                 )
                 print(f"neo4j push done — {stats['nodes_merged']} nodes, {stats['edges_merged']} edges merged")
                 print(f"cypher.txt audit written to {cypher_out}")
             else:
                 from graphify_sf.export import to_cypher
+
                 to_cypher(G_n, cypher_out)
                 print(f"cypher.txt written to {cypher_out}")
                 print("Tip: add --push --uri bolt://host:7687 --user neo4j --password <pw> to push directly")
@@ -2097,63 +2229,76 @@ def main() -> None:
 
         if not communities:
             from graphify_sf.cluster import cluster
+
             communities = cluster(G)
 
         if fmt in ("html", "viz"):
             from graphify_sf.export import to_html
+
             out_path = out_dir / "graph.html"
             to_html(G, communities, str(out_path), community_labels=labels or None)
             print(f"graph.html written to {out_path}")
 
         elif fmt == "obsidian":
             from graphify_sf.export import to_obsidian
+
             obs_dir = out_dir / "obsidian"
             n = to_obsidian(G, communities, str(obs_dir), community_labels=labels or None)
             print(f"Obsidian vault: {n} notes in {obs_dir}/")
 
         elif fmt == "graphml":
             from graphify_sf.export import to_graphml
+
             out_path = out_dir / "graph.graphml"
             to_graphml(G, communities, str(out_path))
             print(f"graph.graphml written to {out_path}")
 
         elif fmt == "cypher":
             from graphify_sf.export import to_cypher
+
             out_path = out_dir / "cypher.txt"
             to_cypher(G, str(out_path))
             print(f"cypher.txt written to {out_path}")
 
         elif fmt == "json":
             from graphify_sf.export import to_json
+
             out_path = out_dir / "graph.json"
             to_json(G, communities, str(out_path), force=True)
             print(f"graph.json written to {out_path}")
 
         elif fmt == "wiki":
             from graphify_sf.export import to_wiki
+
             n = to_wiki(G, communities, str(out_dir), community_labels=labels or None)
             print(f"wiki written to {out_dir / 'wiki'}/ ({n} files)")
 
         elif fmt == "svg":
             from graphify_sf.export import to_svg
+
             out_path = out_dir / "graph.svg"
             to_svg(G, communities, str(out_path), community_labels=labels or None)
             print(f"graph.svg written to {out_path}")
 
         elif fmt == "tree":
             from graphify_sf.export import to_tree_html
+
             out_path = out_dir / "graph-tree.html"
             to_tree_html(G, communities, str(out_path), community_labels=labels or None)
             print(f"graph-tree.html written to {out_path}")
 
         elif fmt in ("callflow-html", "callflow"):
             from graphify_sf.export import to_callflow_html
+
             out_path = out_dir / "callflow.html"
             n = to_callflow_html(G, str(out_path))
             print(f"callflow.html written to {out_path} ({n} nodes)")
 
         else:
-            print(f"error: unknown export format '{fmt}'. Use: html, obsidian, graphml, cypher, neo4j, json, wiki, svg, tree, callflow-html", file=sys.stderr)
+            print(
+                f"error: unknown export format '{fmt}'. Use: html, obsidian, graphml, cypher, neo4j, json, wiki, svg, tree, callflow-html",
+                file=sys.stderr,
+            )
             sys.exit(1)
         return
 
