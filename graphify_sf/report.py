@@ -56,11 +56,9 @@ def generate(
 
     from graphify_sf.analyze import _is_file_node as _ifn
 
-    non_empty = {cid: nodes for cid, nodes in communities.items()
-                 if any(not _ifn(G, n) for n in nodes)}
+    non_empty = {cid: nodes for cid, nodes in communities.items() if any(not _ifn(G, n) for n in nodes)}
     thin_count_summary = sum(
-        1 for nodes in communities.values()
-        if 0 < sum(1 for n in nodes if not _ifn(G, n)) < min_community_size
+        1 for nodes in communities.values() if 0 < sum(1 for n in nodes if not _ifn(G, n)) < min_community_size
     )
     shown_count = len(communities) - thin_count_summary
 
@@ -148,10 +146,10 @@ def generate(
         if len(real_nodes) < min_community_size:
             continue
         display = [G.nodes[n].get("label", n) for n in real_nodes[:8]]
-        suffix = f" (+{len(real_nodes)-8} more)" if len(real_nodes) > 8 else ""
+        suffix = f" (+{len(real_nodes) - 8} more)" if len(real_nodes) > 8 else ""
         lines += [
             "",
-            f"### Community {cid} - \"{label}\"",
+            f'### Community {cid} - "{label}"',
             f"Cohesion: {score}",
             f"Nodes ({len(real_nodes)}): {', '.join(display)}{suffix}",
         ]
@@ -168,13 +166,10 @@ def generate(
             ]
 
     from graphify_sf.analyze import _is_concept_node, _is_file_node
-    isolated = [
-        n for n in G.nodes()
-        if G.degree(n) <= 1 and not _is_file_node(G, n) and not _is_concept_node(G, n)
-    ]
+
+    isolated = [n for n in G.nodes() if G.degree(n) <= 1 and not _is_file_node(G, n) and not _is_concept_node(G, n)]
     thin_communities = {
-        cid: nodes for cid, nodes in communities.items()
-        if 0 < sum(1 for n in nodes if not _is_file_node(G, n)) < 3
+        cid: nodes for cid, nodes in communities.items() if 0 < sum(1 for n in nodes if not _is_file_node(G, n)) < 3
     }
     gap_count = len(isolated) + len(thin_communities)
 
@@ -182,13 +177,19 @@ def generate(
         lines += ["", "## Knowledge Gaps"]
         if isolated:
             isolated_labels = [G.nodes[n].get("label", n) for n in isolated[:5]]
-            suffix = f" (+{len(isolated)-5} more)" if len(isolated) > 5 else ""
-            lines.append(f"- **{len(isolated)} isolated node(s):** {', '.join(f'`{lbl}`' for lbl in isolated_labels)}{suffix}")
+            suffix = f" (+{len(isolated) - 5} more)" if len(isolated) > 5 else ""
+            lines.append(
+                f"- **{len(isolated)} isolated node(s):** {', '.join(f'`{lbl}`' for lbl in isolated_labels)}{suffix}"
+            )
             lines.append("  These have ≤1 connection - possible missing edges or unreferenced metadata.")
         if thin_communities:
-            lines.append(f"- **{len(thin_communities)} thin communities (<{min_community_size} nodes) omitted from report** — run `graphify-sf query` to explore them.")
+            lines.append(
+                f"- **{len(thin_communities)} thin communities (<{min_community_size} nodes) omitted from report** — run `graphify-sf query` to explore them."
+            )
         if amb_pct > 20:
-            lines.append(f"- **High ambiguity: {amb_pct}% of edges are AMBIGUOUS.** Review the Ambiguous Edges section above.")
+            lines.append(
+                f"- **High ambiguity: {amb_pct}% of edges are AMBIGUOUS.** Review the Ambiguous Edges section above."
+            )
 
     if suggested_questions:
         lines += ["", "## Suggested Questions"]

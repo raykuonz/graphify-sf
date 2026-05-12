@@ -1,4 +1,5 @@
 """Tests for Apex extraction."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -144,8 +145,9 @@ def test_extract_apex_dml_operations(simple_project_path):
     # they appear as part of SOQL queries or class structure.
     # This is a known limitation of static Apex analysis.
     all_relations = {e.get("relation") for e in result["edges"]}
-    assert "contains" in all_relations or "queries" in all_relations, \
+    assert "contains" in all_relations or "queries" in all_relations, (
         "Should have at least contains/queries edges even without DML tracking"
+    )
 
 
 def test_extract_apex_missing_file():

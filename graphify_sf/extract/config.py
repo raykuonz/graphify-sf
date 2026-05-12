@@ -1,4 +1,5 @@
 """Config/labels/misc metadata extractor."""
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -33,13 +34,17 @@ def _find_all(root: ET.Element, tag: str, ns: str = "") -> list[ET.Element]:
     return result
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -58,15 +63,17 @@ def extract_custom_labels(path: Path) -> dict:
             full_name = _find_text(label_el, "fullName", ns)
             short_desc = _find_text(label_el, "shortDescription", ns)
             if full_name:
-                nodes.append({
-                    "id": label_id(full_name),
-                    "label": full_name,
-                    "sf_type": "CustomLabel",
-                    "file_type": "config",
-                    "source_file": str_path,
-                    "source_location": None,
-                    **({"description": short_desc[:200]} if short_desc else {}),
-                })
+                nodes.append(
+                    {
+                        "id": label_id(full_name),
+                        "label": full_name,
+                        "sf_type": "CustomLabel",
+                        "file_type": "config",
+                        "source_file": str_path,
+                        "source_location": None,
+                        **({"description": short_desc[:200]} if short_desc else {}),
+                    }
+                )
     except ET.ParseError:
         pass
 
@@ -82,14 +89,16 @@ def extract_custom_metadata_record(path: Path) -> dict:
     # stem is typically "Type.Record" e.g. "MyType.MyRecord"
     record_nid = make_sf_id("custommetadata", stem)
 
-    nodes: list[dict] = [{
-        "id": record_nid,
-        "label": stem,
-        "sf_type": "CustomMetadataRecord",
-        "file_type": "config",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": record_nid,
+            "label": stem,
+            "sf_type": "CustomMetadataRecord",
+            "file_type": "config",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
 
     return {"nodes": nodes, "edges": []}
 
@@ -102,14 +111,16 @@ def extract_named_credential(path: Path) -> dict:
         stem = stem[: -len(".namedCredential-meta")]
     nid = make_sf_id("namedcredential", stem)
 
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": stem,
-        "sf_type": "NamedCredential",
-        "file_type": "config",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": stem,
+            "sf_type": "NamedCredential",
+            "file_type": "config",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     return {"nodes": nodes, "edges": []}
 
 
@@ -121,14 +132,16 @@ def extract_external_service(path: Path) -> dict:
         stem = stem[: -len(".externalService-meta")]
     nid = make_sf_id("externalservice", stem)
 
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": stem,
-        "sf_type": "ExternalService",
-        "file_type": "config",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": stem,
+            "sf_type": "ExternalService",
+            "file_type": "config",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     try:
@@ -137,8 +150,7 @@ def extract_external_service(path: Path) -> dict:
         ns = _get_ns(root_el)
         nc = _find_text(root_el, "namedCredential", ns)
         if nc:
-            edges.append(_make_edge(nid, make_sf_id("namedcredential", nc),
-                                    "uses", "EXTRACTED", str_path))
+            edges.append(_make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path))
     except ET.ParseError:
         pass
 
@@ -153,14 +165,16 @@ def extract_flexipage(path: Path) -> dict:
         stem = stem[: -len(".flexipage-meta")]
     nid = make_sf_id("flexipage", stem)
 
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": stem,
-        "sf_type": "FlexiPage",
-        "file_type": "config",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": stem,
+            "sf_type": "FlexiPage",
+            "file_type": "config",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
     seen: set[str] = set()
 
@@ -176,6 +190,7 @@ def extract_flexipage(path: Path) -> dict:
                     seen.add(comp_name)
                     # LWC components are typically c__ComponentName or c:ComponentName
                     from ._ids import lwc_id
+
                     # Normalize: c__AccountCard → accountCard, c:accountCard → accountCard
                     normalized = comp_name.replace("c__", "").replace("c:", "").replace("__", "_")
                     edges.append(_make_edge(nid, lwc_id(normalized), "contains", "INFERRED", str_path, 0.7))
@@ -190,9 +205,17 @@ def extract_generic_config(path: Path) -> dict:
     str_path = str(path)
     stem = path.stem
     # Remove compound suffix
-    for suffix in (".settings-meta", ".connectedApp-meta", ".app-meta",
-                   ".tab-meta", ".testSuite-meta", ".remoteSite-meta", ".role-meta",
-                   ".site-meta", ".network-meta"):
+    for suffix in (
+        ".settings-meta",
+        ".connectedApp-meta",
+        ".app-meta",
+        ".tab-meta",
+        ".testSuite-meta",
+        ".remoteSite-meta",
+        ".role-meta",
+        ".site-meta",
+        ".network-meta",
+    ):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
             break
@@ -216,12 +239,14 @@ def extract_generic_config(path: Path) -> dict:
             break
 
     nid = make_sf_id(sf_type.lower(), stem)
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": stem,
-        "sf_type": sf_type,
-        "file_type": "config",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": stem,
+            "sf_type": sf_type,
+            "file_type": "config",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     return {"nodes": nodes, "edges": []}

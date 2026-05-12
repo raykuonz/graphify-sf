@@ -12,6 +12,7 @@ All other Agentforce types live in their own top-level directories:
   aiAuthoringBundles/MyBundle.aiAuthoringBundle-meta.xml
   promptTemplates/MyTemplate.promptTemplate-meta.xml
 """
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -36,6 +37,7 @@ _SF_NS = "http://soap.sforce.com/2006/04/metadata"
 # Shared XML helpers (mirrors flow.py pattern)
 # ---------------------------------------------------------------------------
 
+
 def _find_text(el: ET.Element, tag: str, ns: str = "") -> str | None:
     """Find a direct child element and return its text."""
     if ns:
@@ -58,13 +60,17 @@ def _find_all(root: ET.Element, tag: str, ns: str = "") -> list[ET.Element]:
     return result
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": 1.0, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": 1.0,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -98,6 +104,7 @@ def _parse_xml(path: Path):
 # Bot  (.bot-meta.xml)
 # ---------------------------------------------------------------------------
 
+
 def extract_bot(path: Path) -> dict:
     """Extract the top-level Bot (Agentforce agent) definition.
 
@@ -122,16 +129,18 @@ def extract_bot(path: Path) -> dict:
     description = _find_text(root_el, "description", ns) or ""
     bot_user = _find_text(root_el, "botUser", ns) or ""
 
-    nodes.append({
-        "id": b_id,
-        "label": label,
-        "sf_type": "Bot",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-        **({"description": description} if description else {}),
-        **({"bot_user": bot_user} if bot_user else {}),
-    })
+    nodes.append(
+        {
+            "id": b_id,
+            "label": label,
+            "sf_type": "Bot",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+            **({"description": description} if description else {}),
+            **({"bot_user": bot_user} if bot_user else {}),
+        }
+    )
 
     return {"nodes": nodes, "edges": edges}
 
@@ -139,6 +148,7 @@ def extract_bot(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # BotVersion  (.botVersion-meta.xml)
 # ---------------------------------------------------------------------------
+
 
 def extract_bot_version(path: Path) -> dict:
     """Extract a Bot version and its links to topics, flows, and planners.
@@ -165,16 +175,18 @@ def extract_bot_version(path: Path) -> dict:
     description = _find_text(root_el, "description", ns) or ""
     agent_type = _find_text(root_el, "agentType", ns) or ""
 
-    nodes.append({
-        "id": bv_id,
-        "label": label,
-        "sf_type": "BotVersion",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-        **({"description": description} if description else {}),
-        **({"agent_type": agent_type} if agent_type else {}),
-    })
+    nodes.append(
+        {
+            "id": bv_id,
+            "label": label,
+            "sf_type": "BotVersion",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+            **({"description": description} if description else {}),
+            **({"agent_type": agent_type} if agent_type else {}),
+        }
+    )
 
     # Bot → BotVersion edge
     edges.append(_make_edge(b_id, bv_id, "contains", "EXTRACTED", str_path))
@@ -188,17 +200,13 @@ def extract_bot_version(path: Path) -> dict:
     for el in _find_all(root_el, "genAiPlugins", ns):
         plugin_name = _find_text(el, "genAiPlugin", ns)
         if plugin_name:
-            edges.append(
-                _make_edge(bv_id, gen_ai_plugin_id(plugin_name), "references", "EXTRACTED", str_path)
-            )
+            edges.append(_make_edge(bv_id, gen_ai_plugin_id(plugin_name), "references", "EXTRACTED", str_path))
 
     # Planner reference  (<planner><genAiPlannerBundle>ApiName</genAiPlannerBundle>...)
     for planner_el in _find_all(root_el, "planner", ns):
         planner_name = _find_text(planner_el, "genAiPlannerBundle", ns)
         if planner_name:
-            edges.append(
-                _make_edge(bv_id, gen_ai_planner_id(planner_name), "references", "EXTRACTED", str_path)
-            )
+            edges.append(_make_edge(bv_id, gen_ai_planner_id(planner_name), "references", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
 
@@ -206,6 +214,7 @@ def extract_bot_version(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # GenAiPlugin  (.genAiPlugin-meta.xml)  — Topic
 # ---------------------------------------------------------------------------
+
 
 def extract_gen_ai_plugin(path: Path) -> dict:
     """Extract a GenAiPlugin (Agentforce Topic) and its function members."""
@@ -225,24 +234,24 @@ def extract_gen_ai_plugin(path: Path) -> dict:
     description = _find_text(root_el, "description", ns) or ""
     plugin_type = _find_text(root_el, "pluginType", ns) or ""
 
-    nodes.append({
-        "id": p_id,
-        "label": label,
-        "sf_type": "GenAiPlugin",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-        **({"description": description} if description else {}),
-        **({"plugin_type": plugin_type} if plugin_type else {}),
-    })
+    nodes.append(
+        {
+            "id": p_id,
+            "label": label,
+            "sf_type": "GenAiPlugin",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+            **({"description": description} if description else {}),
+            **({"plugin_type": plugin_type} if plugin_type else {}),
+        }
+    )
 
     # Function members  (<functions><functionName>ApiName</functionName>...)
     for fn_el in _find_all(root_el, "functions", ns):
         fn_name = _find_text(fn_el, "functionName", ns)
         if fn_name:
-            edges.append(
-                _make_edge(p_id, gen_ai_function_id(fn_name), "contains", "EXTRACTED", str_path)
-            )
+            edges.append(_make_edge(p_id, gen_ai_function_id(fn_name), "contains", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
 
@@ -250,6 +259,7 @@ def extract_gen_ai_plugin(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # GenAiFunction  (.genAiFunction-meta.xml)  — Action
 # ---------------------------------------------------------------------------
+
 
 def extract_gen_ai_function(path: Path) -> dict:
     """Extract a GenAiFunction (Agentforce Action) and its Apex/Flow target."""
@@ -270,16 +280,18 @@ def extract_gen_ai_function(path: Path) -> dict:
     action_type = _find_text(root_el, "invocableActionType", ns) or ""
     action_name = _find_text(root_el, "invocableActionName", ns) or ""
 
-    nodes.append({
-        "id": fn_id,
-        "label": label,
-        "sf_type": "GenAiFunction",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-        **({"description": description} if description else {}),
-        **({"action_type": action_type} if action_type else {}),
-    })
+    nodes.append(
+        {
+            "id": fn_id,
+            "label": label,
+            "sf_type": "GenAiFunction",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+            **({"description": description} if description else {}),
+            **({"action_type": action_type} if action_type else {}),
+        }
+    )
 
     # Invocable action target
     if action_name:
@@ -290,15 +302,11 @@ def extract_gen_ai_function(path: Path) -> dict:
         else:
             # Unrecognised type — still link with INFERRED confidence
             target_id = apex_class_id(action_name)
-            edges.append(
-                _make_edge(fn_id, target_id, "invokes", "INFERRED", str_path)
-            )
+            edges.append(_make_edge(fn_id, target_id, "invokes", "INFERRED", str_path))
             target_id = None  # skip the EXTRACTED edge below
 
         if target_id:
-            edges.append(
-                _make_edge(fn_id, target_id, "invokes", "EXTRACTED", str_path)
-            )
+            edges.append(_make_edge(fn_id, target_id, "invokes", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
 
@@ -306,6 +314,7 @@ def extract_gen_ai_function(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # GenAiPlannerBundle  (.genAiPlannerBundle-meta.xml)
 # ---------------------------------------------------------------------------
+
 
 def extract_gen_ai_planner_bundle(path: Path) -> dict:
     """Extract a GenAiPlannerBundle (Agentforce Planner) and its plugin map."""
@@ -325,25 +334,25 @@ def extract_gen_ai_planner_bundle(path: Path) -> dict:
     description = _find_text(root_el, "description", ns) or ""
     planner_type = _find_text(root_el, "plannerType", ns) or ""
 
-    nodes.append({
-        "id": pl_id,
-        "label": label,
-        "sf_type": "GenAiPlannerBundle",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-        **({"description": description} if description else {}),
-        **({"planner_type": planner_type} if planner_type else {}),
-    })
+    nodes.append(
+        {
+            "id": pl_id,
+            "label": label,
+            "sf_type": "GenAiPlannerBundle",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+            **({"description": description} if description else {}),
+            **({"planner_type": planner_type} if planner_type else {}),
+        }
+    )
 
     # Sub-agent GenAiPlugin references
     # <subAgentDefinitions><genAiPlugin>ApiName</genAiPlugin>...
     for sub_el in _find_all(root_el, "subAgentDefinitions", ns):
         plugin_name = _find_text(sub_el, "genAiPlugin", ns)
         if plugin_name:
-            edges.append(
-                _make_edge(pl_id, gen_ai_plugin_id(plugin_name), "references", "EXTRACTED", str_path)
-            )
+            edges.append(_make_edge(pl_id, gen_ai_plugin_id(plugin_name), "references", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
 
@@ -351,6 +360,7 @@ def extract_gen_ai_planner_bundle(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # AiAuthoringBundle  (.aiAuthoringBundle-meta.xml)
 # ---------------------------------------------------------------------------
+
 
 def extract_ai_authoring_bundle(path: Path) -> dict:
     """Extract an AiAuthoringBundle and its bot/version references."""
@@ -366,17 +376,20 @@ def extract_ai_authoring_bundle(path: Path) -> dict:
         return {"nodes": [], "edges": []}
 
     from ._ids import make_sf_id
+
     bundle_id = make_sf_id("aiauthoringbundle", bundle_name)
     label = _find_text(root_el, "masterLabel", ns) or bundle_name
 
-    nodes.append({
-        "id": bundle_id,
-        "label": label,
-        "sf_type": "AiAuthoringBundle",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-    })
+    nodes.append(
+        {
+            "id": bundle_id,
+            "label": label,
+            "sf_type": "AiAuthoringBundle",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    )
 
     # References to Bot and BotVersion
     linked_bot = _find_text(root_el, "bot", ns)
@@ -386,8 +399,7 @@ def extract_ai_authoring_bundle(path: Path) -> dict:
         edges.append(_make_edge(bundle_id, bot_id(linked_bot), "references", "EXTRACTED", str_path))
         if linked_version:
             edges.append(
-                _make_edge(bundle_id, bot_version_id(linked_bot, linked_version),
-                           "references", "EXTRACTED", str_path)
+                _make_edge(bundle_id, bot_version_id(linked_bot, linked_version), "references", "EXTRACTED", str_path)
             )
 
     return {"nodes": nodes, "edges": edges}
@@ -396,6 +408,7 @@ def extract_ai_authoring_bundle(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # PromptTemplate  (.promptTemplate-meta.xml)
 # ---------------------------------------------------------------------------
+
 
 def extract_prompt_template(path: Path) -> dict:
     """Extract a PromptTemplate and its object/class/flow references."""
@@ -415,16 +428,18 @@ def extract_prompt_template(path: Path) -> dict:
     template_type = _find_text(root_el, "promptTemplateType", ns) or ""
     description = _find_text(root_el, "description", ns) or ""
 
-    nodes.append({
-        "id": pt_id,
-        "label": label,
-        "sf_type": "PromptTemplate",
-        "file_type": "agentforce",
-        "source_file": str_path,
-        "source_location": None,
-        **({"template_type": template_type} if template_type else {}),
-        **({"description": description} if description else {}),
-    })
+    nodes.append(
+        {
+            "id": pt_id,
+            "label": label,
+            "sf_type": "PromptTemplate",
+            "file_type": "agentforce",
+            "source_file": str_path,
+            "source_location": None,
+            **({"template_type": template_type} if template_type else {}),
+            **({"description": description} if description else {}),
+        }
+    )
 
     # Primary sObject context
     primary_obj = _find_text(root_el, "primaryObject", ns)

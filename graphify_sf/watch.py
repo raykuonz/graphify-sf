@@ -3,6 +3,7 @@
 
 Uses watchdog when available; falls back to polling every POLL_INTERVAL seconds.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -14,10 +15,15 @@ from pathlib import Path
 
 # Metadata file patterns that should trigger a rebuild
 _SF_EXTENSIONS = (
-    ".cls", ".trigger", ".page", ".component",
+    ".cls",
+    ".trigger",
+    ".page",
+    ".component",
     ".flow-meta.xml",
-    ".object-meta.xml", ".field-meta.xml",
-    ".validationRule-meta.xml", ".recordType-meta.xml",
+    ".object-meta.xml",
+    ".field-meta.xml",
+    ".validationRule-meta.xml",
+    ".recordType-meta.xml",
     ".layout-meta.xml",
     ".profile-meta.xml",
     ".permissionset-meta.xml",
@@ -40,6 +46,7 @@ def _is_sf_file(path: str) -> bool:
 
 # ── Resource management ────────────────────────────────────────────────────────
 
+
 def _apply_resource_limits() -> None:
     """Lower process priority and optionally cap memory usage.
 
@@ -55,6 +62,7 @@ def _apply_resource_limits() -> None:
     if mem_limit_mb_str:
         try:
             import resource as _resource
+
             limit_bytes = int(mem_limit_mb_str) * 1024 * 1024
             soft, hard = _resource.getrlimit(_resource.RLIMIT_AS)
             new_soft = min(limit_bytes, hard) if hard != _resource.RLIM_INFINITY else limit_bytes
@@ -64,6 +72,7 @@ def _apply_resource_limits() -> None:
 
 
 # ── Rebuild lock ───────────────────────────────────────────────────────────────
+
 
 @contextlib.contextmanager
 def _rebuild_lock(lock_path: Path):
@@ -77,6 +86,7 @@ def _rebuild_lock(lock_path: Path):
     """
     try:
         import fcntl as _fcntl
+
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_path, "w") as lf:
             try:
@@ -95,6 +105,7 @@ def _rebuild_lock(lock_path: Path):
 
 # ── Callflow auto-regeneration ─────────────────────────────────────────────────
 
+
 def _regen_callflow_if_present(out_dir: Path) -> None:
     """Re-generate callflow HTML if a previous build produced one."""
     existing = list(out_dir.glob("*callflow*.html"))
@@ -106,6 +117,7 @@ def _regen_callflow_if_present(out_dir: Path) -> None:
     try:
         from graphify_sf.__main__ import _load_graph_from_json
         from graphify_sf.export import to_callflow_html
+
         G, _ = _load_graph_from_json(graph_path)
         # Re-write to the first existing callflow file
         out_path = existing[0]
@@ -117,6 +129,7 @@ def _regen_callflow_if_present(out_dir: Path) -> None:
 
 # ── Core rebuild ──────────────────────────────────────────────────────────────
 
+
 def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
     """Trigger an incremental rebuild (with lock + resource limits)."""
     lock_path = out_dir / ".graphify_sf_rebuild.lock"
@@ -126,6 +139,7 @@ def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
             return
         _apply_resource_limits()
         from graphify_sf.__main__ import _run_pipeline
+
         try:
             _run_pipeline(target, out_dir, update=True, directed=directed, no_viz=no_viz)
         except SystemExit:
@@ -137,6 +151,7 @@ def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
 
 
 # ── Debounce timer ────────────────────────────────────────────────────────────
+
 
 class _DebounceTimer:
     """Debounce: only fire after N seconds of silence."""
@@ -163,6 +178,7 @@ class _DebounceTimer:
 
 
 # ── Watchdog backend ──────────────────────────────────────────────────────────
+
 
 def _watch_watchdog(
     target: Path,
@@ -213,6 +229,7 @@ def _watch_watchdog(
 
 # ── Polling backend ───────────────────────────────────────────────────────────
 
+
 def _watch_polling(
     target: Path,
     out_dir: Path,
@@ -262,6 +279,7 @@ def _watch_polling(
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+
 def watch(
     target: Path,
     out_dir: Path,
@@ -286,6 +304,7 @@ def watch(
     if not graph_json_path.exists():
         print("[graphify-sf watch] no graph.json found — running initial build...", flush=True)
         from graphify_sf.__main__ import _run_pipeline
+
         try:
             _run_pipeline(target, out_dir, directed=directed, no_viz=no_viz)
         except SystemExit:
@@ -293,6 +312,7 @@ def watch(
 
     try:
         import watchdog  # noqa: F401
+
         _watch_watchdog(target, out_dir, debounce=debounce, directed=directed, no_viz=no_viz)
     except ImportError:
         print(
@@ -301,7 +321,8 @@ def watch(
             file=sys.stderr,
         )
         _watch_polling(
-            target, out_dir,
+            target,
+            out_dir,
             debounce=debounce,
             directed=directed,
             no_viz=no_viz,

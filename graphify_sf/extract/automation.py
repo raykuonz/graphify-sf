@@ -1,4 +1,5 @@
 """Workflow, ApprovalProcess, and other automation metadata extractor."""
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -33,13 +34,17 @@ def _find_all(root: ET.Element, tag: str, ns: str = "") -> list[ET.Element]:
     return result
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -52,14 +57,16 @@ def extract_workflow(path: Path) -> dict:
     obj_name = stem  # Workflow files are named after the object
 
     workflow_nid = make_sf_id("workflow", stem)
-    nodes: list[dict] = [{
-        "id": workflow_nid,
-        "label": f"{stem} Workflow",
-        "sf_type": "Workflow",
-        "file_type": "automation",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": workflow_nid,
+            "label": f"{stem} Workflow",
+            "sf_type": "Workflow",
+            "file_type": "automation",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = [
         _make_edge(workflow_nid, object_id(obj_name), "triggers", "EXTRACTED", str_path),
     ]
@@ -74,14 +81,16 @@ def extract_workflow(path: Path) -> dict:
             rule_name = _find_text(rule, "fullName", ns)
             if rule_name:
                 rule_nid = make_sf_id("workflowrule", stem, rule_name)
-                nodes.append({
-                    "id": rule_nid,
-                    "label": rule_name,
-                    "sf_type": "WorkflowRule",
-                    "file_type": "automation",
-                    "source_file": str_path,
-                    "source_location": None,
-                })
+                nodes.append(
+                    {
+                        "id": rule_nid,
+                        "label": rule_name,
+                        "sf_type": "WorkflowRule",
+                        "file_type": "automation",
+                        "source_file": str_path,
+                        "source_location": None,
+                    }
+                )
                 edges.append(_make_edge(workflow_nid, rule_nid, "contains", "EXTRACTED", str_path))
 
         # Email alerts referencing Apex
@@ -89,14 +98,16 @@ def extract_workflow(path: Path) -> dict:
             alert_name = _find_text(alert, "fullName", ns)
             if alert_name:
                 alert_nid = make_sf_id("workflowalert", stem, alert_name)
-                nodes.append({
-                    "id": alert_nid,
-                    "label": alert_name,
-                    "sf_type": "WorkflowAlert",
-                    "file_type": "automation",
-                    "source_file": str_path,
-                    "source_location": None,
-                })
+                nodes.append(
+                    {
+                        "id": alert_nid,
+                        "label": alert_name,
+                        "sf_type": "WorkflowAlert",
+                        "file_type": "automation",
+                        "source_file": str_path,
+                        "source_location": None,
+                    }
+                )
                 edges.append(_make_edge(workflow_nid, alert_nid, "contains", "EXTRACTED", str_path))
 
     except ET.ParseError:
@@ -113,14 +124,16 @@ def extract_approval_process(path: Path) -> dict:
         stem = stem[: -len(".approvalProcess-meta")]
 
     process_nid = make_sf_id("approvalprocess", stem)
-    nodes: list[dict] = [{
-        "id": process_nid,
-        "label": stem,
-        "sf_type": "ApprovalProcess",
-        "file_type": "automation",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": process_nid,
+            "label": stem,
+            "sf_type": "ApprovalProcess",
+            "file_type": "automation",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     try:
@@ -168,14 +181,16 @@ def extract_generic_automation(path: Path) -> dict:
             break
 
     nid = make_sf_id(prefix, stem)
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": stem,
-        "sf_type": sf_type,
-        "file_type": "automation",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": stem,
+            "sf_type": sf_type,
+            "file_type": "automation",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     # Try to find the object reference

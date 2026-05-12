@@ -1,4 +1,5 @@
 """LWC bundle extractor."""
+
 from __future__ import annotations
 
 import re
@@ -24,13 +25,17 @@ def _kebab_to_camel(name: str) -> str:
     return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -41,14 +46,16 @@ def extract_lwc_bundle(bundle_dir: Path) -> dict:
     nid = lwc_id(name)
     str_dir = str(bundle_dir / f"{name}.js")
 
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": name,
-        "sf_type": "LWCComponent",
-        "file_type": "lwc",
-        "source_file": str_dir,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": name,
+            "sf_type": "LWCComponent",
+            "file_type": "lwc",
+            "source_file": str_dir,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
     seen_targets: set[str] = set()
 
@@ -95,14 +102,16 @@ def extract_lwc_bundle(bundle_dir: Path) -> dict:
             if method_name in ("constructor",) or method_name[0] in ("_",):
                 continue
             method_nid = make_sf_id("lwcmethod", name, method_name)
-            nodes.append({
-                "id": method_nid,
-                "label": f"{name}.{method_name}()",
-                "sf_type": "LWCMethod",
-                "file_type": "lwc",
-                "source_file": str_dir,
-                "source_location": None,
-            })
+            nodes.append(
+                {
+                    "id": method_nid,
+                    "label": f"{name}.{method_name}()",
+                    "sf_type": "LWCMethod",
+                    "file_type": "lwc",
+                    "source_file": str_dir,
+                    "source_location": None,
+                }
+            )
             edges.append(_make_edge(nid, method_nid, "contains", "EXTRACTED", str_dir))
 
     html_file = bundle_dir / f"{name}.html"

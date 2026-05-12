@@ -21,6 +21,7 @@ Environment variables for API keys:
     AWS_PROFILE / AWS_REGION — bedrock
     OLLAMA_BASE_URL     — ollama (local model)
 """
+
 from __future__ import annotations
 
 import json
@@ -152,10 +153,12 @@ semantically_duplicates|semantically_equivalent|shares_data_with|potentially_unr
 # Tokenizer (optional — falls back to chars/4 heuristic)
 # ---------------------------------------------------------------------------
 
+
 def _get_tokenizer():
     """Return a tiktoken encoder, or None if not installed."""
     try:
         import tiktoken
+
         return tiktoken.get_encoding("cl100k_base")
     except Exception:
         return None
@@ -167,6 +170,7 @@ _TOKENIZER = _get_tokenizer()
 # ---------------------------------------------------------------------------
 # Key / model resolution helpers
 # ---------------------------------------------------------------------------
+
 
 def _backend_env_keys(backend: str) -> list[str]:
     cfg = BACKENDS[backend]
@@ -217,6 +221,7 @@ def _resolve_max_tokens(default: int) -> int:
 # File reading
 # ---------------------------------------------------------------------------
 
+
 def _read_files(paths: list[Path], root: Path) -> str:
     """Return file contents formatted for the extraction prompt."""
     parts: list[str] = []
@@ -237,12 +242,12 @@ def _read_files(paths: list[Path], root: Path) -> str:
 # JSON parsing
 # ---------------------------------------------------------------------------
 
+
 def _parse_llm_json(raw: str) -> dict:
     """Strip optional markdown fences and parse JSON. Returns empty fragment on failure."""
     if len(raw.encode()) > _LLM_JSON_MAX_BYTES:
         print(
-            f"[graphify-sf] LLM response exceeds {_LLM_JSON_MAX_BYTES} bytes; "
-            "refusing to parse and dropping chunk.",
+            f"[graphify-sf] LLM response exceeds {_LLM_JSON_MAX_BYTES} bytes; refusing to parse and dropping chunk.",
             file=sys.stderr,
         )
         return {"nodes": [], "edges": [], "input_tokens": 0, "output_tokens": 0}
@@ -271,10 +276,12 @@ def _response_is_hollow(raw_content: str | None, parsed: dict) -> bool:
 # Ollama URL validation
 # ---------------------------------------------------------------------------
 
+
 def _validate_ollama_base_url(url: str) -> None:
     """Warn if OLLAMA_BASE_URL looks unsafe (non-loopback http)."""
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
     except Exception:
         print(f"[graphify-sf] WARNING: OLLAMA_BASE_URL={url!r} is not a parseable URL.", file=sys.stderr)
@@ -301,6 +308,7 @@ def _validate_ollama_base_url(url: str) -> None:
 # Backend call implementations
 # ---------------------------------------------------------------------------
 
+
 def _call_openai_compat(
     base_url: str,
     api_key: str,
@@ -318,8 +326,7 @@ def _call_openai_compat(
     except ImportError as exc:
         pkg_hint = "graphify-sf[kimi]" if backend == "kimi" else "openai"
         raise ImportError(
-            "Gemini/Kimi/Ollama/OpenAI-compatible extraction requires the openai package. "
-            f"Run: pip install {pkg_hint}"
+            f"Gemini/Kimi/Ollama/OpenAI-compatible extraction requires the openai package. Run: pip install {pkg_hint}"
         ) from exc
 
     timeout_raw = os.environ.get("GRAPHIFY_SF_API_TIMEOUT", "").strip()
@@ -394,8 +401,7 @@ def _call_claude(api_key: str, model: str, user_message: str, max_tokens: int = 
         import anthropic
     except ImportError as exc:
         raise ImportError(
-            "Claude extraction requires the anthropic package. "
-            "Run: pip install graphify-sf[claude]"
+            "Claude extraction requires the anthropic package. Run: pip install graphify-sf[claude]"
         ) from exc
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -426,9 +432,7 @@ def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192) -> dict
         import boto3
         import botocore.exceptions
     except ImportError as exc:
-        raise ImportError(
-            "AWS Bedrock extraction requires boto3. Run: pip install graphify-sf[bedrock]"
-        ) from exc
+        raise ImportError("AWS Bedrock extraction requires boto3. Run: pip install graphify-sf[bedrock]") from exc
 
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
     profile = os.environ.get("AWS_PROFILE")
@@ -467,6 +471,7 @@ def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192) -> dict
 # Public single-chunk extraction
 # ---------------------------------------------------------------------------
 
+
 def extract_files_direct(
     files: list[Path],
     backend: str = "claude",
@@ -497,8 +502,7 @@ def extract_files_direct(
         key = "ollama"
     if not key and backend != "bedrock":
         raise ValueError(
-            f"No API key for backend '{backend}'. "
-            f"Set {_format_backend_env_keys(backend)} or pass api_key=."
+            f"No API key for backend '{backend}'. Set {_format_backend_env_keys(backend)} or pass api_key=."
         )
 
     mdl = model or _default_model_for_backend(backend)
@@ -524,6 +528,7 @@ def extract_files_direct(
 # ---------------------------------------------------------------------------
 # Token estimation + chunk packing
 # ---------------------------------------------------------------------------
+
 
 def _estimate_file_tokens(path: Path) -> int:
     """Estimate the prompt-token cost of a single file."""
@@ -582,9 +587,16 @@ def _pack_chunks_by_tokens(
 # ---------------------------------------------------------------------------
 
 _CONTEXT_EXCEEDED_MARKERS = (
-    "context size", "context length", "context_length", "context window",
-    "exceeds the available", "n_ctx", "maximum context",
-    "too many tokens", "prompt is too long", "context_length_exceeded",
+    "context size",
+    "context length",
+    "context_length",
+    "context window",
+    "exceeds the available",
+    "n_ctx",
+    "maximum context",
+    "too many tokens",
+    "prompt is too long",
+    "context_length_exceeded",
 )
 
 
@@ -635,6 +647,7 @@ def _parse_retry_after(exc: BaseException) -> float | None:
 # Adaptive retry with bisection
 # ---------------------------------------------------------------------------
 
+
 def _extract_with_adaptive_retry(
     chunk: list[Path],
     backend: str,
@@ -654,9 +667,12 @@ def _extract_with_adaptive_retry(
     Recursion is capped at ``max_depth`` (default 3 → up to 8x chunk expansion).
     """
     _EMPTY = {
-        "nodes": [], "edges": [],
-        "input_tokens": 0, "output_tokens": 0,
-        "model": model, "finish_reason": "stop",
+        "nodes": [],
+        "edges": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "model": model,
+        "finish_reason": "stop",
     }
 
     # ── rate-limit-aware call (retries on 429, raises on other errors) ────
@@ -665,17 +681,13 @@ def _extract_with_adaptive_retry(
 
     for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
         try:
-            result = extract_files_direct(
-                chunk, backend=backend, api_key=api_key, model=model, root=root
-            )
+            result = extract_files_direct(chunk, backend=backend, api_key=api_key, model=model, root=root)
             break  # success
         except Exception as exc:  # noqa: BLE001
             if _looks_like_rate_limited(exc):
                 if attempt < _RATE_LIMIT_MAX_RETRIES:
                     suggested = _parse_retry_after(exc)
-                    wait = suggested if suggested else min(
-                        _RATE_LIMIT_BASE_BACKOFF * (2 ** attempt), 120.0
-                    )
+                    wait = suggested if suggested else min(_RATE_LIMIT_BASE_BACKOFF * (2**attempt), 120.0)
                     print(
                         f"[graphify-sf] rate limited (attempt {attempt + 1}/"
                         f"{_RATE_LIMIT_MAX_RETRIES + 1}), "
@@ -723,8 +735,7 @@ def _extract_with_adaptive_retry(
 
     if len(chunk) <= 1:
         print(
-            f"[graphify-sf] single-file chunk {chunk[0]} truncated at "
-            f"max_completion_tokens — partial result kept",
+            f"[graphify-sf] single-file chunk {chunk[0]} truncated at max_completion_tokens — partial result kept",
             file=sys.stderr,
         )
         return result
@@ -762,6 +773,7 @@ def _merge_results(left: dict, right: dict, model: str | None) -> dict:
 # ---------------------------------------------------------------------------
 # Parallel corpus extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_corpus_parallel(
     files: list[Path],
@@ -868,6 +880,7 @@ def _merge_into(merged: dict, result: dict) -> None:
 # Cost estimation
 # ---------------------------------------------------------------------------
 
+
 def estimate_cost(backend: str, input_tokens: int, output_tokens: int) -> float:
     """Estimate USD cost for a given token count using published pricing."""
     if backend not in BACKENDS:
@@ -880,6 +893,7 @@ def estimate_cost(backend: str, input_tokens: int, output_tokens: int) -> float:
 # Auto-detect backend from environment
 # ---------------------------------------------------------------------------
 
+
 def detect_backend() -> str | None:
     """Return the name of whichever backend has an API key set, or None.
 
@@ -891,11 +905,7 @@ def detect_backend() -> str | None:
     for backend in ("gemini", "kimi", "claude", "openai"):
         if _get_backend_api_key(backend):
             return backend
-    if (
-        os.environ.get("AWS_PROFILE")
-        or os.environ.get("AWS_REGION")
-        or os.environ.get("AWS_DEFAULT_REGION")
-    ):
+    if os.environ.get("AWS_PROFILE") or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"):
         return "bedrock"
     ollama_url = os.environ.get("OLLAMA_BASE_URL")
     if ollama_url:

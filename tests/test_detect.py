@@ -1,4 +1,5 @@
 """Tests for detect module."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -57,6 +58,7 @@ def test_detect_finds_lwc_bundles(simple_detect_result):
 def test_detect_compound_suffix_flow(simple_project_path):
     """Test compound suffix matching for .flow-meta.xml files."""
     from graphify_sf.detect import detect
+
     result = detect(simple_project_path)
     flow_files = result["files"]["flow"]
     assert any("UpdateAccountStatus" in f for f in flow_files)
@@ -65,6 +67,7 @@ def test_detect_compound_suffix_flow(simple_project_path):
 def test_detect_compound_suffix_field(simple_project_path):
     """Test compound suffix matching for .field-meta.xml files."""
     from graphify_sf.detect import detect
+
     result = detect(simple_project_path)
     field_files = result["files"]["field"]
     assert any("Status__c" in f for f in field_files)
@@ -79,6 +82,7 @@ def test_detect_skips_common_dirs(tmp_path):
     (project / "node_modules" / "test.cls").write_text("public class Test {}")
 
     from graphify_sf.detect import detect
+
     result = detect(project)
 
     # node_modules should be skipped, so no files detected
