@@ -10,6 +10,7 @@ Cache layout::
 The two-character prefix shards the cache to avoid oversized directories
 on filesystems with slow per-directory listing (e.g. FAT32, some NFS mounts).
 """
+
 from __future__ import annotations
 
 import hashlib

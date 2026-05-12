@@ -3,6 +3,7 @@
 Adapted from Graphify's build.py — removes LLM dedup and validate imports,
 adds build_from_extraction() and build_merge_sf() for the SF pipeline.
 """
+
 from __future__ import annotations
 
 import json
@@ -60,9 +61,11 @@ def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
         if not isinstance(edge, dict):
             continue
         if "source" not in edge and "from" in edge:
-            edge = dict(edge); edge["source"] = edge["from"]
+            edge = dict(edge)
+            edge["source"] = edge["from"]
         if "target" not in edge and "to" in edge:
-            edge = dict(edge); edge["target"] = edge["to"]
+            edge = dict(edge)
+            edge["target"] = edge["to"]
         if "source" not in edge or "target" not in edge:
             continue
         src, tgt = edge["source"], edge["target"]
@@ -92,8 +95,11 @@ build_from_extraction = build_from_json
 def build(extractions: list[dict], *, directed: bool = False) -> nx.Graph:
     """Merge multiple extraction results into one graph."""
     combined: dict = {
-        "nodes": [], "edges": [], "hyperedges": [],
-        "input_tokens": 0, "output_tokens": 0,
+        "nodes": [],
+        "edges": [],
+        "hyperedges": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
     }
     for ext in extractions:
         combined["nodes"].extend(ext.get("nodes", []))

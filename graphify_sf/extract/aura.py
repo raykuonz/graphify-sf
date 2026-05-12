@@ -1,4 +1,5 @@
 """Aura bundle extractor."""
+
 from __future__ import annotations
 
 import re
@@ -9,18 +10,22 @@ from ._ids import apex_class_id, aura_id, make_sf_id
 _CONTROLLER_ATTR_RE = re.compile(r'controller\s*=\s*["\'](\w+)["\']', re.IGNORECASE)
 _EXTENDS_ATTR_RE = re.compile(r'extends\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 _CHILD_COMPONENT_RE = re.compile(r"<(c:|lightning:|force:|ui:)\s*([\w-]+)")
-_ENQUEUE_RE = re.compile(r'\$A\.enqueueAction\s*\(\s*(\w+)', re.IGNORECASE)
+_ENQUEUE_RE = re.compile(r"\$A\.enqueueAction\s*\(\s*(\w+)", re.IGNORECASE)
 _ACTION_GET_RE = re.compile(r'\.get\s*\(\s*["\']c\.(\w+)["\']', re.IGNORECASE)
-_METHOD_RE = re.compile(r'^(\w+)\s*:\s*function\s*\(', re.MULTILINE)
+_METHOD_RE = re.compile(r"^(\w+)\s*:\s*function\s*\(", re.MULTILINE)
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -32,14 +37,16 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
     cmp_file = bundle_dir / f"{name}.cmp"
     str_cmp = str(cmp_file)
 
-    nodes: list[dict] = [{
-        "id": nid,
-        "label": name,
-        "sf_type": "AuraComponent",
-        "file_type": "aura",
-        "source_file": str_cmp,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": nid,
+            "label": name,
+            "sf_type": "AuraComponent",
+            "file_type": "aura",
+            "source_file": str_cmp,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
     seen: set[str] = set()
 
@@ -86,14 +93,16 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
         for m in _METHOD_RE.finditer(ctrl_text):
             method_name = m.group(1)
             method_nid = make_sf_id("auramethod", name, method_name)
-            nodes.append({
-                "id": method_nid,
-                "label": f"{name}.{method_name}()",
-                "sf_type": "AuraControllerMethod",
-                "file_type": "aura",
-                "source_file": str(ctrl_file),
-                "source_location": None,
-            })
+            nodes.append(
+                {
+                    "id": method_nid,
+                    "label": f"{name}.{method_name}()",
+                    "sf_type": "AuraControllerMethod",
+                    "file_type": "aura",
+                    "source_file": str(ctrl_file),
+                    "source_location": None,
+                }
+            )
             edges.append(_make_edge(nid, method_nid, "contains", "EXTRACTED", str(ctrl_file)))
 
     # Parse Helper.js
@@ -107,14 +116,16 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
         for m in _METHOD_RE.finditer(helper_text):
             method_name = m.group(1)
             method_nid = make_sf_id("aurahelper", name, method_name)
-            nodes.append({
-                "id": method_nid,
-                "label": f"{name}Helper.{method_name}()",
-                "sf_type": "AuraHelperMethod",
-                "file_type": "aura",
-                "source_file": str(helper_file),
-                "source_location": None,
-            })
+            nodes.append(
+                {
+                    "id": method_nid,
+                    "label": f"{name}Helper.{method_name}()",
+                    "sf_type": "AuraHelperMethod",
+                    "file_type": "aura",
+                    "source_file": str(helper_file),
+                    "source_location": None,
+                }
+            )
             edges.append(_make_edge(nid, method_nid, "contains", "EXTRACTED", str(helper_file)))
 
     return {"nodes": nodes, "edges": edges}
