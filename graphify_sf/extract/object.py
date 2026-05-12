@@ -1,4 +1,5 @@
 """CustomObject, CustomField, and child metadata extractor."""
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -23,13 +24,17 @@ def _get_ns(root_el: ET.Element) -> str:
     return ""
 
 
-def _make_edge(src: str, tgt: str, relation: str, confidence: str,
-               source_file: str, weight: float = 1.0) -> dict:
+def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
     return {
-        "source": src, "target": tgt,
-        "relation": relation, "confidence": confidence,
-        "source_file": source_file, "source_location": None,
-        "weight": weight, "_src": src, "_tgt": tgt,
+        "source": src,
+        "target": tgt,
+        "relation": relation,
+        "confidence": confidence,
+        "source_file": source_file,
+        "source_location": None,
+        "weight": weight,
+        "_src": src,
+        "_tgt": tgt,
     }
 
 
@@ -37,7 +42,7 @@ def _object_name_from_stem(path: Path) -> str:
     """Extract the object API name from a .object-meta.xml file stem."""
     stem = path.stem
     if stem.endswith(".object-meta"):
-        return stem[:-len(".object-meta")]
+        return stem[: -len(".object-meta")]
     return stem
 
 
@@ -60,14 +65,16 @@ def extract_custom_object(path: Path) -> dict:
     obj_name = _object_name_from_stem(path)
     obj_nid = object_id(obj_name)
 
-    nodes: list[dict] = [{
-        "id": obj_nid,
-        "label": obj_name,
-        "sf_type": "CustomObject",
-        "file_type": "object",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": obj_nid,
+            "label": obj_name,
+            "sf_type": "CustomObject",
+            "file_type": "object",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
 
     # Try to enrich with label/description from XML
     try:
@@ -102,14 +109,16 @@ def extract_custom_field(path: Path) -> dict:
     field_nid = field_id(obj_name, field_name)
     obj_nid = object_id(obj_name)
 
-    nodes: list[dict] = [{
-        "id": field_nid,
-        "label": f"{obj_name}.{field_name}",
-        "sf_type": "CustomField",
-        "file_type": "object",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": field_nid,
+            "label": f"{obj_name}.{field_name}",
+            "sf_type": "CustomField",
+            "file_type": "object",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = [
         _make_edge(obj_nid, field_nid, "contains", "EXTRACTED", str_path),
     ]
@@ -129,10 +138,15 @@ def extract_custom_field(path: Path) -> dict:
         if field_type in ("Lookup", "MasterDetail", "Hierarchy"):
             ref_to = _find_text(root_el, "referenceTo", ns)
             if ref_to:
-                edges.append(_make_edge(
-                    field_nid, object_id(ref_to),
-                    "references", "EXTRACTED", str_path,
-                ))
+                edges.append(
+                    _make_edge(
+                        field_nid,
+                        object_id(ref_to),
+                        "references",
+                        "EXTRACTED",
+                        str_path,
+                    )
+                )
     except (ET.ParseError, OSError):
         pass
 
@@ -177,14 +191,16 @@ def extract_child_object(path: Path) -> dict:
     child_nid = make_sf_id(sf_type.lower(), obj_name, stem)
     obj_nid = object_id(obj_name)
 
-    nodes: list[dict] = [{
-        "id": child_nid,
-        "label": f"{obj_name}: {stem}",
-        "sf_type": sf_type,
-        "file_type": "object",
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": child_nid,
+            "label": f"{obj_name}: {stem}",
+            "sf_type": sf_type,
+            "file_type": "object",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = [
         _make_edge(obj_nid, child_nid, "contains", "EXTRACTED", str_path),
     ]

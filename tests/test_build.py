@@ -1,4 +1,5 @@
 """Tests for graph building."""
+
 from __future__ import annotations
 
 import json
@@ -103,6 +104,7 @@ def test_build_merge_sf_creates_graph(simple_extraction, tmp_path):
 
     # Export to JSON format
     from networkx.readwrite import json_graph
+
     graph_data = json_graph.node_link_data(initial)
     graph_path.write_text(json.dumps(graph_data), encoding="utf-8")
 
