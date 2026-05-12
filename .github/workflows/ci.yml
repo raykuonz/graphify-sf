@@ -60,6 +60,16 @@ jobs:
       - name: Run ruff (formatter check)
         run: uv run ruff format --check graphify_sf/ tests/
 
+      - name: Check skills/graphify-sf/SKILL.md is in sync with graphify_sf/skill.md
+        run: |
+          if ! diff -q skills/graphify-sf/SKILL.md graphify_sf/skill.md > /dev/null 2>&1; then
+            echo "ERROR: skills/graphify-sf/SKILL.md is out of sync with graphify_sf/skill.md"
+            echo "Run: cp graphify_sf/skill.md skills/graphify-sf/SKILL.md"
+            diff skills/graphify-sf/SKILL.md graphify_sf/skill.md
+            exit 1
+          fi
+          echo "SKILL.md files are in sync ✓"
+
   security:
     name: Dependency Security Scan
     runs-on: ubuntu-latest
