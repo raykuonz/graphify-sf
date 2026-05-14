@@ -1,9 +1,5 @@
 """Tests for doc file detection in graphify_sf.detect."""
-import sys
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from graphify_sf.detect import (
     DocFileType,

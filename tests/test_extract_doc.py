@@ -2,17 +2,14 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from graphify_sf.extract.doc import (
+    _doc_id,
+    _extract_headings,
+    extract_doc_file,
     extract_document,
     extract_image,
     extract_paper,
-    extract_doc_file,
-    _doc_id,
-    _extract_headings,
 )
-
 
 SAMPLE_MD = """\
 # Introduction
@@ -58,11 +55,11 @@ def test_extract_document_headings():
 def test_extract_document_heading_edges():
     p = _write_tmp(SAMPLE_MD, ".md")
     result = extract_document(p)
-    # All heading nodes should have a contains edge from the doc node
+    # All heading nodes should have a contains edge from the root doc node
     doc_id = result["nodes"][0]["id"]
-    contains_targets = {e["target"] for e in result["edges"] if e["relation"] == "contains"}
+    contains_targets = {e["target"] for e in result["edges"] if e["relation"] == "contains" and e["source"] == doc_id}
     heading_ids = {n["id"] for n in result["nodes"][1:]}
-    assert heading_ids.issubset(contains_targets | {n["id"] for n in result["nodes"]})
+    assert heading_ids.issubset(contains_targets)
 
 
 def test_extract_document_sf_mentions():
@@ -75,7 +72,7 @@ def test_extract_document_sf_mentions():
 
 
 def test_extract_image_node_only():
-    import tempfile, os
+    import tempfile
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(b"\x89PNG\r\n\x1a\n")
         p = Path(f.name)
@@ -87,7 +84,7 @@ def test_extract_image_node_only():
 
 def test_extract_paper_no_crash_without_pypdf():
     """extract_paper must not crash even if pypdf is not installed."""
-    import tempfile, os
+    import tempfile
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(b"%PDF-1.4 fake")
         p = Path(f.name)
