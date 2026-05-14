@@ -12,6 +12,7 @@ Built for developers and architects who need to understand large Salesforce orgs
 
 - **Fully offline** — pure XML/source parsing, no Salesforce CLI, no org connection, no API calls
 - **Honest provenance** — every edge is tagged `EXTRACTED` (from explicit XML) or `INFERRED` (from source patterns)
+- **Reference file support** — indexes `.md`, `.txt`, `.pdf`, `.xlsx`, `.docx`, and images alongside SF metadata; headings become sub-nodes, SF component mentions create cross-reference edges
 - **Community detection** — Louvain/Leiden clustering surfaces cross-metadata couplings you wouldn't think to ask about
 - **Interactive HTML visualization** — force-directed graph with search, community filtering, and node inspector
 - **Multiple export formats** — HTML, SVG, Mermaid call-flow, D3 tree, Obsidian vault, GraphML, Cypher/Neo4j, JSON, Markdown wiki
@@ -584,6 +585,24 @@ graphify-sf check-update . || graphify-sf . --update --no-viz
 
 ---
 
+## Reference File Support
+
+graphify-sf indexes non-Salesforce reference files that live alongside your SFDX metadata — design docs, data dictionaries, architecture notes, and more — and cross-references them against SF component names found in the graph.
+
+| File type | Extensions | What is extracted | Library required |
+|-----------|------------|-------------------|-----------------|
+| **Document** | `.md`, `.mdx`, `.txt`, `.rst`, `.html` | H1/H2/H3 headings as sub-nodes; SF name mentions → `references` edges | _(none — base install)_ |
+| **Image** | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg` | Metadata node only | _(none — base install)_ |
+| **PDF** | `.pdf` | Full text extracted; SF name mentions → `references` edges | `graphify-sf[docs]` |
+| **Word doc** | `.docx` | Converted to Markdown sidecar in `graphify-sf-out/converted/`; then processed as Document | `graphify-sf[docs]` |
+| **Spreadsheet** | `.xlsx` | Converted to Markdown sidecar; structural nodes (workbook → sheet → named table → column) | `graphify-sf[docs]` |
+
+SF component mention detection uses a heuristic regex (`PascalCase` identifiers and names ending in `__c`, `__r`, `__mdt`, etc.). Mention edges are tagged `INFERRED` and resolved to real SF node IDs in the cross-reference pass; unresolved mentions are silently dropped.
+
+If the required library is not installed, the file is skipped with a warning — the pipeline never crashes due to a missing optional dependency.
+
+---
+
 ## Configuration
 
 All configuration via environment variables:
@@ -640,6 +659,9 @@ pip install graphify-sf[bedrock]
 # LLM semantic extraction — Claude + all OpenAI-compat backends
 pip install graphify-sf[llm]
 
+# Reference file support (PDF, Word, Excel alongside SFDX metadata)
+pip install graphify-sf[docs]
+
 # Everything
 pip install graphify-sf[all]
 ```
@@ -658,8 +680,9 @@ pip install graphify-sf[all]
 
 ```
 graphify_sf/
-├── detect.py       File scanner — classifies .cls/.trigger/.flow-meta.xml/... files
+├── detect.py       File scanner — classifies .cls/.trigger/.flow-meta.xml/... files + doc/paper/image types
 ├── extract/        Per-type extractors — Apex, Flow, Object, LWC, Aura, Profile, Agentforce, ...
+│   └── doc.py      Document extractor — headings, SF mentions, xlsx structure, PDF/image nodes
 ├── build.py        Graph construction — node/edge deduplication, merge strategies
 ├── cluster.py      Community detection — Louvain (default) or Leiden (optional)
 ├── analyze.py      Graph analysis — god nodes, surprising connections, question generation
