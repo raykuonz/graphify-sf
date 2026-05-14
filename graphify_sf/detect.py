@@ -74,6 +74,37 @@ _SIMPLE_EXT_MAP = {
     ".component": SFFileType.VISUALFORCE,
 }
 
+
+class DocFileType(str, Enum):
+    DOCUMENT = "document"
+    PAPER = "paper"
+    IMAGE = "image"
+
+
+_DOC_EXTENSIONS = {
+    ".md": DocFileType.DOCUMENT,
+    ".mdx": DocFileType.DOCUMENT,
+    ".txt": DocFileType.DOCUMENT,
+    ".rst": DocFileType.DOCUMENT,
+    ".html": DocFileType.DOCUMENT,
+    ".htm": DocFileType.DOCUMENT,
+}
+_PAPER_EXTENSIONS = {
+    ".pdf": DocFileType.PAPER,
+}
+_OFFICE_EXTENSIONS = {
+    ".docx": DocFileType.DOCUMENT,
+    ".xlsx": DocFileType.DOCUMENT,
+}
+_IMAGE_EXTENSIONS = {
+    ".png": DocFileType.IMAGE,
+    ".jpg": DocFileType.IMAGE,
+    ".jpeg": DocFileType.IMAGE,
+    ".gif": DocFileType.IMAGE,
+    ".webp": DocFileType.IMAGE,
+    ".svg": DocFileType.IMAGE,
+}
+
 _SKIP_DIRS = {".sfdx", "node_modules", "__pycache__", ".git", "graphify-sf-out"}
 
 
@@ -144,13 +175,132 @@ def _is_ignored(path: Path, root: Path, patterns: list[str]) -> bool:
     return False
 
 
+def extract_pdf_text(path: Path) -> str:
+    """Extract plain text from a PDF using pypdf. Returns '' if pypdf not installed."""
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n".join(pages)
+    except ImportError:
+        return ""
+    except Exception:
+        return ""
+
+
+def docx_to_markdown(path: Path) -> str:
+    """Convert a .docx file to markdown text using python-docx. Returns '' if not installed."""
+    try:
+        from docx import Document
+
+        doc = Document(str(path))
+        lines = []
+        for para in doc.paragraphs:
+            style = para.style.name if para.style else ""
+            text = para.text.strip()
+            if not text:
+                lines.append("")
+                continue
+            if style.startswith("Heading 1"):
+                lines.append(f"# {text}")
+            elif style.startswith("Heading 2"):
+                lines.append(f"## {text}")
+            elif style.startswith("Heading 3"):
+                lines.append(f"### {text}")
+            elif style.startswith("List"):
+                lines.append(f"- {text}")
+            else:
+                lines.append(text)
+        for table in doc.tables:
+            rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+            if not rows:
+                continue
+            header = "| " + " | ".join(rows[0]) + " |"
+            sep = "| " + " | ".join("---" for _ in rows[0]) + " |"
+            lines.extend([header, sep])
+            for row in rows[1:]:
+                lines.append("| " + " | ".join(row) + " |")
+        return "\n".join(lines)
+    except ImportError:
+        return ""
+    except Exception:
+        return ""
+
+
+def xlsx_to_markdown(path: Path) -> str:
+    """Convert an .xlsx file to markdown using openpyxl. Returns '' if not installed."""
+    try:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+        sections = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                if all(cell is None for cell in row):
+                    continue
+                rows.append([str(cell) if cell is not None else "" for cell in row])
+            if not rows:
+                continue
+            sections.append(f"## Sheet: {sheet_name}")
+            header = "| " + " | ".join(rows[0]) + " |"
+            sep = "| " + " | ".join("---" for _ in rows[0]) + " |"
+            sections.extend([header, sep])
+            for row in rows[1:]:
+                sections.append("| " + " | ".join(row) + " |")
+        wb.close()
+        return "\n".join(sections)
+    except ImportError:
+        return ""
+    except Exception:
+        return ""
+
+
+def convert_office_file(path: Path, out_dir: Path) -> Path | None:
+    """Convert .docx or .xlsx to a markdown sidecar in out_dir.
+    Returns the sidecar path, or None if conversion failed/library not installed.
+    """
+    ext = path.suffix.lower()
+    if ext == ".docx":
+        text = docx_to_markdown(path)
+    elif ext == ".xlsx":
+        text = xlsx_to_markdown(path)
+    else:
+        return None
+    if not text.strip():
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name_hash = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:8]
+    out_path = out_dir / f"{path.stem}_{name_hash}.md"
+    out_path.write_text(f"<!-- converted from {path.name} -->\n\n{text}", encoding="utf-8")
+    return out_path
+
+
+def _classify_doc_file(path: Path) -> DocFileType | None:
+    """Classify a file as a doc/paper/image type. Returns None if not a doc file."""
+    ext = path.suffix.lower()
+    if ext in _DOC_EXTENSIONS:
+        return _DOC_EXTENSIONS[ext]
+    if ext in _PAPER_EXTENSIONS:
+        return _PAPER_EXTENSIONS[ext]
+    if ext in _OFFICE_EXTENSIONS:
+        return _OFFICE_EXTENSIONS[ext]
+    if ext in _IMAGE_EXTENSIONS:
+        return _IMAGE_EXTENSIONS[ext]
+    return None
+
+
 def detect(root: Path) -> dict:
     """Scan the SFDX project and return detected files grouped by type."""
     root = root.resolve()
     files = {ft.value: [] for ft in SFFileType}
+    doc_files: dict[str, list[str]] = {ft.value: [] for ft in DocFileType}
     bundle_dirs = {"lwc": [], "aura": []}
     skipped = []
     ignore_patterns = _load_sfgraphignore(root)
+    converted_dir = root / "graphify-sf-out" / "converted"
 
     for dirpath, dirnames, filenames in os.walk(root):
         dp = Path(dirpath)
@@ -175,14 +325,46 @@ def detect(root: Path) -> dict:
             if _is_ignored(path, root, ignore_patterns):
                 skipped.append(str(path))
                 continue
+            # Try SF classification first
             ftype = _classify_file(path)
             if ftype:
                 files[ftype.value].append(str(path))
+                continue
+            # Try doc classification
+            dtype = _classify_doc_file(path)
+            if dtype:
+                ext = path.suffix.lower()
+                if ext in _OFFICE_EXTENSIONS:
+                    # Convert office files to markdown sidecars
+                    try:
+                        md_path = convert_office_file(path, converted_dir)
+                        if md_path:
+                            doc_files[dtype.value].append(str(md_path))
+                        else:
+                            import sys
 
-    total_files = sum(len(v) for v in files.values()) + len(bundle_dirs["lwc"]) + len(bundle_dirs["aura"])
+                            print(
+                                f"[graphify-sf] WARNING: {path.name} skipped — "
+                                "install graphify-sf[docs] to enable office file support",
+                                file=sys.stderr,
+                            )
+                    except Exception as exc:
+                        import sys
+
+                        print(f"[graphify-sf] WARNING: office conversion failed for {path}: {exc}", file=sys.stderr)
+                else:
+                    doc_files[dtype.value].append(str(path))
+
+    total_files = (
+        sum(len(v) for v in files.values())
+        + len(bundle_dirs["lwc"])
+        + len(bundle_dirs["aura"])
+        + sum(len(v) for v in doc_files.values())
+    )
 
     return {
         "files": files,
+        "doc_files": doc_files,
         "total_files": total_files,
         "bundle_dirs": bundle_dirs,
         "warning": None,
@@ -210,10 +392,15 @@ def load_manifest(manifest_path: str) -> dict:
         return {}
 
 
-def save_manifest(files: dict[str, list[str]], manifest_path: str) -> None:
+def save_manifest(
+    files: dict[str, list[str]], manifest_path: str, doc_files: dict[str, list[str]] | None = None
+) -> None:
     """Save current file mtimes + content hashes for incremental updates."""
     manifest = {}
-    for file_list in files.values():
+    all_file_lists = list(files.values())
+    if doc_files:
+        all_file_lists.extend(doc_files.values())
+    for file_list in all_file_lists:
         for f in file_list:
             try:
                 p = Path(f)
@@ -232,29 +419,42 @@ def detect_incremental(root: Path, manifest_path: str) -> dict:
     if not manifest:
         full["new_files"] = full["files"]
         full["unchanged_files"] = {k: [] for k in full["files"]}
+        full["new_doc_files"] = full["doc_files"]
+        full["unchanged_doc_files"] = {k: [] for k in full["doc_files"]}
         return full
 
     new_files = {k: [] for k in full["files"]}
     unchanged_files = {k: [] for k in full["files"]}
+    new_doc_files = {k: [] for k in full["doc_files"]}
+    unchanged_doc_files = {k: [] for k in full["doc_files"]}
+
+    def _check_changed(f: str) -> bool:
+        stored = manifest.get(f, {})
+        try:
+            current_mtime = Path(f).stat().st_mtime
+            stored_mtime = stored.get("mtime")
+            if stored_mtime is None or current_mtime != stored_mtime:
+                return _md5_file(Path(f)) != stored.get("hash", "")
+            return False
+        except Exception:
+            return True
 
     for ftype, file_list in full["files"].items():
         for f in file_list:
-            stored = manifest.get(f, {})
-            try:
-                current_mtime = Path(f).stat().st_mtime
-                stored_mtime = stored.get("mtime")
-                if stored_mtime is None or current_mtime != stored_mtime:
-                    changed = _md5_file(Path(f)) != stored.get("hash", "")
-                else:
-                    changed = False
-            except Exception:
-                changed = True
-
-            if changed:
+            if _check_changed(f):
                 new_files[ftype].append(f)
             else:
                 unchanged_files[ftype].append(f)
 
+    for dtype, file_list in full["doc_files"].items():
+        for f in file_list:
+            if _check_changed(f):
+                new_doc_files[dtype].append(f)
+            else:
+                unchanged_doc_files[dtype].append(f)
+
     full["new_files"] = new_files
     full["unchanged_files"] = unchanged_files
+    full["new_doc_files"] = new_doc_files
+    full["unchanged_doc_files"] = unchanged_doc_files
     return full
