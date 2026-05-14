@@ -31,6 +31,7 @@ from .config import (
     extract_generic_config,
     extract_named_credential,
 )
+from .doc import extract_doc_file
 from .flow import extract_flow
 from .layout import extract_layout
 from .lwc import extract_lwc_bundle
@@ -166,6 +167,35 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
                 }
             )
 
+    # Build a label→id lookup for SF mention resolution from doc nodes
+    label_to_ids: dict[str, list[str]] = {}
+    for n in nodes:
+        lbl = n.get("label", "")
+        if lbl:
+            label_to_ids.setdefault(lbl, []).append(n["id"])
+        # Also index by stem without extension
+        stem = lbl.rsplit(".", 1)[0] if "." in lbl else lbl
+        if stem and stem != lbl:
+            label_to_ids.setdefault(stem, []).append(n["id"])
+
+    # Resolve __mention__ placeholder targets
+    resolved_mention_edges: list[dict] = []
+    for edge in edges:
+        tgt = edge.get("target", "")
+        if tgt.startswith("__mention__"):
+            mention_label = edge.get("_mention_label", tgt[len("__mention__"):])
+            real_targets = label_to_ids.get(mention_label, [])
+            if real_targets:
+                for real_id in real_targets[:1]:   # take first match
+                    new_edge = {k: v for k, v in edge.items() if k != "_mention_label"}
+                    new_edge["target"] = real_id
+                    new_edge["_tgt"] = real_id
+                    resolved_mention_edges.append(new_edge)
+            # If no match found, drop the placeholder edge (unknown SF component)
+        else:
+            resolved_mention_edges.append(edge)
+    edges = resolved_mention_edges
+
     # Downgrade EXTRACTED edges pointing to unknown nodes → INFERRED
     resolved_edges: list[dict] = []
     for edge in edges + additional_edges:
@@ -200,10 +230,15 @@ def extract(
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
 
-    # Collect all single-file paths
+    # Collect all single-file paths (SF metadata)
     single_files: list[Path] = []
     for file_list in detect_result.get("files", {}).values():
         single_files.extend(Path(f) for f in file_list)
+
+    # Collect doc files (markdown, PDF, images, xlsx sidecars)
+    doc_file_paths: list[Path] = []
+    for file_list in detect_result.get("doc_files", {}).values():
+        doc_file_paths.extend(Path(f) for f in file_list)
 
     lwc_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("lwc", [])]
     aura_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("aura", [])]
@@ -251,6 +286,15 @@ def extract(
             all_edges.extend(result.get("edges", []))
         except Exception as exc:
             print(f"[graphify-sf] WARNING: Aura bundle {bundle_dir}: {exc}", file=sys.stderr)
+
+    # Phase 1c: Extract doc files (sequential — usually few and lightweight)
+    for p in doc_file_paths:
+        try:
+            result = extract_doc_file(p)
+            all_nodes.extend(result.get("nodes", []))
+            all_edges.extend(result.get("edges", []))
+        except Exception as exc:
+            print(f"[graphify-sf] WARNING: doc extraction failed for {p}: {exc}", file=sys.stderr)
 
     # Phase 2: Cross-file resolution
     all_nodes, all_edges = _resolve_cross_references(all_nodes, all_edges)

@@ -11,6 +11,24 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.0] — 2026-05-14
+
+### Added
+
+#### Reference file support
+- Detect and index non-Salesforce reference files co-existing in SFDX repos
+- **Documents** (`.md`, `.mdx`, `.txt`, `.rst`, `.html`) — headings extracted as sub-nodes; Salesforce component name mentions create `references` edges
+- **PDFs** (`.pdf`) — text extracted via `pypdf`; SF name mentions detected
+- **Spreadsheets** (`.xlsx`) — structural nodes: workbook → sheet → named table → column headers; content converted to markdown sidecar
+- **Word documents** (`.docx`) — converted to markdown sidecar via `python-docx`, then processed as document
+- **Images** (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`) — metadata node, no text extraction
+- Office file sidecar conversion to `graphify-sf-out/converted/` (stable SHA-256 filename)
+- New optional extra `graphify-sf[docs]` for `pypdf`, `python-docx`, `openpyxl`
+- Graceful degradation: missing optional libraries skip files with a warning, never crash
+- `detect()` returns new `doc_files` key; `detect_incremental()` tracks doc file changes
+
+---
+
 ## [0.1.0] — 2026-05-12
 
 ### Added
