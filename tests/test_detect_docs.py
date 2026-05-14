@@ -1,4 +1,5 @@
 """Tests for doc file detection in graphify_sf.detect."""
+
 from pathlib import Path
 
 from graphify_sf.detect import (

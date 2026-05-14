@@ -80,6 +80,7 @@ class DocFileType(str, Enum):
     PAPER = "paper"
     IMAGE = "image"
 
+
 _DOC_EXTENSIONS = {
     ".md": DocFileType.DOCUMENT,
     ".mdx": DocFileType.DOCUMENT,
@@ -178,6 +179,7 @@ def extract_pdf_text(path: Path) -> str:
     """Extract plain text from a PDF using pypdf. Returns '' if pypdf not installed."""
     try:
         from pypdf import PdfReader
+
         reader = PdfReader(str(path))
         pages = [page.extract_text() or "" for page in reader.pages]
         return "\n".join(pages)
@@ -191,6 +193,7 @@ def docx_to_markdown(path: Path) -> str:
     """Convert a .docx file to markdown text using python-docx. Returns '' if not installed."""
     try:
         from docx import Document
+
         doc = Document(str(path))
         lines = []
         for para in doc.paragraphs:
@@ -229,6 +232,7 @@ def xlsx_to_markdown(path: Path) -> str:
     """Convert an .xlsx file to markdown using openpyxl. Returns '' if not installed."""
     try:
         import openpyxl
+
         wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
         sections = []
         for sheet_name in wb.sheetnames:
@@ -338,6 +342,7 @@ def detect(root: Path) -> dict:
                             doc_files[dtype.value].append(str(md_path))
                         else:
                             import sys
+
                             print(
                                 f"[graphify-sf] WARNING: {path.name} skipped — "
                                 "install graphify-sf[docs] to enable office file support",
@@ -345,6 +350,7 @@ def detect(root: Path) -> dict:
                             )
                     except Exception as exc:
                         import sys
+
                         print(f"[graphify-sf] WARNING: office conversion failed for {path}: {exc}", file=sys.stderr)
                 else:
                     doc_files[dtype.value].append(str(path))
@@ -386,7 +392,9 @@ def load_manifest(manifest_path: str) -> dict:
         return {}
 
 
-def save_manifest(files: dict[str, list[str]], manifest_path: str, doc_files: dict[str, list[str]] | None = None) -> None:
+def save_manifest(
+    files: dict[str, list[str]], manifest_path: str, doc_files: dict[str, list[str]] | None = None
+) -> None:
     """Save current file mtimes + content hashes for incremental updates."""
     manifest = {}
     all_file_lists = list(files.values())

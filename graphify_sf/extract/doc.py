@@ -8,6 +8,7 @@ Handles non-Salesforce reference files:
 SF component name mention detection creates INFERRED references edges
 back to SF nodes, resolved in the cross-reference pass.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -18,6 +19,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # ID helpers
 # ---------------------------------------------------------------------------
+
 
 def _doc_id(path: Path, root: Path | None = None) -> str:
     """Stable node ID for a document file."""
@@ -64,31 +66,36 @@ def _extract_headings(text: str, doc_id: str, source_file: str) -> tuple[list[di
             level = len(m.group(1))
             heading_text = m.group(2).strip()
             h_id = _heading_id(doc_id, heading_text, lineno)
-            nodes.append({
-                "id": h_id,
-                "label": heading_text,
-                "file_type": "document",
-                "sf_type": None,
-                "source_file": source_file,
-                "source_location": f"L{lineno}",
-                "heading_level": level,
-            })
-            edges.append({
-                "source": doc_id,
-                "target": h_id,
-                "relation": "contains",
-                "confidence": "EXTRACTED",
-                "confidence_score": 1.0,
-                "source_file": source_file,
-                "source_location": f"L{lineno}",
-                "weight": 0.5,
-            })
+            nodes.append(
+                {
+                    "id": h_id,
+                    "label": heading_text,
+                    "file_type": "document",
+                    "sf_type": None,
+                    "source_file": source_file,
+                    "source_location": f"L{lineno}",
+                    "heading_level": level,
+                }
+            )
+            edges.append(
+                {
+                    "source": doc_id,
+                    "target": h_id,
+                    "relation": "contains",
+                    "confidence": "EXTRACTED",
+                    "confidence_score": 1.0,
+                    "source_file": source_file,
+                    "source_location": f"L{lineno}",
+                    "weight": 0.5,
+                }
+            )
     return nodes, edges
 
 
 # ---------------------------------------------------------------------------
 # SF mention detection
 # ---------------------------------------------------------------------------
+
 
 def _sf_mention_edges(text: str, doc_id: str, source_file: str) -> list[dict]:
     """Scan text for SF API name patterns (e.g. AccountService, Account__c).
@@ -98,9 +105,7 @@ def _sf_mention_edges(text: str, doc_id: str, source_file: str) -> list[dict]:
     """
     edges: list[dict] = []
     # SF API names: PascalCase identifiers or names ending in __c / __r / __mdt etc.
-    sf_pattern = re.compile(
-        r"\b([A-Z][A-Za-z0-9]*(?:__[a-z]{1,6})?)\b"
-    )
+    sf_pattern = re.compile(r"\b([A-Z][A-Za-z0-9]*(?:__[a-z]{1,6})?)\b")
     seen: set[str] = set()
     for m in sf_pattern.finditer(text):
         name = m.group(1)
@@ -109,23 +114,26 @@ def _sf_mention_edges(text: str, doc_id: str, source_file: str) -> list[dict]:
         seen.add(name)
         # Candidate SF node IDs to try at cross-reference time
         # We store the raw mention label in _mention_label for resolution
-        edges.append({
-            "source": doc_id,
-            "target": f"__mention__{name}",   # placeholder resolved in pass 2
-            "_mention_label": name,
-            "relation": "references",
-            "confidence": "INFERRED",
-            "confidence_score": 0.6,
-            "source_file": source_file,
-            "source_location": None,
-            "weight": 0.5,
-        })
+        edges.append(
+            {
+                "source": doc_id,
+                "target": f"__mention__{name}",  # placeholder resolved in pass 2
+                "_mention_label": name,
+                "relation": "references",
+                "confidence": "INFERRED",
+                "confidence_score": 0.6,
+                "source_file": source_file,
+                "source_location": None,
+                "weight": 0.5,
+            }
+        )
     return edges
 
 
 # ---------------------------------------------------------------------------
 # xlsx structure extraction
 # ---------------------------------------------------------------------------
+
 
 def xlsx_extract_structure(path: Path) -> dict:
     """Extract structural nodes (file → sheet → named_table → column) from an .xlsx.
@@ -135,32 +143,46 @@ def xlsx_extract_structure(path: Path) -> dict:
     str_path = str(path)
     stem = re.sub(r"[^a-z0-9]", "_", path.stem.lower())
     file_id = _doc_id(path)
-    nodes: list[dict] = [{
-        "id": file_id,
-        "label": path.name,
-        "file_type": "document",
-        "sf_type": None,
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": file_id,
+            "label": path.name,
+            "file_type": "document",
+            "sf_type": None,
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
     seen: set[str] = {file_id}
 
     def _add_node(nid: str, label: str) -> None:
         if nid not in seen:
             seen.add(nid)
-            nodes.append({
-                "id": nid, "label": label,
-                "file_type": "document", "sf_type": None,
-                "source_file": str_path, "source_location": None,
-            })
+            nodes.append(
+                {
+                    "id": nid,
+                    "label": label,
+                    "file_type": "document",
+                    "sf_type": None,
+                    "source_file": str_path,
+                    "source_location": None,
+                }
+            )
 
     def _add_edge(src: str, tgt: str, relation: str) -> None:
-        edges.append({
-            "source": src, "target": tgt, "relation": relation,
-            "confidence": "EXTRACTED", "confidence_score": 1.0,
-            "source_file": str_path, "source_location": None, "weight": 0.5,
-        })
+        edges.append(
+            {
+                "source": src,
+                "target": tgt,
+                "relation": relation,
+                "confidence": "EXTRACTED",
+                "confidence_score": 1.0,
+                "source_file": str_path,
+                "source_location": None,
+                "weight": 0.5,
+            }
+        )
 
     try:
         import openpyxl
@@ -187,12 +209,17 @@ def xlsx_extract_structure(path: Path) -> dict:
                 if tbl.ref:
                     try:
                         from openpyxl.utils import range_boundaries
+
                         min_col, min_row, max_col, _ = range_boundaries(tbl.ref)
-                        header_rows = list(ws.iter_rows(
-                            min_row=min_row, max_row=min_row,
-                            min_col=min_col, max_col=max_col,
-                            values_only=True,
-                        ))
+                        header_rows = list(
+                            ws.iter_rows(
+                                min_row=min_row,
+                                max_row=min_row,
+                                min_col=min_col,
+                                max_col=max_col,
+                                values_only=True,
+                            )
+                        )
                         if header_rows:
                             for col_name in header_rows[0]:
                                 if col_name:
@@ -223,18 +250,21 @@ def xlsx_extract_structure(path: Path) -> dict:
 # Main extractors
 # ---------------------------------------------------------------------------
 
+
 def extract_document(path: Path) -> dict:
     """Extract a text document (.md, .txt, .rst, .html) into graph nodes/edges."""
     str_path = str(path)
     doc_id = _doc_id(path)
-    nodes: list[dict] = [{
-        "id": doc_id,
-        "label": path.name,
-        "file_type": "document",
-        "sf_type": None,
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": doc_id,
+            "label": path.name,
+            "file_type": "document",
+            "sf_type": None,
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     try:
@@ -253,16 +283,19 @@ def extract_document(path: Path) -> dict:
 def extract_paper(path: Path) -> dict:
     """Extract a PDF document into a graph node."""
     from graphify_sf.detect import extract_pdf_text
+
     str_path = str(path)
     doc_id = _doc_id(path)
-    nodes: list[dict] = [{
-        "id": doc_id,
-        "label": path.name,
-        "file_type": "paper",
-        "sf_type": None,
-        "source_file": str_path,
-        "source_location": None,
-    }]
+    nodes: list[dict] = [
+        {
+            "id": doc_id,
+            "label": path.name,
+            "file_type": "paper",
+            "sf_type": None,
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
 
     text = extract_pdf_text(path)
@@ -277,14 +310,16 @@ def extract_image(path: Path) -> dict:
     str_path = str(path)
     doc_id = _doc_id(path)
     return {
-        "nodes": [{
-            "id": doc_id,
-            "label": path.name,
-            "file_type": "image",
-            "sf_type": None,
-            "source_file": str_path,
-            "source_location": None,
-        }],
+        "nodes": [
+            {
+                "id": doc_id,
+                "label": path.name,
+                "file_type": "image",
+                "sf_type": None,
+                "source_file": str_path,
+                "source_location": None,
+            }
+        ],
         "edges": [],
     }
 

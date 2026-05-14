@@ -183,10 +183,10 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
     for edge in edges:
         tgt = edge.get("target", "")
         if tgt.startswith("__mention__"):
-            mention_label = edge.get("_mention_label", tgt[len("__mention__"):])
+            mention_label = edge.get("_mention_label", tgt[len("__mention__") :])
             real_targets = label_to_ids.get(mention_label, [])
             if real_targets:
-                for real_id in real_targets[:1]:   # take first match
+                for real_id in real_targets[:1]:  # take first match
                     new_edge = {k: v for k, v in edge.items() if k != "_mention_label"}
                     new_edge["target"] = real_id
                     new_edge["_tgt"] = real_id

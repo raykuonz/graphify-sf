@@ -1,4 +1,5 @@
 """Tests for graphify_sf.extract.doc document extractor."""
+
 import tempfile
 from pathlib import Path
 
@@ -73,6 +74,7 @@ def test_extract_document_sf_mentions():
 
 def test_extract_image_node_only():
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(b"\x89PNG\r\n\x1a\n")
         p = Path(f.name)
@@ -85,6 +87,7 @@ def test_extract_image_node_only():
 def test_extract_paper_no_crash_without_pypdf():
     """extract_paper must not crash even if pypdf is not installed."""
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(b"%PDF-1.4 fake")
         p = Path(f.name)
@@ -101,6 +104,7 @@ def test_extract_doc_file_dispatch_md():
 
 def test_extract_doc_file_dispatch_pdf():
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(b"%PDF fake")
         p = Path(f.name)
