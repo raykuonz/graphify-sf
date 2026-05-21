@@ -93,6 +93,23 @@ def extract_flow(path: Path) -> dict:
         }
     )
 
+    # Record-Triggered Flow: <start> element
+    start_el = root_el.find(f"{{{ns}}}start") if ns else root_el.find("start")
+    if start_el is not None:
+        trigger_obj = _find_text(start_el, "object", ns)
+        record_trigger_type = _find_text(start_el, "recordTriggerType", ns)
+        start_trigger_type = _find_text(start_el, "triggerType", ns)
+        if trigger_obj and start_trigger_type in (
+            "RecordAfterSave",
+            "RecordBeforeSave",
+            "RecordBeforeDelete",
+        ):
+            trigger_edge = _make_edge(flow_nid, object_id(trigger_obj), "triggers", "EXTRACTED", str_path)
+            trigger_edge["trigger_type"] = start_trigger_type
+            if record_trigger_type:
+                trigger_edge["trigger_event"] = record_trigger_type
+            edges.append(trigger_edge)
+
     # Action calls (Apex, email alerts, etc.)
     for action in _find_all(root_el, "actionCalls", ns):
         action_type = _find_text(action, "actionType", ns)

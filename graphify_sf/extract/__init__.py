@@ -296,7 +296,15 @@ def extract(
         except Exception as exc:
             print(f"[graphify-sf] WARNING: doc extraction failed for {p}: {exc}", file=sys.stderr)
 
-    # Phase 2: Cross-file resolution
+    # Phase 2a: Create stub nodes for standard objects/flows/apex that have no
+    # extracted node yet (e.g. Lead, Account with no .object-meta.xml).
+    # This must run BEFORE _resolve_cross_references so that edges to standard
+    # objects are not downgraded from EXTRACTED to INFERRED.
+    from ..build import _ensure_stub_nodes
+
+    _ensure_stub_nodes(all_nodes, all_edges)
+
+    # Phase 2b: Cross-file resolution
     all_nodes, all_edges = _resolve_cross_references(all_nodes, all_edges)
 
     return {
