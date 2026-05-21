@@ -154,3 +154,203 @@ def test_extract_child_object_generic(tmp_path):
     # Should have contains edge from parent object
     contains_edges = [e for e in result["edges"] if e.get("relation") == "contains"]
     assert len(contains_edges) == 1
+
+
+# ---------------------------------------------------------------------------
+# Lookup / MasterDetail reference edges
+# ---------------------------------------------------------------------------
+
+_NS = 'xmlns="http://soap.sforce.com/2006/04/metadata"'
+
+
+def test_extract_custom_field_lookup_creates_references_edge(tmp_path):
+    """A Lookup field creates a 'references' edge to the target object."""
+    from graphify_sf.extract.object import extract_custom_field
+
+    obj_dir = tmp_path / "objects" / "Opportunity__c" / "fields"
+    obj_dir.mkdir(parents=True)
+    field = obj_dir / "Account__c.field-meta.xml"
+    field.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField {_NS}>
+    <fullName>Account__c</fullName>
+    <label>Account</label>
+    <type>Lookup</type>
+    <referenceTo>Account</referenceTo>
+</CustomField>
+""")
+
+    result = extract_custom_field(field)
+    ref_edges = [e for e in result["edges"] if e.get("relation") == "references"]
+    assert len(ref_edges) == 1
+    assert "account" in ref_edges[0]["target"].lower()
+    assert ref_edges[0]["confidence"] == "EXTRACTED"
+
+
+def test_extract_custom_field_master_detail_creates_master_detail_edge(tmp_path):
+    """A MasterDetail field creates a 'master_detail' (not 'references') edge."""
+    from graphify_sf.extract.object import extract_custom_field
+
+    obj_dir = tmp_path / "objects" / "LineItem__c" / "fields"
+    obj_dir.mkdir(parents=True)
+    field = obj_dir / "Order__c.field-meta.xml"
+    field.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField {_NS}>
+    <fullName>Order__c</fullName>
+    <label>Order</label>
+    <type>MasterDetail</type>
+    <referenceTo>Order__c</referenceTo>
+</CustomField>
+""")
+
+    result = extract_custom_field(field)
+    md_edges = [e for e in result["edges"] if e.get("relation") == "master_detail"]
+    ref_edges = [e for e in result["edges"] if e.get("relation") == "references"]
+    assert len(md_edges) == 1, "Should use 'master_detail' relation for MasterDetail fields"
+    assert len(ref_edges) == 0, "Should NOT use 'references' for MasterDetail"
+    assert "order__c" in md_edges[0]["target"].lower()
+
+
+def test_extract_custom_field_lookup_no_reference_to_no_edge(tmp_path):
+    """A Lookup field without referenceTo produces no references edge."""
+    from graphify_sf.extract.object import extract_custom_field
+
+    obj_dir = tmp_path / "objects" / "MyObj__c" / "fields"
+    obj_dir.mkdir(parents=True)
+    field = obj_dir / "SomeField__c.field-meta.xml"
+    field.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField {_NS}>
+    <fullName>SomeField__c</fullName>
+    <label>Some Field</label>
+    <type>Lookup</type>
+</CustomField>
+""")
+
+    result = extract_custom_field(field)
+    ref_edges = [e for e in result["edges"] if e.get("relation") in ("references", "master_detail")]
+    assert len(ref_edges) == 0
+
+
+# ---------------------------------------------------------------------------
+# ValidationRule → field formula references
+# ---------------------------------------------------------------------------
+
+
+def test_extract_validation_rule_custom_field_reference(tmp_path):
+    """ValidationRule formula referencing a custom field creates an INFERRED references edge."""
+    from graphify_sf.extract.object import extract_child_object
+
+    vr_dir = tmp_path / "objects" / "Opportunity" / "validationRules"
+    vr_dir.mkdir(parents=True)
+    vr = vr_dir / "RequireCloseDate.validationRule-meta.xml"
+    vr.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule {_NS}>
+    <fullName>RequireCloseDate</fullName>
+    <active>true</active>
+    <errorConditionFormula>AND(ISBLANK(CloseDate__c), Stage__c = 'Closed')</errorConditionFormula>
+    <errorMessage>Close date is required</errorMessage>
+</ValidationRule>
+""")
+
+    result = extract_child_object(vr)
+    ref_edges = [e for e in result["edges"] if e.get("relation") == "references"]
+    assert len(ref_edges) >= 1
+    targets = {e["target"] for e in ref_edges}
+    assert any("closedate__c" in t.lower() for t in targets)
+    for e in ref_edges:
+        assert e["confidence"] == "INFERRED"
+
+
+def test_extract_validation_rule_cross_object_formula_reference(tmp_path):
+    """ValidationRule cross-object formula (e.g. Account__r.Name__c) also creates INFERRED edge."""
+    from graphify_sf.extract.object import extract_child_object
+
+    vr_dir = tmp_path / "objects" / "Contact" / "validationRules"
+    vr_dir.mkdir(parents=True)
+    vr = vr_dir / "CheckAccountField.validationRule-meta.xml"
+    vr.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule {_NS}>
+    <fullName>CheckAccountField</fullName>
+    <active>true</active>
+    <errorConditionFormula>ISBLANK(Account__r.Rating__c)</errorConditionFormula>
+    <errorMessage>Account rating required</errorMessage>
+</ValidationRule>
+""")
+
+    result = extract_child_object(vr)
+    ref_edges = [e for e in result["edges"] if e.get("relation") == "references"]
+    assert len(ref_edges) >= 1
+    targets = {e["target"] for e in ref_edges}
+    assert any("rating__c" in t.lower() for t in targets)
+
+
+def test_extract_validation_rule_no_formula_no_field_edges(tmp_path):
+    """ValidationRule without formula produces no field reference edges."""
+    from graphify_sf.extract.object import extract_child_object
+
+    vr_dir = tmp_path / "objects" / "Lead" / "validationRules"
+    vr_dir.mkdir(parents=True)
+    vr = vr_dir / "SimpleRule.validationRule-meta.xml"
+    vr.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule {_NS}>
+    <fullName>SimpleRule</fullName>
+    <active>true</active>
+</ValidationRule>
+""")
+
+    result = extract_child_object(vr)
+    ref_edges = [e for e in result["edges"] if e.get("relation") == "references"]
+    assert len(ref_edges) == 0
+
+
+# ---------------------------------------------------------------------------
+# Other child metadata types (RecordType, ListView, etc.)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_child_object_record_type(tmp_path):
+    """RecordType metadata produces a RecordType node."""
+    from graphify_sf.extract.object import extract_child_object
+
+    rt_dir = tmp_path / "objects" / "Account" / "recordTypes"
+    rt_dir.mkdir(parents=True)
+    rt = rt_dir / "Enterprise.recordType-meta.xml"
+    rt.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<RecordType {_NS}>
+    <fullName>Enterprise</fullName>
+    <active>true</active>
+    <label>Enterprise</label>
+</RecordType>
+""")
+
+    result = extract_child_object(rt)
+    assert len(result["nodes"]) == 1
+    assert result["nodes"][0]["sf_type"] == "RecordType"
+    contains_edges = [e for e in result["edges"] if e.get("relation") == "contains"]
+    assert len(contains_edges) == 1
+
+
+def test_extract_child_object_list_view(tmp_path):
+    """ListView metadata produces a ListView node."""
+    from graphify_sf.extract.object import extract_child_object
+
+    lv_dir = tmp_path / "objects" / "Lead" / "listViews"
+    lv_dir.mkdir(parents=True)
+    lv = lv_dir / "AllLeads.listView-meta.xml"
+    lv.write_text(f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<ListView {_NS}>
+    <fullName>AllLeads</fullName>
+    <label>All Leads</label>
+</ListView>
+""")
+
+    result = extract_child_object(lv)
+    assert len(result["nodes"]) == 1
+    assert result["nodes"][0]["sf_type"] == "ListView"

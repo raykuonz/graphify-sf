@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from ._ids import field_id, make_sf_id, object_id
+
+# Regex to extract custom field API names from formula strings.
+# Matches names ending in __c or __r (custom fields/relationships), or
+# cross-object references like Account.Name (Object.Field pattern).
+# Intentionally conservative to minimise false positives.
+_VR_CUSTOM_FIELD_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*__[cr])\b")
+_VR_CROSS_OBJECT_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]+)\.([A-Za-z][A-Za-z0-9_]*__[cr])\b")
 
 
 def _find_text(el: ET.Element, tag: str, ns: str = "") -> str | None:
@@ -134,15 +142,17 @@ def extract_custom_field(path: Path) -> dict:
         if label:
             nodes[0]["display_label"] = label
 
-        # Lookup / MasterDetail → references the target object
+        # Lookup / MasterDetail / Hierarchy → references the target object
+        # MasterDetail gets its own relation name to distinguish ownership semantics.
         if field_type in ("Lookup", "MasterDetail", "Hierarchy"):
             ref_to = _find_text(root_el, "referenceTo", ns)
             if ref_to:
+                relation = "master_detail" if field_type == "MasterDetail" else "references"
                 edges.append(
                     _make_edge(
                         field_nid,
                         object_id(ref_to),
-                        "references",
+                        relation,
                         "EXTRACTED",
                         str_path,
                     )
@@ -204,5 +214,50 @@ def extract_child_object(path: Path) -> dict:
     edges: list[dict] = [
         _make_edge(obj_nid, child_nid, "contains", "EXTRACTED", str_path),
     ]
+
+    # For ValidationRules: extract field references from the formula expression.
+    # These are INFERRED edges because regex-based formula parsing is imprecise.
+    if sf_type == "ValidationRule":
+        try:
+            tree = ET.parse(str_path)
+            root_el = tree.getroot()
+            ns = _get_ns(root_el)
+            formula = _find_text(root_el, "errorConditionFormula", ns) or ""
+            if formula:
+                seen_fields: set[str] = set()
+                # Custom fields on the same object: e.g. Amount__c, Status__r
+                for m in _VR_CUSTOM_FIELD_RE.finditer(formula):
+                    fname = m.group(1)
+                    fid = field_id(obj_name, fname)
+                    if fid not in seen_fields:
+                        seen_fields.add(fid)
+                        edges.append(
+                            _make_edge(
+                                child_nid,
+                                fid,
+                                "references",
+                                "INFERRED",
+                                str_path,
+                                weight=0.7,
+                            )
+                        )
+                # Cross-object custom field references: e.g. Account__r.Name__c
+                for m in _VR_CROSS_OBJECT_RE.finditer(formula):
+                    cross_obj, cross_field = m.group(1), m.group(2)
+                    cross_fid = field_id(cross_obj, cross_field)
+                    if cross_fid not in seen_fields:
+                        seen_fields.add(cross_fid)
+                        edges.append(
+                            _make_edge(
+                                child_nid,
+                                cross_fid,
+                                "references",
+                                "INFERRED",
+                                str_path,
+                                weight=0.7,
+                            )
+                        )
+        except (ET.ParseError, OSError):
+            pass
 
     return {"nodes": nodes, "edges": edges}

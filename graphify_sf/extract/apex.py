@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ._ids import apex_class_id, apex_method_id, object_id, trigger_id
+from ._ids import apex_class_id, apex_method_id, flow_id, object_id, trigger_id
 
 # ---------------------------------------------------------------------------
 # Apex regex patterns
@@ -42,6 +42,9 @@ _TRIGGER_RE = re.compile(
     r"trigger\s+(\w+)\s+on\s+(\w+)\s*\(([^)]+)\)",
     re.IGNORECASE,
 )
+
+# Apex → Flow: Flow.Interview.FlowApiName
+_FLOW_INVOKE_RE = re.compile(r"Flow\.Interview\.(\w+)", re.IGNORECASE)
 
 # Apex keywords that look like calls but aren't class references
 _APEX_KEYWORDS = frozenset(
@@ -80,8 +83,88 @@ _APEX_KEYWORDS = frozenset(
         "restrequest",
         "restresponse",
         "userinfo",
+        # Common test/assert helpers and standard Apex built-ins
+        "assert",
+        "system.assert",
+        "type",
+        "exception",
+        "error",
+        "results",
+        "result",
+        "response",
+        "request",
+        "event",
+        "message",
+        "record",
+        "records",
+        "field",
+        "value",
+        "values",
+        "entry",
+        "context",
+        "iterator",
+        "comparable",
+        "runnable",
+        "callable",
+        "queueable",
+        "batchable",
+        "schedulable",
+        "invocable",
+        "label",
+        # SOSL/SOQL built-ins
+        "search",
+        "query",
+        "querylocator",
+        # Messaging & email
+        "messaging",
+        "approval",
+        "process",
+        # Additional Apex system namespaces
+        "dom",
+        "crypto",
+        "encodingutil",
+        "url",
+        "uri",
+        "site",
+        "network",
+        "cookie",
+        "standardcontroller",
+        "standardsetcontroller",
+        "componentcontroller",
     }
 )
+
+# Minimum length and shape heuristics for a plausible Apex class name in _raw_calls.
+# Returns False for things like single-letter variables, all-caps constants,
+# or names that look like local variables rather than class references.
+_SINGLE_LETTER = re.compile(r"^[A-Za-z]$")
+_ALL_CAPS = re.compile(r"^[A-Z][A-Z0-9_]+$")  # e.g. MAX_SIZE, TRUE
+
+
+def _looks_like_apex_class(name: str) -> bool:
+    """Heuristic: return True only if *name* plausibly refers to an Apex class.
+
+    Rejects:
+    - Single-character identifiers (loop vars, etc.)
+    - All-uppercase identifiers (constants, enums accessed as Class.CONSTANT)
+    - Names starting with a lowercase letter (local variables / primitive types)
+    - Names shorter than 3 chars
+    - Names in the extended keyword set
+    """
+    if not name or len(name) < 2:
+        return False
+    if name.lower() in _APEX_KEYWORDS:
+        return False
+    # Must start with uppercase (Apex class naming convention: PascalCase)
+    if not name[0].isupper():
+        return False
+    # Single-letter check (already covered by len < 2, but explicit)
+    if _SINGLE_LETTER.match(name):
+        return False
+    # All-caps constants (e.g. TRUE, FALSE, NULL, MAX_SIZE) are not class calls
+    if _ALL_CAPS.match(name) and len(name) <= 10:
+        return False
+    return True
 
 
 def _make_edge(
@@ -208,7 +291,7 @@ def extract_apex_class(path: Path) -> dict:
             for cm in _CALL_RE.finditer(text, start):
                 callee_class = cm.group(1)
                 callee_method = cm.group(2)
-                if callee_class.lower() not in _APEX_KEYWORDS:
+                if _looks_like_apex_class(callee_class):
                     raw_calls.append(
                         {
                             "caller_id": method_nid,
@@ -253,6 +336,22 @@ def extract_apex_class(path: Path) -> dict:
                             confidence_score=0.7,
                         )
                     )
+
+        # Apex → Flow invocations via Flow.Interview.FlowName
+        seen_flow_invokes: set[str] = set()
+        for fm in _FLOW_INVOKE_RE.finditer(text):
+            flow_name = fm.group(1)
+            if flow_name not in seen_flow_invokes:
+                seen_flow_invokes.add(flow_name)
+                edges.append(
+                    _make_edge(
+                        class_nid,
+                        flow_id(flow_name),
+                        "invokes",
+                        "EXTRACTED",
+                        str_path,
+                    )
+                )
 
         # Stash raw_calls in the class node for cross-file resolution
         if raw_calls and nodes:
@@ -321,7 +420,7 @@ def extract_apex_trigger(path: Path) -> dict:
     for cm in _CALL_RE.finditer(text, m.end()):
         callee_class = cm.group(1)
         callee_method = cm.group(2)
-        if callee_class.lower() not in _APEX_KEYWORDS and callee_class[0].isupper():
+        if _looks_like_apex_class(callee_class):
             raw_calls.append(
                 {
                     "caller_id": trigger_nid,
