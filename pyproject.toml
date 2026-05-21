@@ -33,6 +33,7 @@ dependencies = [
     "networkx>=3.0",
     "datasketch>=1.6",
     "rapidfuzz>=3.0",
+    "idna>=3.15",  # CVE-2026-45409 fix — transitive via requests
 ]
 
 [project.urls]
