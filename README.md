@@ -699,6 +699,49 @@ graphify_sf/
 
 ---
 
+## Changelog
+
+### v0.3.0
+
+**Edge extraction improvements**
+
+- Record-Triggered Flows now emit `triggers` edges to the target object with `EXTRACTED` confidence
+- Flows emit `invokes` edges for subflow references and `calls` edges for Apex action calls
+- Custom Fields emit `references` (Lookup) and `master_detail` (MasterDetail) edges to target objects
+- ValidationRule formula fields emit `INFERRED references` edges to the fields they reference
+- Agentforce: `GenAiPlannerBundle` local actions parsed as inline `GenAiFunction` nodes; `conversationDefinitionPlanners` XML path supported for BotVersion planner references; `PromptTemplate` `flexTemplateActionCalls` create reference edges
+- `build.py` exports `_resolve_apex_calls`, `_derive_object_edges`, and `_ensure_stub_nodes` for use in the extract pipeline
+
+**Bug fixes**
+
+- Fixed: standard-object edges (Lead, Account, etc.) were incorrectly downgraded from `EXTRACTED` to `INFERRED` confidence because `_ensure_stub_nodes` ran after `_resolve_cross_references`; ordering is now correct
+- Fixed: Apex `calls` edges had ~96% false-positive rate from local variable method calls; new `_looks_like_apex_class()` heuristic reduces noise to ~36%
+
+**Tests**
+
+- 65 new tests → 268 total (up from 203)
+- New `test_extract_pipeline.py` with regression test for the stub-node ordering fix
+
+---
+
+### v0.2.0
+
+- Reference file support: `.md`, `.txt`, `.pdf`, `.xlsx`, `.docx`, and images indexed alongside SF metadata
+- Headings become sub-nodes; SF component mentions create cross-reference edges
+- `.[docs]` extra for PDF/Word/Excel parsing
+
+---
+
+### v0.1.0
+
+- Initial release: Apex, Flow, Object, LWC, Aura, Profile, Permission Set, Agentforce metadata extraction
+- NetworkX graph with Louvain community detection
+- HTML, JSON, Obsidian, GraphML, Cypher, SVG, Mermaid export formats
+- Incremental updates via SHA-256 manifest
+- MCP stdio server, file watcher, git hooks
+
+---
+
 ## License
 
 MIT
