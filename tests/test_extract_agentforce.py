@@ -604,7 +604,9 @@ def test_extract_planner_local_action_flow_invokes_edge(tmp_path):
 
     result = extract_gen_ai_planner_bundle(planner_file)
     invokes_edges = [e for e in result["edges"] if e.get("relation") == "invokes"]
-    flow_invokes = [e for e in invokes_edges if "flow" in e["target"].lower() or "createreferral" in e["target"].lower()]
+    flow_invokes = [
+        e for e in invokes_edges if "flow" in e["target"].lower() or "createreferral" in e["target"].lower()
+    ]
     assert len(flow_invokes) >= 1
     assert any("createreferralflow" in e["target"].lower() for e in invokes_edges)
 

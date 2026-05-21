@@ -288,7 +288,9 @@ def test_resolve_apex_calls_creates_calls_edges():
             "id": "apex_handler",
             "label": "Handler",
             "sf_type": "ApexClass",
-            "_raw_calls": [{"caller_id": "method_handler_run", "callee_class": "AccountService", "callee_method": "getAccounts"}],
+            "_raw_calls": [
+                {"caller_id": "method_handler_run", "callee_class": "AccountService", "callee_method": "getAccounts"}
+            ],
         },
         {"id": "apex_accountservice", "label": "AccountService", "sf_type": "ApexClass"},
     ]
@@ -425,12 +427,27 @@ def test_build_derives_object_to_object_edges():
     ext = {
         "nodes": [
             {"id": "object_opportunity", "label": "Opportunity", "sf_type": "CustomObject", "file_type": "object"},
-            {"id": "field_opportunity_account__c", "label": "Opportunity.Account__c", "sf_type": "CustomField", "file_type": "object"},
+            {
+                "id": "field_opportunity_account__c",
+                "label": "Opportunity.Account__c",
+                "sf_type": "CustomField",
+                "file_type": "object",
+            },
             {"id": "object_account", "label": "Account", "sf_type": "CustomObject", "file_type": "object"},
         ],
         "edges": [
-            {"source": "object_opportunity", "target": "field_opportunity_account__c", "relation": "contains", "confidence": "EXTRACTED"},
-            {"source": "field_opportunity_account__c", "target": "object_account", "relation": "references", "confidence": "EXTRACTED"},
+            {
+                "source": "object_opportunity",
+                "target": "field_opportunity_account__c",
+                "relation": "contains",
+                "confidence": "EXTRACTED",
+            },
+            {
+                "source": "field_opportunity_account__c",
+                "target": "object_account",
+                "relation": "references",
+                "confidence": "EXTRACTED",
+            },
         ],
     }
 
