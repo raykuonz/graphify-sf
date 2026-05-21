@@ -168,3 +168,273 @@ def test_extract_apex_method_confidence_extracted(simple_project_path):
     contains_edges = [e for e in result["edges"] if e.get("relation") == "contains"]
     for edge in contains_edges:
         assert edge["confidence"] == "EXTRACTED"
+
+
+# ---------------------------------------------------------------------------
+# _looks_like_apex_class heuristic
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_apex_class_rejects_single_char():
+    from graphify_sf.extract.apex import _looks_like_apex_class
+
+    assert _looks_like_apex_class("E") is False
+    assert _looks_like_apex_class("e") is False
+
+
+def test_looks_like_apex_class_rejects_lowercase_start():
+    from graphify_sf.extract.apex import _looks_like_apex_class
+
+    assert _looks_like_apex_class("results") is False
+    assert _looks_like_apex_class("myVar") is False
+
+
+def test_looks_like_apex_class_rejects_known_keywords():
+    from graphify_sf.extract.apex import _looks_like_apex_class
+
+    assert _looks_like_apex_class("System") is False
+    assert _looks_like_apex_class("Assert") is False
+    assert _looks_like_apex_class("Results") is False
+    assert _looks_like_apex_class("Database") is False
+
+
+def test_looks_like_apex_class_rejects_all_caps_constants():
+    from graphify_sf.extract.apex import _looks_like_apex_class
+
+    assert _looks_like_apex_class("MAX") is False
+    assert _looks_like_apex_class("NULL") is False
+    assert _looks_like_apex_class("TRUE") is False
+
+
+def test_looks_like_apex_class_accepts_pascal_case():
+    from graphify_sf.extract.apex import _looks_like_apex_class
+
+    assert _looks_like_apex_class("AccountService") is True
+    assert _looks_like_apex_class("LeadHandler") is True
+    assert _looks_like_apex_class("MyUtility") is True
+
+
+def test_looks_like_apex_class_rejects_empty():
+    from graphify_sf.extract.apex import _looks_like_apex_class
+
+    assert _looks_like_apex_class("") is False
+    assert _looks_like_apex_class("A") is False
+
+
+# ---------------------------------------------------------------------------
+# Apex → Flow via Flow.Interview.FlowName
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_flow_interview_invokes_edge(tmp_path):
+    """Flow.Interview.FlowName creates an 'invokes' edge to that flow."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "LeadProcessor.cls"
+    cls.write_text(
+        """\
+public class LeadProcessor {
+    public void process() {
+        Flow.Interview.LeadAssignmentFlow flow = new Flow.Interview.LeadAssignmentFlow();
+        flow.start();
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    invokes_edges = [e for e in result["edges"] if e.get("relation") == "invokes"]
+    assert len(invokes_edges) == 1
+    assert "leadassignmentflow" in invokes_edges[0]["target"].lower()
+    assert invokes_edges[0]["confidence"] == "EXTRACTED"
+
+
+def test_extract_apex_flow_interview_deduplicates(tmp_path):
+    """Multiple references to the same flow produce only one invokes edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "LeadProcessor.cls"
+    cls.write_text(
+        """\
+public class LeadProcessor {
+    public void run() {
+        Flow.Interview.MyFlow f1 = new Flow.Interview.MyFlow();
+        Flow.Interview.MyFlow f2 = new Flow.Interview.MyFlow();
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    invokes = [e for e in result["edges"] if e.get("relation") == "invokes"]
+    assert len(invokes) == 1
+
+
+# ---------------------------------------------------------------------------
+# Apex extends / implements edges
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_extends_creates_edge(tmp_path):
+    """A class extending another emits an 'extends' edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "SpecialService.cls"
+    cls.write_text(
+        """\
+public class SpecialService extends BaseService {
+    public void doWork() {}
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    extends_edges = [e for e in result["edges"] if e.get("relation") == "extends"]
+    assert len(extends_edges) == 1
+    assert "baseservice" in extends_edges[0]["target"].lower()
+
+
+def test_extract_apex_implements_creates_edge(tmp_path):
+    """A class implementing an interface emits an 'implements' edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "MyHandler.cls"
+    cls.write_text(
+        """\
+public class MyHandler implements IHandler {
+    public void handle() {}
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    impl_edges = [e for e in result["edges"] if e.get("relation") == "implements"]
+    assert len(impl_edges) == 1
+    assert "ihandler" in impl_edges[0]["target"].lower()
+
+
+def test_extract_apex_implements_multiple_interfaces(tmp_path):
+    """A class implementing multiple interfaces emits one edge per interface."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "MyService.cls"
+    cls.write_text(
+        """\
+public class MyService implements Schedulable, Queueable {
+    public void execute() {}
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    impl_edges = [e for e in result["edges"] if e.get("relation") == "implements"]
+    # Schedulable and Queueable are in _APEX_KEYWORDS so should be filtered
+    assert len(impl_edges) == 0
+
+
+def test_extract_apex_interface_sf_type(tmp_path):
+    """An interface declaration gets sf_type=ApexInterface."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "IHandler.cls"
+    cls.write_text("public interface IHandler { void handle(); }\n")
+
+    result = extract_apex_class(cls)
+    assert len(result["nodes"]) >= 1
+    assert result["nodes"][0]["sf_type"] == "ApexInterface"
+
+
+def test_extract_apex_enum_sf_type(tmp_path):
+    """An enum declaration gets sf_type=ApexEnum."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "StatusEnum.cls"
+    cls.write_text("public enum StatusEnum { ACTIVE, INACTIVE }\n")
+
+    result = extract_apex_class(cls)
+    assert len(result["nodes"]) >= 1
+    assert result["nodes"][0]["sf_type"] == "ApexEnum"
+
+
+# ---------------------------------------------------------------------------
+# Apex DML edges
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_dml_insert_creates_edge(tmp_path):
+    """DML insert on a capitalised type creates a 'dml' edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "LeadCreator.cls"
+    cls.write_text(
+        """\
+public class LeadCreator {
+    public void createLead() {
+        Lead l = new Lead();
+        insert Lead;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) >= 1
+    assert any("lead" in e["target"].lower() for e in dml_edges)
+    for e in dml_edges:
+        assert e["confidence"] == "INFERRED"
+
+
+# ---------------------------------------------------------------------------
+# Apex trigger fallback (no regex match → filename)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_trigger_fallback_uses_filename(tmp_path):
+    """If the trigger declaration regex doesn't match, falls back to filename stem."""
+    from graphify_sf.extract.apex import extract_apex_trigger
+
+    trigger_file = tmp_path / "MyOrphanTrigger.trigger"
+    trigger_file.write_text("// this file has no trigger declaration\n")
+
+    result = extract_apex_trigger(trigger_file)
+    assert len(result["nodes"]) == 1
+    assert result["nodes"][0]["label"] == "MyOrphanTrigger"
+    assert result["nodes"][0]["sf_type"] == "ApexTrigger"
+    # No edges because no object was found
+    assert result["edges"] == []
+
+
+# ---------------------------------------------------------------------------
+# Apex → Apex raw_calls filtered by _looks_like_apex_class
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_raw_calls_filters_lowercase_variables(tmp_path):
+    """Local variable method calls (e.g. myObj.doSomething()) are not stored as raw_calls,
+    but PascalCase static/utility calls (e.g. AccountService.getInstance()) are kept."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "Handler.cls"
+    cls.write_text(
+        """\
+public class Handler {
+    public void run() {
+        String myStr = 'hello';
+        myStr.toLowerCase();
+        List<Account> accs = AccountService.getActiveAccounts();
+        accs.size();
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    class_node = result["nodes"][0]
+    raw_calls = class_node.get("_raw_calls", [])
+    callee_classes = {c["callee_class"] for c in raw_calls}
+    # myStr/accs start lowercase — should be filtered out
+    assert "myStr" not in callee_classes
+    assert "accs" not in callee_classes
+    # AccountService is PascalCase static call — should be kept
+    assert "AccountService" in callee_classes

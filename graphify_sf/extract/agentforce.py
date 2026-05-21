@@ -26,6 +26,7 @@ from ._ids import (
     gen_ai_function_id,
     gen_ai_planner_id,
     gen_ai_plugin_id,
+    make_sf_id,
     object_id,
     prompt_template_id,
 )
@@ -202,10 +203,19 @@ def extract_bot_version(path: Path) -> dict:
         if plugin_name:
             edges.append(_make_edge(bv_id, gen_ai_plugin_id(plugin_name), "references", "EXTRACTED", str_path))
 
-    # Planner reference  (<planner><genAiPlannerBundle>ApiName</genAiPlannerBundle>...)
+    # Planner reference — two XML patterns observed in the wild:
+    #   1. <planner><genAiPlannerBundle>ApiName</genAiPlannerBundle></planner>
+    #   2. <conversationDefinitionPlanners><genAiPlannerName>ApiName</genAiPlannerName></conversationDefinitionPlanners>
+    _seen_planners: set[str] = set()
     for planner_el in _find_all(root_el, "planner", ns):
         planner_name = _find_text(planner_el, "genAiPlannerBundle", ns)
-        if planner_name:
+        if planner_name and planner_name not in _seen_planners:
+            _seen_planners.add(planner_name)
+            edges.append(_make_edge(bv_id, gen_ai_planner_id(planner_name), "references", "EXTRACTED", str_path))
+    for cdp_el in _find_all(root_el, "conversationDefinitionPlanners", ns):
+        planner_name = _find_text(cdp_el, "genAiPlannerName", ns)
+        if planner_name and planner_name not in _seen_planners:
+            _seen_planners.add(planner_name)
             edges.append(_make_edge(bv_id, gen_ai_planner_id(planner_name), "references", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
@@ -353,6 +363,58 @@ def extract_gen_ai_planner_bundle(path: Path) -> dict:
         plugin_name = _find_text(sub_el, "genAiPlugin", ns)
         if plugin_name:
             edges.append(_make_edge(pl_id, gen_ai_plugin_id(plugin_name), "references", "EXTRACTED", str_path))
+
+    # Local topics with embedded local actions
+    # <localTopics>
+    #   <localActions>
+    #     <fullName>action_api_name</fullName>
+    #     <invocationTarget>FlowOrApexName</invocationTarget>
+    #     <invocationTargetType>flow|apex</invocationTargetType>
+    #     <masterLabel>Human Label</masterLabel>
+    #   </localActions>
+    # </localTopics>
+    for topic_el in _find_all(root_el, "localTopics", ns):
+        for action_el in _find_all(topic_el, "localActions", ns):
+            action_full_name = _find_text(action_el, "fullName", ns)
+            action_label = _find_text(action_el, "masterLabel", ns)
+            invocation_target = _find_text(action_el, "invocationTarget", ns)
+            invocation_type = _find_text(action_el, "invocationTargetType", ns) or ""
+
+            if not action_full_name or not invocation_target:
+                continue
+
+            local_fn_id = make_sf_id("genaifunction_local", planner_name, action_full_name)
+            nodes.append(
+                {
+                    "id": local_fn_id,
+                    "label": action_label or action_full_name,
+                    "sf_type": "GenAiFunction",
+                    "file_type": "agentforce",
+                    "source_file": str_path,
+                    "source_location": None,
+                    "scope": "local",
+                    "action_type": invocation_type,
+                    "parent_planner": planner_name,
+                }
+            )
+
+            # Planner → local action
+            edges.append(_make_edge(pl_id, local_fn_id, "contains", "EXTRACTED", str_path))
+
+            # Local action → Flow or Apex invocation target
+            inv_type_lower = invocation_type.lower()
+            if inv_type_lower in ("flow",):
+                target_id = flow_id(invocation_target)
+            elif inv_type_lower in ("apex", "apexaction"):
+                target_id = apex_class_id(invocation_target)
+            else:
+                # Unknown invocation type — link with INFERRED confidence
+                target_id = make_sf_id("unknown", invocation_target)
+                edges.append(_make_edge(local_fn_id, target_id, "invokes", "INFERRED", str_path))
+                target_id = None
+
+            if target_id:
+                edges.append(_make_edge(local_fn_id, target_id, "invokes", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
 

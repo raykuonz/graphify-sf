@@ -211,3 +211,229 @@ def test_deduplicate_removes_self_loops():
 
     # Self-loops should be removed
     assert len(deduped_edges) == 0
+
+
+# ---------------------------------------------------------------------------
+# _ensure_stub_nodes
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_stub_nodes_creates_object_stub():
+    """_ensure_stub_nodes creates a stub CustomObject node for a missing object_ reference."""
+    from graphify_sf.build import _ensure_stub_nodes
+
+    nodes = []
+    edges = [{"source": "flow_myflow", "target": "object_lead"}]
+    _ensure_stub_nodes(nodes, edges)
+
+    stub_ids = {n["id"] for n in nodes}
+    assert "object_lead" in stub_ids
+    stub = next(n for n in nodes if n["id"] == "object_lead")
+    assert stub["sf_type"] == "CustomObject"
+    assert stub.get("stub") is True
+
+
+def test_ensure_stub_nodes_creates_apex_stub():
+    """_ensure_stub_nodes creates a stub ApexClass node for a missing apex_ reference."""
+    from graphify_sf.build import _ensure_stub_nodes
+
+    nodes = []
+    edges = [{"source": "flow_myflow", "target": "apex_accountservice"}]
+    _ensure_stub_nodes(nodes, edges)
+
+    stub_ids = {n["id"] for n in nodes}
+    assert "apex_accountservice" in stub_ids
+    stub = next(n for n in nodes if n["id"] == "apex_accountservice")
+    assert stub["sf_type"] == "ApexClass"
+
+
+def test_ensure_stub_nodes_does_not_create_stub_for_known_node():
+    """_ensure_stub_nodes skips IDs that already have a real node."""
+    from graphify_sf.build import _ensure_stub_nodes
+
+    # Use a source with an unrecognised prefix so only the target is checked
+    nodes = [
+        {"id": "object_lead", "label": "Lead", "sf_type": "CustomObject", "file_type": "object"},
+        {"id": "flow_myflow", "label": "MyFlow", "sf_type": "Flow", "file_type": "flow"},
+    ]
+    edges = [{"source": "flow_myflow", "target": "object_lead"}]
+    original_count = len(nodes)
+    _ensure_stub_nodes(nodes, edges)
+
+    assert len(nodes) == original_count, "No new stub should be created when both nodes already exist"
+
+
+def test_ensure_stub_nodes_no_stubs_for_unknown_prefix():
+    """_ensure_stub_nodes ignores IDs with unrecognised prefixes."""
+    from graphify_sf.build import _ensure_stub_nodes
+
+    nodes = []
+    edges = [{"source": "foo_bar", "target": "baz_qux"}]
+    _ensure_stub_nodes(nodes, edges)
+
+    assert len(nodes) == 0, "No stubs for unknown prefixes"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_apex_calls
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_apex_calls_creates_calls_edges():
+    """_resolve_apex_calls turns _raw_calls into 'calls' edges when target class exists."""
+    from graphify_sf.build import _resolve_apex_calls
+
+    nodes = [
+        {
+            "id": "apex_handler",
+            "label": "Handler",
+            "sf_type": "ApexClass",
+            "_raw_calls": [{"caller_id": "method_handler_run", "callee_class": "AccountService", "callee_method": "getAccounts"}],
+        },
+        {"id": "apex_accountservice", "label": "AccountService", "sf_type": "ApexClass"},
+    ]
+    edges = []
+    extra = _resolve_apex_calls(nodes, edges)
+
+    call_edges = [e for e in extra if e.get("relation") == "calls"]
+    assert len(call_edges) == 1
+    assert call_edges[0]["source"] == "method_handler_run"
+    assert "accountservice" in call_edges[0]["target"].lower()
+
+
+def test_resolve_apex_calls_deduplicates():
+    """_resolve_apex_calls does not emit duplicate caller→callee edges."""
+    from graphify_sf.build import _resolve_apex_calls
+
+    nodes = [
+        {
+            "id": "apex_handler",
+            "label": "Handler",
+            "sf_type": "ApexClass",
+            "_raw_calls": [
+                {"caller_id": "apex_handler", "callee_class": "AccountService", "callee_method": "m1"},
+                {"caller_id": "apex_handler", "callee_class": "AccountService", "callee_method": "m2"},
+            ],
+        },
+        {"id": "apex_accountservice", "label": "AccountService", "sf_type": "ApexClass"},
+    ]
+    edges = []
+    extra = _resolve_apex_calls(nodes, edges)
+
+    call_edges = [e for e in extra if e.get("relation") == "calls"]
+    assert len(call_edges) == 1, "Duplicate caller→callee pair should be emitted only once"
+
+
+# ---------------------------------------------------------------------------
+# _derive_object_edges
+# ---------------------------------------------------------------------------
+
+
+def test_derive_object_edges_creates_object_to_object_edge():
+    """_derive_object_edges derives Object→Object edge from Field→Object lookup chain."""
+    from graphify_sf.build import _derive_object_edges
+
+    nodes = [
+        {"id": "object_opportunity", "sf_type": "CustomObject"},
+        {"id": "field_opportunity_account__c", "sf_type": "CustomField"},
+        {"id": "object_account", "sf_type": "CustomObject"},
+    ]
+    edges = [
+        {"source": "object_opportunity", "target": "field_opportunity_account__c", "relation": "contains"},
+        {"source": "field_opportunity_account__c", "target": "object_account", "relation": "references"},
+    ]
+
+    derived = _derive_object_edges(nodes, edges)
+    obj_edges = [e for e in derived if e.get("relation") == "references"]
+    assert len(obj_edges) == 1
+    assert obj_edges[0]["source"] == "object_opportunity"
+    assert obj_edges[0]["target"] == "object_account"
+    assert obj_edges[0]["confidence"] == "INFERRED"
+
+
+def test_derive_object_edges_skips_self_references():
+    """_derive_object_edges skips when a field's parent object equals the reference target."""
+    from graphify_sf.build import _derive_object_edges
+
+    nodes = [
+        {"id": "object_account", "sf_type": "CustomObject"},
+        {"id": "field_account_parent__c", "sf_type": "CustomField"},
+    ]
+    edges = [
+        {"source": "object_account", "target": "field_account_parent__c", "relation": "contains"},
+        {"source": "field_account_parent__c", "target": "object_account", "relation": "references"},
+    ]
+
+    derived = _derive_object_edges(nodes, edges)
+    assert len(derived) == 0, "Self-referential hierarchy should not produce Object→Object edge"
+
+
+def test_derive_object_edges_skips_existing_edges():
+    """_derive_object_edges does not duplicate edges that already exist."""
+    from graphify_sf.build import _derive_object_edges
+
+    nodes = [
+        {"id": "object_opportunity", "sf_type": "CustomObject"},
+        {"id": "field_opportunity_account__c", "sf_type": "CustomField"},
+        {"id": "object_account", "sf_type": "CustomObject"},
+    ]
+    edges = [
+        {"source": "object_opportunity", "target": "field_opportunity_account__c", "relation": "contains"},
+        {"source": "field_opportunity_account__c", "target": "object_account", "relation": "references"},
+        # Already have direct Object→Object edge
+        {"source": "object_opportunity", "target": "object_account", "relation": "references"},
+    ]
+
+    derived = _derive_object_edges(nodes, edges)
+    assert len(derived) == 0, "Should not duplicate an already-existing Object→Object edge"
+
+
+# ---------------------------------------------------------------------------
+# build() post-processing: _resolve_apex_calls + _derive_object_edges applied
+# ---------------------------------------------------------------------------
+
+
+def test_build_resolves_apex_calls():
+    """build() applies _resolve_apex_calls so cross-class calls become graph edges."""
+    from graphify_sf.build import build
+
+    ext = {
+        "nodes": [
+            {
+                "id": "apex_handler",
+                "label": "Handler",
+                "sf_type": "ApexClass",
+                "file_type": "apex",
+                "_raw_calls": [{"caller_id": "apex_handler", "callee_class": "AccountService", "callee_method": "run"}],
+            },
+            {"id": "apex_accountservice", "label": "AccountService", "sf_type": "ApexClass", "file_type": "apex"},
+        ],
+        "edges": [],
+    }
+
+    G = build([ext])
+    # Should have an edge between the two Apex classes
+    assert G.has_edge("apex_handler", "apex_accountservice") or any(
+        d.get("relation") == "calls" for _, _, d in G.edges(data=True)
+    )
+
+
+def test_build_derives_object_to_object_edges():
+    """build() applies _derive_object_edges to add Object→Object edges."""
+    from graphify_sf.build import build
+
+    ext = {
+        "nodes": [
+            {"id": "object_opportunity", "label": "Opportunity", "sf_type": "CustomObject", "file_type": "object"},
+            {"id": "field_opportunity_account__c", "label": "Opportunity.Account__c", "sf_type": "CustomField", "file_type": "object"},
+            {"id": "object_account", "label": "Account", "sf_type": "CustomObject", "file_type": "object"},
+        ],
+        "edges": [
+            {"source": "object_opportunity", "target": "field_opportunity_account__c", "relation": "contains", "confidence": "EXTRACTED"},
+            {"source": "field_opportunity_account__c", "target": "object_account", "relation": "references", "confidence": "EXTRACTED"},
+        ],
+    }
+
+    G = build([ext])
+    # object_opportunity → object_account derived edge should exist
+    assert G.has_edge("object_opportunity", "object_account")
