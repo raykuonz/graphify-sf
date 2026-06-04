@@ -8,19 +8,29 @@ Built for developers and architects who need to understand large Salesforce orgs
 
 ---
 
+## Why this exists
+
+Large Salesforce orgs are hard to reason about. The dependencies that matter — which Trigger fires on which Object, which Flow writes to a field an Apex class also reads, which Profile grants access to a class nobody calls anymore — are spread across thousands of XML files and Setup screens. Grep finds strings; it doesn't find relationships.
+
+graphify-sf reads the source you already have on disk and turns it into a graph you can query. It runs fully offline, so you can point it at a client's repo or a regulated org without sending a single byte to Salesforce or anywhere else. Every edge is tagged with how it was found: `EXTRACTED` means it came straight from the metadata XML and is a fact; `INFERRED` means it was guessed from source patterns and might be wrong. You always know which is which.
+
+The result is a knowledge graph an architect can explore, an LLM can ground its answers in, and an AI coding agent can navigate instead of grepping blindly through metadata.
+
+---
+
 ## Features
 
-- **Fully offline** — pure XML/source parsing, no Salesforce CLI, no org connection, no API calls
-- **Honest provenance** — every edge is tagged `EXTRACTED` (from explicit XML) or `INFERRED` (from source patterns)
-- **Reference file support** — indexes `.md`, `.txt`, `.pdf`, `.xlsx`, `.docx`, and images alongside SF metadata; headings become sub-nodes, SF component mentions create cross-reference edges
-- **Community detection** — Louvain/Leiden clustering surfaces cross-metadata couplings you wouldn't think to ask about
-- **Interactive HTML visualization** — force-directed graph with search, community filtering, and node inspector
-- **Multiple export formats** — HTML, SVG, Mermaid call-flow, D3 tree, Obsidian vault, GraphML, Cypher/Neo4j, JSON, Markdown wiki
-- **Incremental updates** — re-extract only changed files with `--update`; dry-run diff with `check-update`
-- **Agentic IDE integration** — install a `/graphify-sf` skill into Claude Code, Cursor, Codex, Kiro, Gemini, and 10+ more IDEs
-- **MCP server** — expose graph query tools to Claude Desktop and other MCP clients over stdio
-- **File watcher** — auto-rebuild on metadata changes with `watch`
-- **Git-native** — post-commit hook for automatic rebuilds; merge driver for conflict-free `graph.json` merges
+- **Fully offline:** pure XML/source parsing. No Salesforce CLI, no org connection, no API calls.
+- **Honest provenance:** every edge is tagged `EXTRACTED` (from explicit XML) or `INFERRED` (from source patterns), so you always know which relationships are facts and which are guesses.
+- **Reference file support:** indexes `.md`, `.txt`, `.pdf`, `.xlsx`, `.docx`, and images alongside SF metadata. Headings become sub-nodes, and SF component mentions create cross-reference edges.
+- **Community detection:** Louvain/Leiden clustering surfaces cross-metadata couplings you wouldn't think to ask about.
+- **Interactive HTML visualization:** force-directed graph with search, community filtering, and a node inspector.
+- **Many export formats:** HTML, SVG, Mermaid call-flow, D3 tree, Obsidian vault, GraphML, Cypher/Neo4j, JSON, and Markdown wiki.
+- **Incremental updates:** re-extract only changed files with `--update`, or dry-run the diff with `check-update`.
+- **Agentic IDE integration:** install a `/graphify-sf` skill into Claude Code, Cursor, Codex, Kiro, Gemini, and 10+ more IDEs.
+- **MCP server:** expose graph query tools to Claude Desktop and other MCP clients over stdio.
+- **File watcher:** auto-rebuild on metadata changes with `watch`.
+- **Git-native:** a post-commit hook rebuilds automatically, and a merge driver resolves `graph.json` conflicts.
 
 ---
 
@@ -266,7 +276,7 @@ Install a `/graphify-sf` skill that lets any supported AI coding assistant run t
 
 ### Zero-dependency install via npx (no Python required)
 
-Uses the [open agent skills ecosystem](https://github.com/vercel-labs/skills) — works across 55+ AI coding agents.
+Uses the [open agent skills ecosystem](https://github.com/vercel-labs/skills), which works across 55+ AI coding agents.
 
 ```bash
 # Install globally (all projects)
@@ -276,7 +286,7 @@ npx skills add raykuonz/graphify-sf
 npx skills add raykuonz/graphify-sf --project
 ```
 
-The skill instructs your agent to run `graphify-sf` via `uvx` or `pipx run` on demand — no permanent Python install needed.
+The skill instructs your agent to run `graphify-sf` via `uvx` or `pipx run` on demand, so no permanent Python install is needed.
 
 ### Install via Python CLI
 
@@ -307,7 +317,7 @@ graphify-sf install --scope project
 
 ### Install with symlink — one canonical file, many IDEs (`--link`)
 
-Use `--link` to write a single canonical skill file to `.agents/skills/graphify-sf/SKILL.md` and create a symlink from the platform-specific path to it. This means **upgrading graphify-sf and re-running `install --link` once updates every symlinked IDE at the same time** — no per-platform reinstalls needed.
+Use `--link` to write a single canonical skill file to `.agents/skills/graphify-sf/SKILL.md` and create a symlink from the platform-specific path to it. This means **upgrading graphify-sf and re-running `install --link` once updates every symlinked IDE at the same time**, with no per-platform reinstalls.
 
 ```bash
 # Write canonical to .agents/skills/graphify-sf/SKILL.md,
@@ -336,7 +346,7 @@ graphify-sf uninstall --platform cursor --scope project
 
 ### Update / reinstall after upgrading graphify-sf
 
-The `install` command is idempotent — re-running it always overwrites the existing skill file with the latest version bundled in the package:
+The `install` command is idempotent. Re-running it always overwrites the existing skill file with the latest version bundled in the package:
 
 ```bash
 # 1. Upgrade the package
@@ -353,7 +363,7 @@ For a specific platform or scope, pass the same flags used during the original i
 graphify-sf install --platform cursor --scope project
 ```
 
-If you used `--link` when installing, a single re-run updates the canonical file and **all symlinked IDEs pick it up automatically** — no per-platform reinstalls needed:
+If you used `--link` when installing, a single re-run updates the canonical file and **all symlinked IDEs pick it up automatically**, with no per-platform reinstalls:
 
 ```bash
 graphify-sf install --link          # re-writes .agents/skills/graphify-sf/SKILL.md; all symlinks follow
@@ -587,7 +597,7 @@ graphify-sf check-update . || graphify-sf . --update --no-viz
 
 ## Reference File Support
 
-graphify-sf indexes non-Salesforce reference files that live alongside your SFDX metadata — design docs, data dictionaries, architecture notes, and more — and cross-references them against SF component names found in the graph.
+graphify-sf indexes non-Salesforce reference files that live alongside your SFDX metadata (design docs, data dictionaries, architecture notes, and more) and cross-references them against SF component names found in the graph.
 
 | File type | Extensions | What is extracted | Library required |
 |-----------|------------|-------------------|-----------------|
@@ -599,7 +609,7 @@ graphify-sf indexes non-Salesforce reference files that live alongside your SFDX
 
 SF component mention detection uses a heuristic regex (`PascalCase` identifiers and names ending in `__c`, `__r`, `__mdt`, etc.). Mention edges are tagged `INFERRED` and resolved to real SF node IDs in the cross-reference pass; unresolved mentions are silently dropped.
 
-If the required library is not installed, the file is skipped with a warning — the pipeline never crashes due to a missing optional dependency.
+If the required library is not installed, the file is skipped with a warning. The pipeline never crashes because of a missing optional dependency.
 
 ---
 
@@ -673,6 +683,33 @@ pip install graphify-sf[all]
 - Python 3.10+
 - No Salesforce CLI, no org connection, no API keys
 - Core dependencies: `networkx`, `datasketch`, `rapidfuzz`
+
+---
+
+## Maturity & limitations
+
+Read this before you trust the graph in anger. graphify-sf is honest about what it knows for sure and what it's guessing at.
+
+### What's solid
+
+- **The test suite is real.** 280 unit tests cover detection, every extractor, graph assembly, clustering, the report, exports, and the security helpers. Extractors are tested against real metadata fixtures, not mocks of themselves.
+- **`EXTRACTED` edges are facts.** Anything tagged `EXTRACTED` came directly from the metadata XML (a Trigger's target object, a Flow's referenced fields, a Lookup field's target). If the source says it, the graph says it.
+
+### What's a heuristic, not a fact
+
+- **`INFERRED` edges are guesses.** They come from pattern-matching source code and prose, not declared metadata. They can be wrong. The provenance tag exists precisely so you can filter them out when you need certainty — check the `EXTRACTED/INFERRED` breakdown in the report before betting on an inferred relationship.
+- **Apex `calls` edges are noisy.** Resolving `Foo.bar()` to the right Apex class from source alone is genuinely hard. A heuristic filters out obvious local-variable calls and cuts the false-positive rate from roughly 96% to roughly 36%, but a third of the remaining `calls` edges may still be spurious. Treat call graphs as a lead, not a proof.
+- **Reference-file mention detection is regex-based.** Cross-references from docs/PDFs/spreadsheets to SF components rely on a `PascalCase`/`__c` heuristic. It misses lowercase or unconventional names and can match coincidental words; unresolved mentions are dropped silently.
+- **Community detection is unsupervised.** Louvain (and optional Leiden) cluster the graph by structure. The communities are a useful lens, not ground-truth modules — and Louvain results vary slightly between runs.
+
+### The LLM layer is optional and non-deterministic
+
+- The `--backend` semantic layer asks an LLM to find couplings static parsing can't see. Its findings are judgments, not measurements: two runs can disagree, and it can hallucinate a relationship that isn't there. Read what it surfaces; don't paste it into an audit unchecked. The entire core pipeline works with no LLM at all.
+
+### Scope
+
+- **One SFDX source tree at a time.** Multi-org or multi-repo analysis is done by building each separately and using `merge-graphs`.
+- **Static only.** graphify-sf reads source and metadata. It does not connect to an org, so it can't see runtime config, data, or anything that only exists in the live org rather than in the repo.
 
 ---
 
