@@ -121,7 +121,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuo/graphify-sf/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/raykuo/graphify-sf/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/raykuo/graphify-sf/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/raykuo/graphify-sf/releases/tag/v0.1.0
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/raykuonz/graphify-sf/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/raykuonz/graphify-sf/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/raykuonz/graphify-sf/releases/tag/v0.1.0

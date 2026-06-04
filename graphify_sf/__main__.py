@@ -1142,7 +1142,7 @@ _CLAUDE_MD_SECTION = """\
 <!-- graphify-sf -->
 ## graphify-sf
 
-This project's Salesforce metadata is indexed by [graphify-sf](https://github.com/graphify-sf/graphify-sf).
+This project's Salesforce metadata is indexed by [graphify-sf](https://github.com/raykuonz/graphify-sf).
 
 - Run `graphify-sf .` to build or rebuild the knowledge graph from SFDX metadata
 - If `graphify-sf-out/graph.json` exists, use `/graphify-sf query "<question>"` to explore it

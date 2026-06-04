@@ -37,10 +37,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/raykuo/graphify-sf"
-Repository = "https://github.com/raykuo/graphify-sf"
-"Bug Tracker" = "https://github.com/raykuo/graphify-sf/issues"
-Changelog = "https://github.com/raykuo/graphify-sf/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/raykuonz/graphify-sf"
+Repository = "https://github.com/raykuonz/graphify-sf"
+"Bug Tracker" = "https://github.com/raykuonz/graphify-sf/issues"
+Changelog = "https://github.com/raykuonz/graphify-sf/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 leiden = ["graspologic; python_version < '3.13'"]
