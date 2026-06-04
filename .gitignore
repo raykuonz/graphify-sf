@@ -62,3 +62,4 @@ graphify-sf-out/
 
 # uv
 .python-version
+/.docs/_cc-tasks/
