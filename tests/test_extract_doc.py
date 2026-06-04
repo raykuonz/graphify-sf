@@ -152,6 +152,7 @@ def test_no_node_has_sf_type_none():
         assert node["sf_type"] is not None, f"Node {node['id']} has sf_type=None"
 
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(b"\x89PNG\r\n\x1a\n")
         img_path = Path(f.name)
