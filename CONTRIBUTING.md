@@ -4,9 +4,9 @@ Thanks for taking the time to contribute.
 
 ## Ways to contribute
 
-- **Bug reports** — open an issue with the bug report template
-- **Feature requests** — open an issue with the feature request template
-- **Pull requests** — fix bugs, add metadata extractors, improve docs
+- **Bug reports:** open an issue with the bug report template
+- **Feature requests:** open an issue with the feature request template
+- **Pull requests:** fix bugs, add metadata extractors, improve docs
 
 ---
 
@@ -14,7 +14,7 @@ Thanks for taking the time to contribute.
 
 ```bash
 # Clone
-git clone https://github.com/raykuo/graphify-sf
+git clone https://github.com/raykuonz/graphify-sf
 cd graphify-sf
 
 # Install with dev dependencies (uses lock file)

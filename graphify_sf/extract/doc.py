@@ -71,7 +71,7 @@ def _extract_headings(text: str, doc_id: str, source_file: str) -> tuple[list[di
                     "id": h_id,
                     "label": heading_text,
                     "file_type": "document",
-                    "sf_type": None,
+                    "sf_type": "DocumentSection",
                     "source_file": source_file,
                     "source_location": f"L{lineno}",
                     "heading_level": level,
@@ -148,7 +148,7 @@ def xlsx_extract_structure(path: Path) -> dict:
             "id": file_id,
             "label": path.name,
             "file_type": "document",
-            "sf_type": None,
+            "sf_type": "Document",
             "source_file": str_path,
             "source_location": None,
         }
@@ -164,7 +164,7 @@ def xlsx_extract_structure(path: Path) -> dict:
                     "id": nid,
                     "label": label,
                     "file_type": "document",
-                    "sf_type": None,
+                    "sf_type": "DocumentSection",
                     "source_file": str_path,
                     "source_location": None,
                 }
@@ -260,7 +260,7 @@ def extract_document(path: Path) -> dict:
             "id": doc_id,
             "label": path.name,
             "file_type": "document",
-            "sf_type": None,
+            "sf_type": "Document",
             "source_file": str_path,
             "source_location": None,
         }
@@ -291,7 +291,7 @@ def extract_paper(path: Path) -> dict:
             "id": doc_id,
             "label": path.name,
             "file_type": "paper",
-            "sf_type": None,
+            "sf_type": "Document",
             "source_file": str_path,
             "source_location": None,
         }
@@ -315,7 +315,7 @@ def extract_image(path: Path) -> dict:
                 "id": doc_id,
                 "label": path.name,
                 "file_type": "image",
-                "sf_type": None,
+                "sf_type": "Document",
                 "source_file": str_path,
                 "source_location": None,
             }

@@ -21,7 +21,7 @@ Security-relevant areas:
 
 **Do not open a public issue for security vulnerabilities.**
 
-Please report security issues using [GitHub's private vulnerability reporting](https://github.com/raykuo/graphify-sf/security/advisories/new).
+Please report security issues using [GitHub's private vulnerability reporting](https://github.com/raykuonz/graphify-sf/security/advisories/new).
 
 Include:
 - A description of the issue and its impact

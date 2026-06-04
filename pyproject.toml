@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graphify-sf"
-version = "0.3.0"
+version = "0.3.1"
 description = "Turn any Salesforce SFDX project into a queryable knowledge graph — fully offline, no org connection required."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,10 +37,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/raykuo/graphify-sf"
-Repository = "https://github.com/raykuo/graphify-sf"
-"Bug Tracker" = "https://github.com/raykuo/graphify-sf/issues"
-Changelog = "https://github.com/raykuo/graphify-sf/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/raykuonz/graphify-sf"
+Repository = "https://github.com/raykuonz/graphify-sf"
+"Bug Tracker" = "https://github.com/raykuonz/graphify-sf/issues"
+Changelog = "https://github.com/raykuonz/graphify-sf/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 leiden = ["graspologic; python_version < '3.13'"]

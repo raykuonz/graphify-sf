@@ -11,6 +11,53 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.1] — 2026-06-04
+
+### Fixed
+- **Scaffolding directories no longer pollute the graph.** Detection now skips agentic-tooling
+  and repo-meta directories (`.agents`, `.claude`, `.cursor`, `.github`, `.omc`, etc.) that hold
+  skill templates and sample `.cls` files but no real org metadata. On a large real org this
+  removed ~2,100 phantom nodes (18% of the graph). `.graphifysfignore` overrides still apply.
+- **Reference-file nodes now carry a real `sf_type`.** Document, PDF, and image file nodes are
+  typed `Document`; headings and in-document sub-nodes are typed `DocumentSection` (previously
+  `None`, which made them invisible to type-filtered queries).
+- **FlexiPage record pages now link to their object.** `extract_flexipage` reads `<sobjectType>`
+  and emits a `record_page_for` (EXTRACTED) edge to the target object, and no longer emits noise
+  `contains` edges for standard (non-`c:`) components. Previously all FlexiPage nodes were isolated.
+- **Corrected the repo URLs in package metadata.** The GitHub username was misspelled in
+  `pyproject.toml` project URLs, the CHANGELOG compare links, `SECURITY.md`, the issue-template
+  config, and the `AGENTS.md` block emitted by `graphify-sf agents install`. They now all point at
+  `github.com/raykuonz/graphify-sf`.
+
+### Docs
+- Added a **"Why this exists"** positioning section and a **"Maturity & limitations"** section to
+  the README, documenting the EXTRACTED-vs-INFERRED provenance model, the `calls`-edge
+  false-positive rate, and the static-only scope honestly.
+
+---
+
+## [0.3.0] — 2026-05-21
+
+### Added
+
+#### Edge extraction improvements
+- Record-Triggered Flows now emit `triggers` edges to the target object with `EXTRACTED` confidence
+- Flows emit `invokes` edges for subflow references and `calls` edges for Apex action calls
+- Custom Fields emit `references` (Lookup) and `master_detail` (MasterDetail) edges to target objects
+- ValidationRule formula fields emit `INFERRED references` edges to the fields they reference
+- Agentforce: `GenAiPlannerBundle` local actions parsed as inline `GenAiFunction` nodes; `conversationDefinitionPlanners` XML path supported for `BotVersion` planner references; `PromptTemplate` `flexTemplateActionCalls` create reference edges
+- `build.py` exports `_resolve_apex_calls`, `_derive_object_edges`, and `_ensure_stub_nodes` for use in the extract pipeline
+
+### Fixed
+- Standard-object edges (Lead, Account, etc.) were incorrectly downgraded from `EXTRACTED` to `INFERRED` confidence because `_ensure_stub_nodes` ran after `_resolve_cross_references`; ordering is now correct
+- Apex `calls` edges had ~96% false-positive rate from local variable method calls; new `_looks_like_apex_class()` heuristic reduces noise to ~36%
+- Pinned `idna>=3.15` to resolve CVE-2026-45409 (transitive via `requests`)
+
+### Changed
+- 65 new tests → 268 total (up from 203); new `test_extract_pipeline.py` with regression test for the stub-node ordering fix
+
+---
+
 ## [0.2.0] — 2026-05-14
 
 ### Added
@@ -87,5 +134,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuo/graphify-sf/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/raykuo/graphify-sf/releases/tag/v0.1.0
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/raykuonz/graphify-sf/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/raykuonz/graphify-sf/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/raykuonz/graphify-sf/releases/tag/v0.1.0

@@ -5,12 +5,12 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from ._ids import label_id, make_sf_id
+from ._ids import label_id, lwc_id, make_sf_id, object_id
 
 
 def _get_ns(root_el: ET.Element) -> str:
     if root_el.tag.startswith("{"):
-        return root_el.tag.split("}", 1)[1]
+        return root_el.tag.split("}", 1)[0][1:]
     return ""
 
 
@@ -158,7 +158,7 @@ def extract_external_service(path: Path) -> dict:
 
 
 def extract_flexipage(path: Path) -> dict:
-    """Extract a FlexiPage node and its embedded component references."""
+    """Extract a FlexiPage node, its custom component references, and object link."""
     str_path = str(path)
     stem = path.stem
     if stem.endswith(".flexipage-meta"):
@@ -183,14 +183,18 @@ def extract_flexipage(path: Path) -> dict:
         root_el = tree.getroot()
         ns = _get_ns(root_el)
 
+        sobject_type = _find_text(root_el, "sobjectType", ns)
+        if sobject_type:
+            edges.append(_make_edge(nid, object_id(sobject_type), "record_page_for", "EXTRACTED", str_path))
+
         for comp_el in _find_all(root_el, "componentName", ns):
             if comp_el.text:
                 comp_name = comp_el.text.strip()
-                if comp_name and comp_name not in seen:
+                # Skip standard Salesforce namespace components (force:, lightning:, etc.)
+                if not (comp_name.startswith("c:") or comp_name.startswith("c__")):
+                    continue
+                if comp_name not in seen:
                     seen.add(comp_name)
-                    # LWC components are typically c__ComponentName or c:ComponentName
-                    from ._ids import lwc_id
-
                     # Normalize: c__AccountCard → accountCard, c:accountCard → accountCard
                     normalized = comp_name.replace("c__", "").replace("c:", "").replace("__", "_")
                     edges.append(_make_edge(nid, lwc_id(normalized), "contains", "INFERRED", str_path, 0.7))

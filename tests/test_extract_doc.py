@@ -40,7 +40,7 @@ def test_extract_document_returns_node():
     assert len(result["nodes"]) >= 1
     root_node = result["nodes"][0]
     assert root_node["file_type"] == "document"
-    assert root_node["sf_type"] is None
+    assert root_node["sf_type"] == "Document"
     assert p.name in root_node["label"]
 
 
@@ -127,3 +127,42 @@ def test_extract_headings_levels():
     assert "H2" in labels
     assert "H3" in labels
     assert "H4 (not extracted)" not in labels
+
+
+def test_document_file_node_sf_type():
+    p = _write_tmp(SAMPLE_MD, ".md")
+    result = extract_document(p)
+    file_node = result["nodes"][0]
+    assert file_node["sf_type"] == "Document"
+
+
+def test_heading_node_sf_type():
+    p = _write_tmp(SAMPLE_MD, ".md")
+    result = extract_document(p)
+    heading_nodes = [n for n in result["nodes"] if "heading_level" in n]
+    assert len(heading_nodes) > 0
+    for node in heading_nodes:
+        assert node["sf_type"] == "DocumentSection"
+
+
+def test_no_node_has_sf_type_none():
+    p = _write_tmp(SAMPLE_MD, ".md")
+    result = extract_document(p)
+    for node in result["nodes"]:
+        assert node["sf_type"] is not None, f"Node {node['id']} has sf_type=None"
+
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        img_path = Path(f.name)
+    img_result = extract_image(img_path)
+    for node in img_result["nodes"]:
+        assert node["sf_type"] is not None, f"Image node {node['id']} has sf_type=None"
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(b"%PDF-1.4 fake")
+        pdf_path = Path(f.name)
+    pdf_result = extract_paper(pdf_path)
+    for node in pdf_result["nodes"]:
+        assert node["sf_type"] is not None, f"PDF node {node['id']} has sf_type=None"

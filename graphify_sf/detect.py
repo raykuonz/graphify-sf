@@ -105,7 +105,27 @@ _IMAGE_EXTENSIONS = {
     ".svg": DocFileType.IMAGE,
 }
 
-_SKIP_DIRS = {".sfdx", "node_modules", "__pycache__", ".git", "graphify-sf-out"}
+_SKIP_DIRS = {
+    ".sfdx",
+    "node_modules",
+    "__pycache__",
+    ".git",
+    "graphify-sf-out",
+    # Agentic-tooling scaffolding and repo-meta dirs — never contain real SF metadata.
+    # Sample .cls files and skill templates here otherwise create phantom nodes.
+    ".agents",
+    ".claude",
+    ".cursor",
+    ".github",
+    ".husky",
+    ".vscode",
+    ".omc",
+    ".venv",
+    ".ruff_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+}
 
 
 def _compound_suffix(path: Path) -> str:
