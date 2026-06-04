@@ -9,6 +9,10 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.3.1] — 2026-06-04
+
 ### Fixed
 - **Scaffolding directories no longer pollute the graph.** Detection now skips agentic-tooling
   and repo-meta directories (`.agents`, `.claude`, `.cursor`, `.github`, `.omc`, etc.) that hold
@@ -20,6 +24,15 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **FlexiPage record pages now link to their object.** `extract_flexipage` reads `<sobjectType>`
   and emits a `record_page_for` (EXTRACTED) edge to the target object, and no longer emits noise
   `contains` edges for standard (non-`c:`) components. Previously all FlexiPage nodes were isolated.
+- **Corrected the repo URLs in package metadata.** The GitHub username was misspelled in
+  `pyproject.toml` project URLs, the CHANGELOG compare links, `SECURITY.md`, the issue-template
+  config, and the `AGENTS.md` block emitted by `graphify-sf agents install`. They now all point at
+  `github.com/raykuonz/graphify-sf`.
+
+### Docs
+- Added a **"Why this exists"** positioning section and a **"Maturity & limitations"** section to
+  the README, documenting the EXTRACTED-vs-INFERRED provenance model, the `calls`-edge
+  false-positive rate, and the static-only scope honestly.
 
 ---
 
@@ -121,7 +134,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raykuonz/graphify-sf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/raykuonz/graphify-sf/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/raykuonz/graphify-sf/releases/tag/v0.1.0
