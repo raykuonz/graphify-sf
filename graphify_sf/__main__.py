@@ -12,7 +12,10 @@ try:
 
     __version__ = _pkg_version("graphify-sf")
 except Exception:
-    __version__ = "dev"
+    try:
+        from graphify_sf._version import __version__  # injected at PyInstaller build time
+    except Exception:
+        __version__ = os.environ.get("GRAPHIFY_SF_VERSION", "dev")
 
 _DEFAULT_OUT = os.environ.get("GRAPHIFY_SF_OUT", "graphify-sf-out")
 

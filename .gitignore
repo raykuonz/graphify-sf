@@ -60,6 +60,13 @@ continue_impl.sh
 # graphify-sf generated output (when running the tool on this repo itself)
 graphify-sf-out/
 
+# Generated at PyInstaller build time; not committed
+graphify_sf/_version.py
+
+# npm binary downloaded at install/first-use time
+npm/bin/graphify-sf-bin
+npm/bin/graphify-sf-bin.exe
+
 # uv
 .python-version
 /.docs/_cc-tasks/

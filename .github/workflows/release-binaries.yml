@@ -1,0 +1,138 @@
+name: Release Binaries + npm
+
+# Triggered by the same release event as publish.yml (PyPI).
+# This workflow builds PyInstaller binaries for each platform, uploads them to
+# the GitHub Release, then publishes the npm wrapper package.
+#
+# Required secret: NPM_TOKEN (repo secret → Settings → Secrets and variables → Actions).
+# The PyPI publish remains in publish.yml and is not affected by this file.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # needed to upload assets to the release
+  id-token: write   # not used here, but harmless
+
+jobs:
+  build-binaries:
+    name: Build binary (${{ matrix.target-os }}-${{ matrix.target-arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target-os: linux
+            target-arch: x64
+            asset-name: graphify-sf-linux-x64
+
+          - runner: ubuntu-24.04-arm
+            target-os: linux
+            target-arch: arm64
+            asset-name: graphify-sf-linux-arm64
+
+          - runner: macos-13
+            target-os: darwin
+            target-arch: x64
+            asset-name: graphify-sf-darwin-x64
+
+          - runner: macos-14
+            target-os: darwin
+            target-arch: arm64
+            asset-name: graphify-sf-darwin-arm64
+
+          - runner: windows-latest
+            target-os: win32
+            target-arch: x64
+            asset-name: graphify-sf-win32-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + PyInstaller
+        run: pip install ".[docs]" pyinstaller
+        # .[docs] pulls in optional doc extras so they're available if present,
+        # but the --exclude-module flags below prevent them entering the bundle.
+
+      - name: Inject version into graphify_sf/_version.py
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "__version__ = \"${VERSION}\"" > graphify_sf/_version.py
+          echo "Injected version: ${VERSION}"
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller \
+            --onefile \
+            --name graphify-sf \
+            --collect-submodules graphify_sf \
+            --hidden-import graphify_sf.__main__ \
+            --exclude-module matplotlib \
+            --exclude-module neo4j \
+            --exclude-module anthropic \
+            --exclude-module openai \
+            --exclude-module boto3 \
+            --exclude-module mcp \
+            --exclude-module watchdog \
+            --exclude-module graspologic \
+            --exclude-module pypdf \
+            --exclude-module docx \
+            --exclude-module openpyxl \
+            -c \
+            graphify_sf/__main__.py
+
+      - name: Rename artifact to release asset name
+        shell: bash
+        run: |
+          SRC="dist/graphify-sf"
+          if [ "${{ matrix.target-os }}" = "win32" ]; then
+            SRC="dist/graphify-sf.exe"
+          fi
+          cp "${SRC}" "${{ matrix.asset-name }}"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ matrix.asset-name }}" \
+            --clobber
+
+  publish-npm:
+    name: Publish to npm
+    needs: build-binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Write release version into npm/package.json
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          # Use npm version to update package.json without creating a git tag
+          cd npm
+          npm version "${VERSION}" --no-git-tag-version
+          echo "npm package version set to ${VERSION}"
+
+      - name: Publish to npm
+        run: npm publish ./npm --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

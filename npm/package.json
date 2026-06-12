@@ -1,0 +1,40 @@
+{
+  "name": "graphify-sf",
+  "version": "0.3.1",
+  "description": "Turn any Salesforce SFDX project into a queryable knowledge graph — no Python required.",
+  "bin": {
+    "graphify-sf": "bin/graphify-sf.js"
+  },
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "index.js",
+    "install.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raykuonz/graphify-sf.git"
+  },
+  "homepage": "https://github.com/raykuonz/graphify-sf#readme",
+  "bugs": {
+    "url": "https://github.com/raykuonz/graphify-sf/issues"
+  }
+}
