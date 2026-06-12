@@ -88,5 +88,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --frozen
 
+      # Keep pip itself patched in the audit environment. pip is provisioned by
+      # uv (not a declared project dependency), so a freshly-published advisory
+      # against the bundled pip would otherwise fail the audit on every PR even
+      # when the project's own dependencies are clean (e.g. PYSEC-2026-196).
+      - name: Upgrade pip in the venv
+        run: uv pip install --upgrade pip
+
       - name: Run pip-audit
         run: uv run pip-audit --skip-editable
