@@ -11,6 +11,35 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.2] — 2026-06-12
+
+### Added
+- **npm distribution — install without Python.** `graphify-sf` is now installable from npm
+  (`npm install graphify-sf` / `pnpm add graphify-sf`). A postinstall step downloads a
+  self-contained, per-platform binary (built with PyInstaller) from the matching GitHub Release,
+  so Node consumers can use the tool with no Python on the machine. Supported platforms:
+  linux x64/arm64, macOS x64/arm64, Windows x64.
+- **Programmatic JS API.** `require("graphify-sf").runGraphify(sfdxPath, { outDir })` spawns the
+  binary (`<path> --out <outDir> --no-viz`) and resolves `{ code, graphJsonPath }`, so a Node
+  daemon can drive the core static-extraction path directly. Also exports `ensureBinary()` and
+  `binaryPath()`. The binary is downloaded lazily on first use when a package manager skips
+  postinstall scripts (e.g. pnpm's default `ignore-scripts`), and any download failure throws
+  a loud, explicit error rather than failing silently.
+- **Release automation for binaries + npm.** The same `release: published` event now also builds
+  the per-platform binaries (5-leg matrix), uploads them to the Release, and publishes the npm
+  wrapper. The version is sourced from the release tag (single source of truth) — both the bundled
+  binary and the npm package read it.
+
+### Fixed
+- **Frozen-binary version reporting.** The PyInstaller binary now reports its real version instead
+  of `dev`, via a version-resolution fallback chain (`importlib.metadata` → bundled `_version.py`
+  → `GRAPHIFY_SF_VERSION` env → `dev`). Source/PyPI installs are unaffected.
+- **CI dependency scan no longer fails on transient `pip` advisories.** The security-scan job now
+  upgrades `pip` in its environment before running `pip-audit`, so a freshly-published advisory
+  against the bundled `pip` (which is not a project dependency) no longer reds every PR.
+
+---
+
 ## [0.3.1] — 2026-06-04
 
 ### Fixed
@@ -134,7 +163,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raykuonz/graphify-sf/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/raykuonz/graphify-sf/compare/v0.1.0...v0.2.0
