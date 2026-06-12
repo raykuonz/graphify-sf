@@ -4,12 +4,22 @@ name: Release Binaries + npm
 # This workflow builds PyInstaller binaries for each platform, uploads them to
 # the GitHub Release, then publishes the npm wrapper package.
 #
+# It also supports manual re-runs against an existing tag via workflow_dispatch
+# (e.g. to re-build/re-publish after fixing a runner image) without cutting a
+# new version.
+#
 # Required secret: NPM_TOKEN (repo secret → Settings → Secrets and variables → Actions).
 # The PyPI publish remains in publish.yml and is not affected by this file.
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)build binaries + publish npm for (e.g. v0.3.2)"
+        required: true
+        type: string
 
 permissions:
   contents: write   # needed to upload assets to the release
@@ -33,7 +43,7 @@ jobs:
             target-arch: arm64
             asset-name: graphify-sf-linux-arm64
 
-          - runner: macos-13
+          - runner: macos-15-intel
             target-os: darwin
             target-arch: x64
             asset-name: graphify-sf-darwin-x64
@@ -49,7 +59,24 @@ jobs:
             asset-name: graphify-sf-win32-x64.exe
 
     steps:
+      # Resolve the target tag from either trigger (release event or manual dispatch).
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=${TAG} version=${TAG#v}"
+
+      # Check out the exact tagged commit so the build matches the release.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -64,8 +91,7 @@ jobs:
       - name: Inject version into graphify_sf/_version.py
         shell: bash
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          VERSION="${TAG#v}"
+          VERSION="${{ steps.tag.outputs.version }}"
           echo "__version__ = \"${VERSION}\"" > graphify_sf/_version.py
           echo "Injected version: ${VERSION}"
 
@@ -105,7 +131,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ steps.tag.outputs.tag }}" \
             "${{ matrix.asset-name }}" \
             --clobber
 
@@ -115,6 +141,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
@@ -125,8 +162,7 @@ jobs:
 
       - name: Write release version into npm/package.json
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          VERSION="${TAG#v}"
+          VERSION="${{ steps.tag.outputs.version }}"
           # Use npm version to update package.json without creating a git tag
           cd npm
           npm version "${VERSION}" --no-git-tag-version
