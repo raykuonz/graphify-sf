@@ -517,6 +517,126 @@ def test_extract_apex_trigger_fallback_uses_filename(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# DML variable resolution (Approach A: varName → declared type)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_dml_lowercase_var_resolves_to_type(tmp_path):
+    """Core fix: `insert c;` where `Case c = new Case()` → dml edge to object_case."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AfterHoursFallback.cls"
+    cls.write_text(
+        """\
+public class AfterHoursFallback {
+    public void run() {
+        Case c = new Case();
+        insert c;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 1
+    assert "case" in dml_edges[0]["target"].lower()
+    assert dml_edges[0]["operation"] == "create"
+    assert dml_edges[0]["confidence"] == "INFERRED"
+
+
+def test_extract_apex_dml_lowercase_var_insert_and_update_two_edges(tmp_path):
+    """Same lowercase variable insert + update → two dml edges (create, update)."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "CaseUpdater.cls"
+    cls.write_text(
+        """\
+public class CaseUpdater {
+    public void run() {
+        Case c = new Case();
+        insert c;
+        update c;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    case_edges = [e for e in dml_edges if "case" in e["target"].lower()]
+    assert len(case_edges) == 2
+    ops = {e["operation"] for e in case_edges}
+    assert ops == {"create", "update"}
+
+
+def test_extract_apex_dml_list_generic_resolves_inner_type(tmp_path):
+    """`List<Account> accs = ...; insert accs;` → dml edge to object_account."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AccountBulkWriter.cls"
+    cls.write_text(
+        """\
+public class AccountBulkWriter {
+    public void run() {
+        List<Account> accs = new List<Account>();
+        insert accs;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 1
+    assert "account" in dml_edges[0]["target"].lower()
+    assert dml_edges[0]["operation"] == "create"
+
+
+def test_extract_apex_dml_method_param_resolves(tmp_path):
+    """Method parameter `Contact con` → `update con;` produces dml edge to object_contact."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "ContactSaver.cls"
+    cls.write_text(
+        """\
+public class ContactSaver {
+    public void save(Contact con) {
+        update con;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 1
+    assert "contact" in dml_edges[0]["target"].lower()
+    assert dml_edges[0]["operation"] == "update"
+
+
+def test_extract_apex_dml_unresolvable_var_skipped(tmp_path):
+    """A DML on a variable with no resolvable declaration emits NO dml edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "MysteryUpdater.cls"
+    cls.write_text(
+        """\
+public class MysteryUpdater {
+    public void run() {
+        update mystery;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 0
+    assert not any("mystery" in e.get("target", "").lower() for e in dml_edges)
+
+
 def test_extract_apex_raw_calls_filters_lowercase_variables(tmp_path):
     """Local variable method calls (e.g. myObj.doSomething()) are not stored as raw_calls,
     but PascalCase static/utility calls (e.g. AccountService.getInstance()) are kept."""

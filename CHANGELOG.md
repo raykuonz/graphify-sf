@@ -11,6 +11,30 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.5] — 2026-06-13
+
+### Fixed
+- **Apex DML edges now work on real-world code.** The Apex DML → object `dml` edge feature added in
+  0.3.4 silently produced **zero** edges on real Apex, because DML operands are almost always
+  lowercase local variables (`insert c;`) and the edge-building guard only accepted operands whose
+  name was already capitalized. Real classes with `insert`/`update`/`delete` statements therefore
+  emitted no `dml` edges at all. The extractor now resolves the DML operand variable to its declared
+  SObject type by scanning local variable declarations and method parameters (simple `Type var`,
+  generic `List<Type>` / `Set<Type>` / `Map<K,Type>`, and parameters), and builds the `dml` edge to
+  the resolved object (e.g. `Case c = new Case(); insert c;` → `class → object_case`,
+  `operation="create"`, `confidence="INFERRED"`). Operands that cannot be resolved to a type are
+  skipped rather than emitting a misleading edge to a variable name (honest INFERRED semantics
+  preserved). Apex primitives (`String`, `Integer`, `Id`, etc.) are never treated as DML targets.
+  A PascalCase operand that is itself a type name still works via a fallback path, so existing
+  behavior is preserved.
+
+  Note: in the built graph, multiple DML operations against the *same* object from one component are
+  currently still merged into a single edge (the graph layer keeps one edge per source→target pair).
+  Exposing every write operation as its own independently-locatable edge is planned as a follow-up
+  graph-model upgrade.
+
+---
+
 ## [0.3.4] — 2026-06-13
 
 ### Added
@@ -194,7 +218,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/raykuonz/graphify-sf/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/raykuonz/graphify-sf/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/raykuonz/graphify-sf/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...v0.3.2
