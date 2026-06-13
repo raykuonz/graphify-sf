@@ -70,3 +70,7 @@ npm/bin/graphify-sf-bin.exe
 # uv
 .python-version
 /.docs/_cc-tasks/
+
+# Local-only working notes (plans, CC task briefs) — not shipped
+/docs/plans/
+/TASK_*.md

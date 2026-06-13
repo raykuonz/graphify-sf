@@ -46,6 +46,18 @@ _TRIGGER_RE = re.compile(
 # Apex → Flow: Flow.Interview.FlowApiName
 _FLOW_INVOKE_RE = re.compile(r"Flow\.Interview\.(\w+)", re.IGNORECASE)
 
+# Variable declaration patterns used to resolve DML operands to their declared SObject type.
+# Simple: TypeName varName [= ...] ; or TypeName varName , or TypeName varName )
+_VAR_DECL_SIMPLE_RE = re.compile(
+    r"\b([A-Z]\w*)\s+([a-z]\w*)\s*(?=[=;,)])",
+    re.MULTILINE,
+)
+# Generic: List<T>/Set<T>/Map<K,V> varName [= ...] ; or , or )
+_VAR_DECL_GENERIC_RE = re.compile(
+    r"\b(?:List|Set|Map)\s*<([^>]+)>\s+([a-z]\w*)\s*(?=[=;,)])",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 # Apex keywords that look like calls but aren't class references
 _APEX_KEYWORDS = frozenset(
     {
@@ -133,6 +145,34 @@ _APEX_KEYWORDS = frozenset(
         "componentcontroller",
     }
 )
+
+
+def _extract_var_types(text: str) -> dict[str, str]:
+    """Return a varName → declared SObject type map from class source text.
+
+    Handles simple declarations (TypeName var), generic collections
+    (List<T>/Set<T>/Map<K,V> var), and method parameters.
+    Variable names must start with a lowercase letter; types must be PascalCase
+    and not be an Apex keyword/primitive.
+    """
+    result: dict[str, str] = {}
+    # Generic declarations first (higher priority, e.g. List<Account> accs)
+    for m in _VAR_DECL_GENERIC_RE.finditer(text):
+        inner = m.group(1)
+        var_name = m.group(2)
+        parts = [p.strip() for p in inner.split(",")]
+        # For Map<K, V> take the last type arg; strip any nested generics
+        inner_type = re.sub(r"<[^>]*>", "", parts[-1]).strip()
+        if inner_type and inner_type[0].isupper() and inner_type.lower() not in _APEX_KEYWORDS:
+            result.setdefault(var_name, inner_type)
+    # Simple declarations: TypeName varName
+    for m in _VAR_DECL_SIMPLE_RE.finditer(text):
+        type_name = m.group(1)
+        var_name = m.group(2)
+        if type_name.lower() not in _APEX_KEYWORDS:
+            result.setdefault(var_name, type_name)
+    return result
+
 
 # Minimum length and shape heuristics for a plausible Apex class name in _raw_calls.
 # Returns False for things like single-letter variables, all-caps constants,
@@ -316,14 +356,13 @@ def extract_apex_class(path: Path) -> dict:
                     )
                 )
 
-        # DML → dml edges. The relation stays "dml" (unchanged) but each edge carries an
-        # "operation" field derived from the DML verb (insert→create / update→update /
-        # delete→delete / upsert / merge / undelete) so downstream can distinguish the
-        # kind of write. Native SF verbs (upsert/merge/undelete) are preserved rather than
-        # forced into CRUD. confidence stays INFERRED: the DML target is a variable name we
-        # cannot statically resolve to an object type — that honesty label must not change.
-        # Dedup is by (obj_var, operation) so a class that both inserts and updates the same
-        # object yields two edges, not one collapsed dml edge.
+        # DML → dml edges. Each edge carries an "operation" field (insert→create, etc.).
+        # Resolution order for the DML operand:
+        #   (a) look up the varName→Type map built by _extract_var_types;
+        #   (b) if the operand is already PascalCase and not a keyword, use it directly
+        #       (backward-compat: handles `insert Account;` style);
+        #   (c) otherwise skip — no edge for unresolvable variables (honesty).
+        # Dedup by (resolved_type, operation) so insert+update on the same object → two edges.
         _DML_VERB_TO_OP = {
             "insert": "create",
             "update": "update",
@@ -332,26 +371,35 @@ def extract_apex_class(path: Path) -> dict:
             "merge": "merge",
             "undelete": "undelete",
         }
+        var_types = _extract_var_types(text)
         seen_dml_ops: set[tuple[str, str]] = set()
         for dm in _DML_RE.finditer(text):
             operation = _DML_VERB_TO_OP[dm.group(1).lower()]
             obj_var = dm.group(2)
-            # obj_var is a variable name, not necessarily an object API name.
-            # We record it as INFERRED since we can't always resolve the type statically.
-            if obj_var.lower() not in _APEX_KEYWORDS and (obj_var, operation) not in seen_dml_ops:
-                seen_dml_ops.add((obj_var, operation))
-                # Only add the edge if it looks like a type name (capitalized) or known object
+            if obj_var.lower() in _APEX_KEYWORDS:
+                continue
+            resolved_type = var_types.get(obj_var)
+            if resolved_type is None:
+                # Fallback: operand is itself PascalCase — treat as the type name
                 if obj_var[0].isupper():
-                    edge = _make_edge(
-                        class_nid,
-                        object_id(obj_var),
-                        "dml",
-                        "INFERRED",
-                        str_path,
-                        confidence_score=0.7,
-                    )
-                    edge["operation"] = operation
-                    edges.append(edge)
+                    resolved_type = obj_var
+                else:
+                    continue  # lowercase variable with no declaration — skip
+            if resolved_type.lower() in _APEX_KEYWORDS:
+                continue  # primitive or system type — not a DML-able SObject
+            key = (resolved_type, operation)
+            if key not in seen_dml_ops:
+                seen_dml_ops.add(key)
+                edge = _make_edge(
+                    class_nid,
+                    object_id(resolved_type),
+                    "dml",
+                    "INFERRED",
+                    str_path,
+                    confidence_score=0.7,
+                )
+                edge["operation"] = operation
+                edges.append(edge)
 
         # Apex → Flow invocations via Flow.Interview.FlowName
         seen_flow_invokes: set[str] = set()
