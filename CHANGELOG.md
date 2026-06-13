@@ -11,6 +11,22 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.4] — 2026-06-13
+
+### Added
+- **Apex DML edges now preserve the write operation.** Apex → object `dml` edges now carry
+  an `operation` field derived from the DML verb (`insert`→`create`, `update`→`update`,
+  `delete`→`delete`, plus the SF-native `upsert` / `merge` / `undelete` preserved as-is rather
+  than forced into CRUD). The edge relation stays `dml` (unchanged) and confidence stays
+  `INFERRED` — the DML target is a variable name that can't always be statically resolved to an
+  object type, and that honesty label is unchanged. Deduplication is now by `(object, operation)`
+  so a class that both inserts and updates the same object yields two distinct edges instead of
+  one collapsed `dml` edge. This mirrors the flow record-op change in 0.3.3, so both major write
+  paths (Flow and Apex) now expose read/write operation semantics to downstream consumers.
+  SOQL `queries` edges are unchanged (they already carry read semantics).
+
+---
+
 ## [0.3.3] — 2026-06-13
 
 ### Added
@@ -178,7 +194,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/raykuonz/graphify-sf/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/raykuonz/graphify-sf/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...v0.3.1
