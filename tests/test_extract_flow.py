@@ -388,9 +388,7 @@ def test_extract_flow_read_and_update_yields_two_edges(tmp_path):
 
     result = extract_flow(f)
     opp_edges = [
-        e
-        for e in result["edges"]
-        if e.get("relation") == "references" and "opportunity" in e["target"].lower()
+        e for e in result["edges"] if e.get("relation") == "references" and "opportunity" in e["target"].lower()
     ]
     assert len(opp_edges) == 2, "read+update on same object must not be deduped to one edge"
     ops = {e.get("operation") for e in opp_edges}
@@ -435,11 +433,7 @@ def test_extract_flow_all_four_operations(tmp_path):
     f.write_text(ALL_FOUR_OPS_XML)
 
     result = extract_flow(f)
-    by_op = {
-        e.get("operation"): e["target"].lower()
-        for e in result["edges"]
-        if e.get("operation") is not None
-    }
+    by_op = {e.get("operation"): e["target"].lower() for e in result["edges"] if e.get("operation") is not None}
     assert by_op.get("read") and "account" in by_op["read"]
     assert by_op.get("create") and "contact" in by_op["create"]
     assert by_op.get("update") and "account" in by_op["update"]
