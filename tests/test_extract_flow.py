@@ -325,6 +325,128 @@ def test_extract_flow_action_call_subflow_creates_invokes_edge(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Flow → Object record operations (read/create/update/delete)
+# ---------------------------------------------------------------------------
+
+READ_AND_UPDATE_SAME_OBJECT_XML = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow {_NS}>
+    <processType>AutoLaunchedFlow</processType>
+    <recordLookups>
+        <name>GetOpp</name>
+        <object>Opportunity</object>
+    </recordLookups>
+    <recordUpdates>
+        <name>UpdateOpp</name>
+        <object>Opportunity</object>
+    </recordUpdates>
+</Flow>
+"""
+
+PURE_UPDATE_XML = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow {_NS}>
+    <processType>AutoLaunchedFlow</processType>
+    <recordUpdates>
+        <name>UpdateOpp</name>
+        <object>Opportunity</object>
+    </recordUpdates>
+</Flow>
+"""
+
+ALL_FOUR_OPS_XML = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow {_NS}>
+    <processType>AutoLaunchedFlow</processType>
+    <recordLookups>
+        <name>GetAcc</name>
+        <object>Account</object>
+    </recordLookups>
+    <recordCreates>
+        <name>MakeContact</name>
+        <object>Contact</object>
+    </recordCreates>
+    <recordUpdates>
+        <name>UpdateAcc</name>
+        <object>Account</object>
+    </recordUpdates>
+    <recordDeletes>
+        <name>DeleteLead</name>
+        <object>Lead</object>
+    </recordDeletes>
+</Flow>
+"""
+
+
+def test_extract_flow_read_and_update_yields_two_edges(tmp_path):
+    """A flow that both reads and updates the same object yields TWO edges
+    (operation=read and operation=update), not one collapsed reference."""
+    from graphify_sf.extract.flow import extract_flow
+
+    f = tmp_path / "OppReadWrite.flow-meta.xml"
+    f.write_text(READ_AND_UPDATE_SAME_OBJECT_XML)
+
+    result = extract_flow(f)
+    opp_edges = [
+        e
+        for e in result["edges"]
+        if e.get("relation") == "references" and "opportunity" in e["target"].lower()
+    ]
+    assert len(opp_edges) == 2, "read+update on same object must not be deduped to one edge"
+    ops = {e.get("operation") for e in opp_edges}
+    assert ops == {"read", "update"}
+
+
+def test_extract_flow_pure_update_carries_operation(tmp_path):
+    """A recordUpdates element produces a references edge with operation='update'."""
+    from graphify_sf.extract.flow import extract_flow
+
+    f = tmp_path / "OppUpdate.flow-meta.xml"
+    f.write_text(PURE_UPDATE_XML)
+
+    result = extract_flow(f)
+    ref_edges = [e for e in result["edges"] if e.get("relation") == "references"]
+    assert len(ref_edges) == 1
+    assert ref_edges[0].get("operation") == "update"
+    assert "opportunity" in ref_edges[0]["target"].lower()
+
+
+def test_extract_flow_record_ops_relation_unchanged(tmp_path):
+    """Regression: record-op edges keep relation='references' (semantics unchanged);
+    only the new 'operation' field distinguishes them."""
+    from graphify_sf.extract.flow import extract_flow
+
+    f = tmp_path / "OppReadWrite.flow-meta.xml"
+    f.write_text(READ_AND_UPDATE_SAME_OBJECT_XML)
+
+    result = extract_flow(f)
+    record_op_edges = [e for e in result["edges"] if e.get("operation") is not None]
+    assert record_op_edges, "expected at least one record-op edge"
+    for e in record_op_edges:
+        assert e["relation"] == "references"
+        assert e["confidence"] == "EXTRACTED"
+
+
+def test_extract_flow_all_four_operations(tmp_path):
+    """All four record-op tags map to their operation: read/create/update/delete."""
+    from graphify_sf.extract.flow import extract_flow
+
+    f = tmp_path / "AllOps.flow-meta.xml"
+    f.write_text(ALL_FOUR_OPS_XML)
+
+    result = extract_flow(f)
+    by_op = {
+        e.get("operation"): e["target"].lower()
+        for e in result["edges"]
+        if e.get("operation") is not None
+    }
+    assert by_op.get("read") and "account" in by_op["read"]
+    assert by_op.get("create") and "contact" in by_op["create"]
+    assert by_op.get("update") and "account" in by_op["update"]
+    assert by_op.get("delete") and "lead" in by_op["delete"]
+
+
+# ---------------------------------------------------------------------------
 # Flow child element nodes (Decision, Screen, Loop, Assignment)
 # ---------------------------------------------------------------------------
 

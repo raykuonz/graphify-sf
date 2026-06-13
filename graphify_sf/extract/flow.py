@@ -122,15 +122,26 @@ def extract_flow(path: Path) -> dict:
             if sub_name:
                 edges.append(_make_edge(flow_nid, flow_id(sub_name), "invokes", "EXTRACTED", str_path))
 
-    # Object record operations
-    _record_tags = ("recordLookups", "recordCreates", "recordUpdates", "recordDeletes")
-    seen_objects: set[str] = set()
-    for tag in _record_tags:
+    # Object record operations. The relation stays "references" (a generic relation
+    # reused by many extractors — never change its semantics), but each edge carries an
+    # "operation" field (read/create/update/delete) so downstream can distinguish
+    # read-only access from writes. Dedup is by (object, operation) so a flow that both
+    # reads and updates the same object yields two edges, not one collapsed reference.
+    _record_op_tags = {
+        "recordLookups": "read",
+        "recordCreates": "create",
+        "recordUpdates": "update",
+        "recordDeletes": "delete",
+    }
+    seen_record_ops: set[tuple[str, str]] = set()
+    for tag, operation in _record_op_tags.items():
         for el in _find_all(root_el, tag, ns):
             obj = _find_text(el, "object", ns)
-            if obj and obj not in seen_objects:
-                seen_objects.add(obj)
-                edges.append(_make_edge(flow_nid, object_id(obj), "references", "EXTRACTED", str_path))
+            if obj and (obj, operation) not in seen_record_ops:
+                seen_record_ops.add((obj, operation))
+                edge = _make_edge(flow_nid, object_id(obj), "references", "EXTRACTED", str_path)
+                edge["operation"] = operation
+                edges.append(edge)
 
     # Subflows
     for subflow in _find_all(root_el, "subflows", ns):

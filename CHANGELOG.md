@@ -11,6 +11,21 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.3] — 2026-06-13
+
+### Added
+- **Flow record operations now preserve read/write semantics.** Flow → object edges from
+  record operations (`recordLookups` / `recordCreates` / `recordUpdates` / `recordDeletes`)
+  now carry an `operation` field (`read` / `create` / `update` / `delete`). The edge relation
+  stays `references` (unchanged — that generic relation is reused by many extractors), so all
+  existing consumers that filter by relation are unaffected; consumers that need to tell reads
+  from writes can read the new field. Deduplication is now by `(object, operation)` instead of
+  by object alone, so a flow that both reads and updates the same object yields two distinct
+  edges instead of one collapsed reference. This lets downstream answer precise questions like
+  "which flows *write* (update/create/delete) object X" rather than only "which flows touch X".
+
+---
+
 ## [0.3.2] — 2026-06-12
 
 ### Added
@@ -163,7 +178,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/raykuonz/graphify-sf/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/raykuonz/graphify-sf/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/raykuonz/graphify-sf/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raykuonz/graphify-sf/compare/v0.2.0...v0.3.0
