@@ -385,6 +385,113 @@ public class LeadCreator {
         assert e["confidence"] == "INFERRED"
 
 
+def test_extract_apex_dml_insert_and_update_same_object_two_edges(tmp_path):
+    """A class that both inserts and updates the same object yields TWO dml edges
+    (operation=create and operation=update), not one collapsed edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AccountWriter.cls"
+    cls.write_text(
+        """\
+public class AccountWriter {
+    public void work() {
+        Account Acct = new Account();
+        insert Acct;
+        update Acct;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    acct_dml = [e for e in result["edges"] if e.get("relation") == "dml" and "acct" in e["target"].lower()]
+    assert len(acct_dml) == 2, "insert+update on same object must not be deduped to one edge"
+    ops = {e.get("operation") for e in acct_dml}
+    assert ops == {"create", "update"}
+    for e in acct_dml:
+        assert e["confidence"] == "INFERRED"
+
+
+def test_extract_apex_dml_pure_update_carries_operation(tmp_path):
+    """A bare DML update produces a dml edge with operation='update' and INFERRED confidence."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AccountUpdater.cls"
+    cls.write_text(
+        """\
+public class AccountUpdater {
+    public void touch() {
+        update Acct;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 1
+    assert dml_edges[0].get("operation") == "update"
+    assert dml_edges[0]["confidence"] == "INFERRED"
+
+
+def test_extract_apex_dml_native_verbs_preserved(tmp_path):
+    """SF-native DML verbs map to their own operation, not forced into CRUD:
+    upsert/undelete are preserved; insert->create, delete->delete, update->update.
+
+    Note: `merge` uses two-object syntax (`merge a b;`) which the single-object DML
+    regex deliberately does not capture — that's an existing extractor boundary, out
+    of scope for this change (no object-type resolution upgrade)."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AllDml.cls"
+    cls.write_text(
+        """\
+public class AllDml {
+    public void run() {
+        insert Acct;
+        update Con;
+        delete Lead;
+        upsert Opp;
+        undelete Cse;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    ops_by_target = {e["target"].lower(): e.get("operation") for e in result["edges"] if e.get("relation") == "dml"}
+    assert ops_by_target.get("object_acct") == "create"
+    assert ops_by_target.get("object_con") == "update"
+    assert ops_by_target.get("object_lead") == "delete"
+    assert ops_by_target.get("object_opp") == "upsert"
+    assert ops_by_target.get("object_cse") == "undelete"
+
+
+def test_extract_apex_soql_queries_edge_unaffected(tmp_path):
+    """Regression: SOQL still produces a 'queries' edge (EXTRACTED) with no 'operation'
+    field — only DML edges gained operation."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AccountReader.cls"
+    cls.write_text(
+        """\
+public class AccountReader {
+    public void read() {
+        List<Account> a = [SELECT Id FROM Account];
+        update Acct;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    query_edges = [e for e in result["edges"] if e.get("relation") == "queries"]
+    assert len(query_edges) >= 1
+    for e in query_edges:
+        assert e["confidence"] == "EXTRACTED"
+        assert e.get("operation") is None, "queries edges must not carry an operation field"
+
+
 # ---------------------------------------------------------------------------
 # Apex trigger fallback (no regex match → filename)
 # ---------------------------------------------------------------------------

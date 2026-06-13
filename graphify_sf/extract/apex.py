@@ -316,26 +316,42 @@ def extract_apex_class(path: Path) -> dict:
                     )
                 )
 
-        # DML → dml edges
-        seen_dml_targets: set[str] = set()
+        # DML → dml edges. The relation stays "dml" (unchanged) but each edge carries an
+        # "operation" field derived from the DML verb (insert→create / update→update /
+        # delete→delete / upsert / merge / undelete) so downstream can distinguish the
+        # kind of write. Native SF verbs (upsert/merge/undelete) are preserved rather than
+        # forced into CRUD. confidence stays INFERRED: the DML target is a variable name we
+        # cannot statically resolve to an object type — that honesty label must not change.
+        # Dedup is by (obj_var, operation) so a class that both inserts and updates the same
+        # object yields two edges, not one collapsed dml edge.
+        _DML_VERB_TO_OP = {
+            "insert": "create",
+            "update": "update",
+            "delete": "delete",
+            "upsert": "upsert",
+            "merge": "merge",
+            "undelete": "undelete",
+        }
+        seen_dml_ops: set[tuple[str, str]] = set()
         for dm in _DML_RE.finditer(text):
+            operation = _DML_VERB_TO_OP[dm.group(1).lower()]
             obj_var = dm.group(2)
             # obj_var is a variable name, not necessarily an object API name.
             # We record it as INFERRED since we can't always resolve the type statically.
-            if obj_var.lower() not in _APEX_KEYWORDS and obj_var not in seen_dml_targets:
-                seen_dml_targets.add(obj_var)
+            if obj_var.lower() not in _APEX_KEYWORDS and (obj_var, operation) not in seen_dml_ops:
+                seen_dml_ops.add((obj_var, operation))
                 # Only add the edge if it looks like a type name (capitalized) or known object
                 if obj_var[0].isupper():
-                    edges.append(
-                        _make_edge(
-                            class_nid,
-                            object_id(obj_var),
-                            "dml",
-                            "INFERRED",
-                            str_path,
-                            confidence_score=0.7,
-                        )
+                    edge = _make_edge(
+                        class_nid,
+                        object_id(obj_var),
+                        "dml",
+                        "INFERRED",
+                        str_path,
+                        confidence_score=0.7,
                     )
+                    edge["operation"] = operation
+                    edges.append(edge)
 
         # Apex → Flow invocations via Flow.Interview.FlowName
         seen_flow_invokes: set[str] = set()
