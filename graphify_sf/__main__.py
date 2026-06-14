@@ -183,6 +183,7 @@ def _run_pipeline(
     force: bool = False,
     backend: str | None = None,
     token_budget: int = 40_000,
+    respect_ignore: bool = True,
 ) -> None:
     """Full pipeline: detect → extract → [LLM] → build → cluster → report → export."""
     from graphify_sf.analyze import god_nodes, suggest_questions, surprising_connections
@@ -201,18 +202,27 @@ def _run_pipeline(
 
     if incremental:
         print(f"[graphify-sf] incremental scan of {target}")
-        detection = detect_incremental(target, manifest_path=str(manifest_path))
+        detection = detect_incremental(target, manifest_path=str(manifest_path), respect_ignore=respect_ignore)
     else:
         print(f"[graphify-sf] scanning {target}")
-        detection = detect(target)
+        detection = detect(target, respect_ignore=respect_ignore)
 
     total = detection.get("total_files", 0)
-    skipped = detection.get("skipped", 0)
+    skipped_count = detection.get("skipped_count", 0)
+    skipped_by_source = detection.get("skipped_by_source", {})
     warning = detection.get("warning", "")
     if warning:
         print(f"[graphify-sf] WARNING: {warning}", file=sys.stderr)
 
-    print(f"[graphify-sf] {total} metadata files found, {skipped} skipped")
+    print(f"[graphify-sf] {total} metadata files found, {skipped_count} skipped")
+    # Honesty-layer: never silently drop files — show which ignore source skipped what.
+    if skipped_count:
+        nonzero = {k: v for k, v in skipped_by_source.items() if v}
+        if nonzero:
+            detail = ", ".join(f"{k}: {v}" for k, v in nonzero.items())
+            print(f"[graphify-sf] skipped {skipped_count} files ({detail}) — use --include-ignored to include them")
+    elif not respect_ignore:
+        print("[graphify-sf] --include-ignored: .gitignore/.forceignore not applied")
 
     if total == 0:
         print("[graphify-sf] no Salesforce metadata files found — nothing to extract", file=sys.stderr)
@@ -1564,6 +1574,8 @@ def main() -> None:
         print("    --directed                       build directed graph")
         print("    --no-viz                         skip graph.html generation")
         print("    --force                          overwrite graph.json even if new graph is smaller")
+        print("    --include-ignored                scan files matched by .gitignore/.forceignore")
+        print("                                     (default: those files are skipped)")
         print("    --max-workers N                  parallel extraction worker count")
         print("    --backend <name>                 add AI semantic extraction layer")
         print("      backends: claude, gemini, kimi, openai, bedrock, ollama, auto")
@@ -1929,6 +1941,7 @@ def main() -> None:
         max_workers = None
         backend: str | None = None
         token_budget = 40_000
+        respect_ignore = True
 
         i = 1
         while i < len(args):
@@ -1950,6 +1963,9 @@ def main() -> None:
                 i += 1
             elif a == "--force":
                 force = True
+                i += 1
+            elif a in ("--include-ignored", "--no-respect-ignore"):
+                respect_ignore = False
                 i += 1
             elif a == "--max-workers" and i + 1 < len(args):
                 max_workers = int(args[i + 1])
@@ -1983,6 +1999,7 @@ def main() -> None:
             force=force,
             backend=backend,
             token_budget=token_budget,
+            respect_ignore=respect_ignore,
         )
         return
 

@@ -2,8 +2,14 @@ import fnmatch
 import hashlib
 import json
 import os
+import sys
 from enum import Enum
 from pathlib import Path
+
+try:
+    import pathspec  # gitwildmatch — correct .gitignore/.forceignore semantics
+except ImportError:  # pragma: no cover - pathspec is a core dependency
+    pathspec = None
 
 
 class SFFileType(str, Enum):
@@ -180,7 +186,7 @@ def _load_sfgraphignore(root: Path) -> list[str]:
 
 
 def _is_ignored(path: Path, root: Path, patterns: list[str]) -> bool:
-    """Return True if the path matches any ignore pattern."""
+    """Return True if the path matches any .graphifysfignore pattern (fnmatch)."""
     if not patterns:
         return False
     try:
@@ -193,6 +199,59 @@ def _is_ignored(path: Path, root: Path, patterns: list[str]) -> bool:
         if fnmatch.fnmatch(path.name, pattern):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# .gitignore / .forceignore support (gitwildmatch semantics via pathspec)
+# ---------------------------------------------------------------------------
+# Files honored by default. A user can opt out entirely with respect_ignore=False
+# (CLI: --include-ignored) to scan everything regardless of these declarations.
+_IGNORE_FILES = (".gitignore", ".forceignore")
+
+
+def _load_ignore_specs(root: Path) -> dict[str, tuple[Path, object]]:
+    """Load .gitignore / .forceignore as pathspec matchers, searching upward.
+
+    SFDX ignore files conventionally live at the project root, but users often
+    point graphify at a subdir (e.g. ``force-app``). Like git/sf, we walk up from
+    ``root`` to the filesystem root to find the nearest ``.gitignore`` and
+    ``.forceignore``. Each spec is returned with the directory it was found in, so
+    path matching is anchored relative to that base (correct gitwildmatch semantics).
+
+    Returns {filename: (base_dir, PathSpec)}.
+    """
+    specs: dict[str, tuple[Path, object]] = {}
+    if pathspec is None:
+        return specs
+    for name in _IGNORE_FILES:
+        d = root
+        while True:
+            f = d / name
+            if f.exists():
+                try:
+                    lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
+                    specs[name] = (d, pathspec.PathSpec.from_lines("gitignore", lines))
+                except OSError:
+                    pass
+                break
+            if d.parent == d:
+                break
+            d = d.parent
+    return specs
+
+
+def _matched_ignore_file(path: Path, root: Path, specs: dict[str, tuple[Path, object]]) -> str | None:
+    """Return the name of the first ignore file whose patterns match `path`, else None."""
+    if not specs:
+        return None
+    for name, (base, spec) in specs.items():
+        try:
+            rel = path.relative_to(base).as_posix()
+        except ValueError:
+            continue
+        if spec.match_file(rel):  # type: ignore[attr-defined]
+            return name
+    return None
 
 
 def extract_pdf_text(path: Path) -> str:
@@ -312,15 +371,31 @@ def _classify_doc_file(path: Path) -> DocFileType | None:
     return None
 
 
-def detect(root: Path) -> dict:
-    """Scan the SFDX project and return detected files grouped by type."""
+def detect(root: Path, *, respect_ignore: bool = True) -> dict:
+    """Scan the SFDX project and return detected files grouped by type.
+
+    When ``respect_ignore`` is True (default), files matching the project's
+    ``.gitignore`` or ``.forceignore`` are skipped (gitwildmatch semantics).
+    Pass ``respect_ignore=False`` (CLI: ``--include-ignored``) to scan everything
+    regardless of those declarations. The hardcoded ``_SKIP_DIRS`` floor and the
+    ``.graphifysfignore`` file are always applied.
+    """
     root = root.resolve()
     files = {ft.value: [] for ft in SFFileType}
     doc_files: dict[str, list[str]] = {ft.value: [] for ft in DocFileType}
     bundle_dirs = {"lwc": [], "aura": []}
     skipped = []
+    # Per-source skip counts for an honest summary line (never silently drop).
+    skipped_by_source: dict[str, int] = {".gitignore": 0, ".forceignore": 0, ".graphifysfignore": 0}
     ignore_patterns = _load_sfgraphignore(root)
+    ignore_specs = _load_ignore_specs(root) if respect_ignore else {}
     converted_dir = root / "graphify-sf-out" / "converted"
+
+    def _skip_reason(path: Path) -> str | None:
+        """Return the ignore-source name if path should be skipped, else None."""
+        if _is_ignored(path, root, ignore_patterns):
+            return ".graphifysfignore"
+        return _matched_ignore_file(path, root, ignore_specs)
 
     for dirpath, dirnames, filenames in os.walk(root):
         dp = Path(dirpath)
@@ -330,20 +405,30 @@ def detect(root: Path) -> dict:
 
         # Check for LWC/Aura bundles
         if dp.parent.name == "lwc" and _is_lwc_bundle(dp):
-            if not _is_ignored(dp, root, ignore_patterns):
+            reason = _skip_reason(dp)
+            if reason is None:
                 bundle_dirs["lwc"].append(str(dp))
+            else:
+                skipped.append(str(dp))
+                skipped_by_source[reason] = skipped_by_source.get(reason, 0) + 1
             continue
 
         if dp.parent.name == "aura" and _is_aura_bundle(dp):
-            if not _is_ignored(dp, root, ignore_patterns):
+            reason = _skip_reason(dp)
+            if reason is None:
                 bundle_dirs["aura"].append(str(dp))
+            else:
+                skipped.append(str(dp))
+                skipped_by_source[reason] = skipped_by_source.get(reason, 0) + 1
             continue
 
         # Classify individual files
         for fname in filenames:
             path = dp / fname
-            if _is_ignored(path, root, ignore_patterns):
+            reason = _skip_reason(path)
+            if reason is not None:
                 skipped.append(str(path))
+                skipped_by_source[reason] = skipped_by_source.get(reason, 0) + 1
                 continue
             # Try SF classification first
             ftype = _classify_file(path)
@@ -361,16 +446,12 @@ def detect(root: Path) -> dict:
                         if md_path:
                             doc_files[dtype.value].append(str(md_path))
                         else:
-                            import sys
-
                             print(
                                 f"[graphify-sf] WARNING: {path.name} skipped — "
                                 "install graphify-sf[docs] to enable office file support",
                                 file=sys.stderr,
                             )
                     except Exception as exc:
-                        import sys
-
                         print(f"[graphify-sf] WARNING: office conversion failed for {path}: {exc}", file=sys.stderr)
                 else:
                     doc_files[dtype.value].append(str(path))
@@ -389,6 +470,9 @@ def detect(root: Path) -> dict:
         "bundle_dirs": bundle_dirs,
         "warning": None,
         "skipped": skipped,
+        "skipped_count": len(skipped),
+        "skipped_by_source": skipped_by_source,
+        "respect_ignore": respect_ignore,
     }
 
 
@@ -431,9 +515,9 @@ def save_manifest(
     Path(manifest_path).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def detect_incremental(root: Path, manifest_path: str) -> dict:
+def detect_incremental(root: Path, manifest_path: str, *, respect_ignore: bool = True) -> dict:
     """Like detect(), but returns only new or modified files since the last run."""
-    full = detect(root)
+    full = detect(root, respect_ignore=respect_ignore)
     manifest = load_manifest(manifest_path)
 
     if not manifest:

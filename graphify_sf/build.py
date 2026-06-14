@@ -23,6 +23,27 @@ def _norm_source_file(p: str | None) -> str | None:
     return p.replace("\\", "/") if p else p
 
 
+# Relation priority for the rare case where a simple (non-multi) graph must pick
+# ONE relation for a node-pair that has two (e.g. self-referencing lookups, where
+# object→field `contains` collides with field→object `references`). Higher wins.
+# Structural ownership (`contains`) outranks looser relations so that
+# componentsOnObject / bfsImpact keep working. Unknown relations get a low default.
+_RELATION_PRIORITY: dict[str, int] = {
+    "contains": 100,
+    "master_detail": 90,
+    "calls": 70,
+    "triggers": 70,
+    "dml": 60,
+    "queries": 55,
+    "references": 50,
+    "grants": 40,
+}
+
+
+def _relation_priority(relation: str | None) -> int:
+    return _RELATION_PRIORITY.get(relation or "", 10)
+
+
 def edge_data(G: nx.Graph, u: str, v: str) -> dict:
     raw = G[u][v]
     if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
@@ -87,6 +108,17 @@ def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
             attrs["source_file"] = _norm_source_file(attrs["source_file"])
         attrs["_src"] = src
         attrs["_tgt"] = tgt
+        # In a simple (non-multi) graph a node-pair holds ONE edge, so adding a
+        # second edge between the same pair overwrites the first. This happens for
+        # self-referencing lookups (object→field `contains` + field→object
+        # `references` are the same undirected pair). Keep the structurally more
+        # important relation: `contains` (ownership, used by componentsOnObject /
+        # bfsImpact) must win over a weaker relation rather than be overwritten.
+        # (Full multi-relation preservation is the 0.4.0 MultiGraph work.)
+        if not isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)) and G.has_edge(src, tgt):
+            existing_rel = G.get_edge_data(src, tgt).get("relation")
+            if _relation_priority(existing_rel) >= _relation_priority(attrs.get("relation")):
+                continue  # keep the existing higher/equal-priority edge
         G.add_edge(src, tgt, **attrs)
 
     hyperedges = extraction.get("hyperedges", [])
@@ -337,15 +369,31 @@ def _norm_label(label: str) -> str:
 
 
 def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Merge nodes that share a normalised label, rewriting edge references."""
+    """Merge nodes that share a normalised label AND sf_type, rewriting edge references.
+
+    The merge is gated on ``sf_type`` so that distinct components which happen to
+    normalise to the same label are NOT conflated — e.g. an ApexClass and an
+    LWCComponent named ``CauRefreshIntervention``, or a CustomObject and its
+    CustomTab/Settings. Merging across types previously rewrote their edges onto the
+    wrong survivor and dropped real ``contains``/``references`` edges (notably the
+    object→field ownership edge when an object's label collided with a permset/tab).
+    Same-type merges (the intended case: chunked duplicates carrying a ``_cN`` suffix)
+    are preserved.
+    """
     _CHUNK_SUFFIX = re.compile(r"_c\d+$")
-    canonical: dict[str, dict] = {}
+    canonical: dict[tuple[str, str], dict] = {}
     remap: dict[str, str] = {}
 
     for node in nodes:
-        key = _norm_label(node.get("label", node.get("id", "")))
-        if not key:
+        label_key = _norm_label(node.get("label", node.get("id", "")))
+        if not label_key:
             continue
+        # Only nodes of the same sf_type may merge, so distinct components that
+        # happen to share a normalised label are not conflated. When sf_type is
+        # absent (synthetic/untyped nodes), fall back to label-only merging so the
+        # historical behaviour is preserved for those.
+        type_key = node.get("sf_type") or ""
+        key = (type_key, label_key)
         existing = canonical.get(key)
         if existing is None:
             canonical[key] = node
