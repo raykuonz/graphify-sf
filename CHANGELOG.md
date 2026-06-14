@@ -11,6 +11,32 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.7] — 2026-06-14
+
+### Fixed
+- **macOS: parallel extraction no longer crashes the worker pool and silently truncates the graph.**
+  The PyInstaller-frozen binary had no `multiprocessing.freeze_support()` call, so on macOS (and Windows),
+  where the multiprocessing start method is **spawn**, each pool worker re-executed the binary with Python's
+  internal bootstrap args (`-B --multiprocessing-fork <fd>`). The CLI argument parser intercepted those args
+  first, rejected them (`error: unknown command '-B'`), and every worker died — leaving only the lightweight
+  sequentially-extracted bundles (LWC/Aura/Document) and producing a severely truncated graph (e.g. 572
+  nodes instead of ~9700, with **zero** CustomObject/CustomField/Flow). Linux was unaffected because it uses
+  the `fork` start method (no re-exec). `freeze_support()` now runs first in the entry point, so spawn workers
+  bootstrap correctly. Verified by building the frozen binary and running it under a forced `spawn` start
+  method: full graph restored (9383 nodes, 658 objects, 3239 fields, 166 flows).
+- **A failed worker pool no longer produces a silently-incomplete graph that exits 0.** Previously a
+  `BrokenProcessPool` was caught per-future and swallowed, so the run continued with only partial results and
+  still exited successfully. Any pool-level failure now aborts parallel mode and re-runs the **full**
+  extraction sequentially, emitting a loud `WARNING: parallel worker pool failed — falling back to sequential`
+  so the produced graph is always complete (just slower) and the degradation is visible.
+
+### Added
+- `GRAPHIFY_SF_MP_START` environment variable to override the multiprocessing start method
+  (e.g. `GRAPHIFY_SF_MP_START=spawn`/`fork`) — primarily an escape hatch and a way to exercise the spawn
+  re-exec path on Linux. Unset uses the platform default.
+
+---
+
 ## [0.3.6] — 2026-06-14
 
 ### Added

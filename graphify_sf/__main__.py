@@ -2328,4 +2328,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # PyInstaller + multiprocessing: on macOS/Windows the default start method is
+    # "spawn", which re-executes this frozen binary with internal bootstrap args
+    # (e.g. `-B --multiprocessing-fork <fd>`). freeze_support() MUST run before our
+    # CLI argument parser sees argv — otherwise the parser rejects those args with
+    # "unknown command '-B'" and every pool worker dies, silently truncating the
+    # graph. freeze_support() detects the bootstrap argv, runs the worker, and
+    # exits; in a normal invocation it is a no-op.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()
