@@ -11,6 +11,45 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.6] — 2026-06-14
+
+### Added
+- **`.gitignore` / `.forceignore` are now honored by default** to cut graph noise. Files matched by the
+  project's `.gitignore` or `.forceignore` (deprecated metadata, queues, `__tests__`, jsconfig/eslint/ts
+  scaffolding, build output, etc.) are skipped during the scan instead of becoming phantom nodes. Patterns
+  are parsed with `pathspec` gitignore semantics — negation (`!keep`), anchored (`/foo`), directory
+  (`foo/`), and `**` globs all behave the same as git and the `sf` CLI (the previous `.graphifysfignore`
+  used `fnmatch`, which could not express these). Ignore files are discovered by walking **upward** from
+  the scanned directory, so `graphify-sf force-app` still picks up the `.gitignore`/`.forceignore` at the
+  project root. The existing `.graphifysfignore` is still applied, and the hardcoded `_SKIP_DIRS` floor
+  (`.git`, `node_modules`, `.sfdx`, …) is unchanged.
+- **`--include-ignored` flag** to opt out: scans every file regardless of `.gitignore`/`.forceignore` when
+  you suspect a real metadata file was excluded.
+- **Honest skip summary** printed after the scan, e.g.
+  `skipped 57 files (.forceignore: 57) — use --include-ignored to include them`, so dropped files are
+  never silent. (`detect()` now also returns `skipped_count`, `skipped_by_source`, and `respect_ignore`.)
+
+### Fixed
+- The post-scan log previously printed the raw `skipped` list object instead of a count
+  (`… N skipped` now shows the actual number).
+- **Distinct components with the same normalised label are no longer merged.** `deduplicate_by_label`
+  collapsed any two nodes whose labels normalised the same — regardless of type — so an `ApexClass` and a
+  similarly-named `LWCComponent`, or a `CustomObject` and its `CustomTab`/`Settings`/`PermissionSet`, were
+  conflated into one node and their edges silently rewritten onto the wrong survivor. On a real 9k-node org
+  this wrongly merged **83 node pairs**. Dedup is now gated on `sf_type`: only same-type nodes merge (the
+  intended chunked-duplicate case still works), recovering those nodes and the object→field ownership edges
+  that had been dropped (e.g. fields under a managed-package object whose label collided with a permission
+  set).
+- **Self-referencing lookup fields keep their `contains` ownership edge.** When a lookup/master-detail
+  field points back at its own parent object, the object→field `contains` edge and the field→object
+  `references` edge occupy the same undirected node-pair and one overwrote the other, leaving the field
+  unattached to its object. The build now keeps the higher-priority relation on collision (`contains`
+  outranks `references`), so `componentsOnObject`/`bfsImpact` see every field. Together with the dedup fix,
+  object→field attachment on the test org went from 99.4% to **100%** (18 orphaned fields → 0). Preserving
+  *both* relations on such pairs is the planned 0.4.0 MultiGraph work.
+
+---
+
 ## [0.3.5] — 2026-06-13
 
 ### Fixed

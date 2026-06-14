@@ -214,6 +214,88 @@ def test_deduplicate_removes_self_loops():
 
 
 # ---------------------------------------------------------------------------
+# Regression: dedup must NOT merge nodes of different sf_type (0.3.6 bug fix)
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_does_not_merge_across_sf_type():
+    """A CustomObject and a CustomTab/PermissionSet that normalise to the same
+    label must remain SEPARATE nodes — previously they were conflated and the
+    object's edges were rewritten onto the wrong survivor."""
+    from graphify_sf.build import deduplicate_by_label
+
+    nodes = [
+        {"id": "object_supporterconnection__c", "label": "SupporterConnection__c", "sf_type": "CustomObject"},
+        {"id": "customtab_supporterconnection__c", "label": "SupporterConnection__c", "sf_type": "CustomTab"},
+    ]
+    edges = []
+    deduped_nodes, _ = deduplicate_by_label(nodes, edges)
+    ids = {n["id"] for n in deduped_nodes}
+    assert "object_supporterconnection__c" in ids
+    assert "customtab_supporterconnection__c" in ids
+    assert len(deduped_nodes) == 2, "different sf_type must not merge"
+
+
+def test_dedup_still_merges_same_sf_type_chunks():
+    """Same-type chunked duplicates (the intended case) still merge."""
+    from graphify_sf.build import deduplicate_by_label
+
+    nodes = [
+        {"id": "doc_readme", "label": "README", "sf_type": "Document"},
+        {"id": "doc_readme_c1", "label": "README", "sf_type": "Document"},  # chunk
+    ]
+    edges = [{"source": "doc_readme_c1", "target": "doc_readme", "relation": "references"}]
+    deduped_nodes, _ = deduplicate_by_label(nodes, edges)
+    assert len(deduped_nodes) == 1, "same-type chunk duplicates should merge"
+    assert deduped_nodes[0]["id"] == "doc_readme"
+
+
+def test_self_lookup_keeps_contains_edge():
+    """A self-referencing lookup field (object→field `contains` collides with
+    field→object `references` in the undirected simple graph) must keep the
+    `contains` ownership edge — it outranks `references`."""
+    from graphify_sf.build import build_from_json
+
+    extraction = {
+        "nodes": [
+            {"id": "object_account", "label": "Account", "sf_type": "CustomObject", "file_type": "object"},
+            {
+                "id": "field_account_parent__c",
+                "label": "Account.Parent__c",
+                "sf_type": "CustomField",
+                "file_type": "object",
+            },
+        ],
+        "edges": [
+            {"source": "object_account", "target": "field_account_parent__c", "relation": "contains"},
+            {"source": "field_account_parent__c", "target": "object_account", "relation": "references"},
+        ],
+    }
+    G = build_from_json(extraction)  # undirected (default)
+    assert G.has_edge("object_account", "field_account_parent__c")
+    assert G.get_edge_data("object_account", "field_account_parent__c")["relation"] == "contains"
+
+
+def test_contains_not_overwritten_regardless_of_edge_order():
+    """contains must win even when the weaker relation is added second."""
+    from graphify_sf.build import build_from_json
+
+    extraction = {
+        "nodes": [
+            {"id": "object_x", "label": "X", "sf_type": "CustomObject"},
+            {"id": "field_x_self__c", "label": "X.Self__c", "sf_type": "CustomField"},
+        ],
+        # references first, contains second
+        "edges": [
+            {"source": "field_x_self__c", "target": "object_x", "relation": "references"},
+            {"source": "object_x", "target": "field_x_self__c", "relation": "contains"},
+        ],
+    }
+    G = build_from_json(extraction)
+    assert G.get_edge_data("object_x", "field_x_self__c")["relation"] == "contains"
+
+
+# ---------------------------------------------------------------------------
 # _ensure_stub_nodes
 # ---------------------------------------------------------------------------
 

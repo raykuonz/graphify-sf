@@ -625,9 +625,33 @@ All configuration via environment variables:
 | `GRAPHIFY_SF_REBUILD_MEMORY_LIMIT_MB` | `` | Cap memory usage for background watch rebuilds (MB) |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Override Claude Code config directory — only set if your Claude Code config lives at a non-standard path (company-managed dotfiles, CI, or multiple installations) |
 
-### `.graphifysfignore`
+### Ignoring files (`.gitignore`, `.forceignore`, `.graphifysfignore`)
 
-Place a `.graphifysfignore` file at your project root to exclude files/directories from scanning (same syntax as `.gitignore` glob patterns):
+By default graphify-sf **respects your project's `.gitignore` and `.forceignore`** so that
+deprecated metadata, `__tests__`, queues, editor/lint scaffolding, and build output don't become
+noise in the graph. Patterns use full gitignore semantics (negation `!keep`, anchored `/foo`,
+directory `foo/`, `**`), parsed with `pathspec` — the same way git and the `sf` CLI read them. The
+ignore files are found by walking **up** from the path you scan, so `graphify-sf force-app` still
+honors the `.gitignore`/`.forceignore` at your project root.
+
+After a scan, any skipped files are reported honestly:
+
+```
+[graphify-sf] 5573 metadata files found, 57 skipped
+[graphify-sf] skipped 57 files (.forceignore: 57) — use --include-ignored to include them
+```
+
+To scan **everything** regardless of `.gitignore`/`.forceignore` (e.g. you suspect a real metadata
+file was excluded):
+
+```bash
+graphify-sf <path> --include-ignored
+```
+
+#### `.graphifysfignore`
+
+For graphify-specific exclusions independent of git/SF, place a `.graphifysfignore` file at your
+project root (glob patterns, always applied):
 
 ```
 # Exclude test data

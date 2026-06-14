@@ -145,3 +145,99 @@ def test_detect_skipped_list(simple_detect_result):
     """Test that skipped list is present."""
     assert "skipped" in simple_detect_result
     assert isinstance(simple_detect_result["skipped"], list)
+
+
+# ---------------------------------------------------------------------------
+# .gitignore / .forceignore support (default-on, --include-ignored opt-out)
+# ---------------------------------------------------------------------------
+
+
+def _make_sfdx_tree(root: Path) -> None:
+    """Create a tiny SFDX tree: one kept class + one queue + a flow."""
+    classes = root / "force-app" / "main" / "default" / "classes"
+    classes.mkdir(parents=True)
+    (classes / "Keep.cls").write_text("public class Keep {}")
+    (classes / "Keep.cls-meta.xml").write_text(
+        '<?xml version="1.0"?><ApexClass xmlns="http://soap.sforce.com/2006/04/metadata"><apiVersion>59.0</apiVersion></ApexClass>'
+    )
+    queues = root / "force-app" / "main" / "default" / "queues"
+    queues.mkdir(parents=True)
+    (queues / "Sales.queue-meta.xml").write_text(
+        '<?xml version="1.0"?><Queue xmlns="http://soap.sforce.com/2006/04/metadata"><name>Sales</name></Queue>'
+    )
+    flows = root / "force-app" / "main" / "default" / "flows"
+    flows.mkdir(parents=True)
+    (flows / "Deprecated.flow-meta.xml").write_text(
+        '<?xml version="1.0"?><Flow xmlns="http://soap.sforce.com/2006/04/metadata"><label>Deprecated</label></Flow>'
+    )
+
+
+def test_forceignore_skips_files_by_default(tmp_path):
+    """.forceignore patterns skip matching files by default, with per-source count."""
+    from graphify_sf.detect import detect
+
+    _make_sfdx_tree(tmp_path)
+    (tmp_path / ".forceignore").write_text("**/queues/**\n**/Deprecated.flow-meta.xml\n")
+
+    res = detect(tmp_path)
+    all_files = [f for lst in res["files"].values() for f in lst]
+    assert not any("queues" in f for f in all_files), "queue file should be skipped"
+    assert not any("Deprecated" in f for f in all_files), "deprecated flow should be skipped"
+    assert any("Keep.cls" in f for f in all_files), "kept class must remain"
+    assert res["skipped_count"] >= 2
+    assert res["skipped_by_source"][".forceignore"] >= 2
+    assert res["respect_ignore"] is True
+
+
+def test_gitignore_skips_files_by_default(tmp_path):
+    """.gitignore patterns skip matching files by default."""
+    from graphify_sf.detect import detect
+
+    _make_sfdx_tree(tmp_path)
+    (tmp_path / ".gitignore").write_text("**/Deprecated.flow-meta.xml\n")
+
+    res = detect(tmp_path)
+    all_files = [f for lst in res["files"].values() for f in lst]
+    assert not any("Deprecated" in f for f in all_files)
+    assert res["skipped_by_source"][".gitignore"] >= 1
+
+
+def test_include_ignored_scans_everything(tmp_path):
+    """respect_ignore=False (--include-ignored) ignores .gitignore/.forceignore."""
+    from graphify_sf.detect import detect
+
+    _make_sfdx_tree(tmp_path)
+    (tmp_path / ".forceignore").write_text("**/queues/**\n**/Deprecated.flow-meta.xml\n")
+
+    res = detect(tmp_path, respect_ignore=False)
+    all_files = [f for lst in res["files"].values() for f in lst]
+    assert any("Deprecated" in f for f in all_files), "ignored flow must be included"
+    assert res["skipped_count"] == 0
+    assert res["respect_ignore"] is False
+
+
+def test_ignore_files_discovered_upward_from_subdir(tmp_path):
+    """Scanning a subdir still finds .forceignore at the project root (git-style upward walk)."""
+    from graphify_sf.detect import detect
+
+    _make_sfdx_tree(tmp_path)
+    # ignore file at repo root; scan the force-app subdir
+    (tmp_path / ".forceignore").write_text("**/Deprecated.flow-meta.xml\n")
+
+    res = detect(tmp_path / "force-app")
+    all_files = [f for lst in res["files"].values() for f in lst]
+    assert not any("Deprecated" in f for f in all_files), "root .forceignore must apply when scanning subdir"
+    assert res["skipped_by_source"][".forceignore"] >= 1
+
+
+def test_gitignore_negation_semantics(tmp_path):
+    """gitignore negation (!keep) is honored — fnmatch could not do this."""
+    from graphify_sf.detect import detect
+
+    _make_sfdx_tree(tmp_path)
+    # ignore all flows, then un-ignore the one we keep
+    (tmp_path / ".gitignore").write_text("**/*.flow-meta.xml\n!**/Deprecated.flow-meta.xml\n")
+
+    res = detect(tmp_path)
+    all_files = [f for lst in res["files"].values() for f in lst]
+    assert any("Deprecated" in f for f in all_files), "negated pattern must re-include the flow"
