@@ -7,8 +7,10 @@ Two-pass pipeline:
 
 from __future__ import annotations
 
+import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 from .agentforce import (
@@ -245,21 +247,48 @@ def extract(
 
     # Phase 1: Extract single files
     use_parallel = parallel and len(single_files) > 8
+    parallel_failed = False
     if use_parallel:
+        # Allow overriding the multiprocessing start method (mainly for testing the
+        # spawn re-exec path on Linux, where the default is fork). On macOS/Windows
+        # the OS default is already "spawn"; freeze_support() in __main__ makes that
+        # work for the frozen binary. Unset → use the platform default context.
+        import multiprocessing as _mp
+
+        _start = os.environ.get("GRAPHIFY_SF_MP_START")
+        _ctx = _mp.get_context(_start) if _start else None
         try:
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=_ctx) as executor:
                 futures = {executor.submit(_extract_file, p): p for p in single_files}
                 for fut in as_completed(futures):
                     try:
                         result = fut.result()
                         all_nodes.extend(result.get("nodes", []))
                         all_edges.extend(result.get("edges", []))
+                    except BrokenProcessPool:
+                        # The worker pool itself died (e.g. PyInstaller spawn
+                        # bootstrap incompatibility on macOS). Partial results are
+                        # unreliable — abort parallel and redo everything sequentially
+                        # rather than emit a silently-truncated graph.
+                        parallel_failed = True
+                        break
                     except Exception as exc:
+                        # A single file failed to parse — log and continue; this does
+                        # not indicate a pool-level failure.
                         p = futures[fut]
                         print(f"[graphify-sf] WARNING: {p}: {exc}", file=sys.stderr)
-        except Exception:
-            # Fall back to sequential if parallel fails (e.g. on Windows)
-            # Clear any partial results from completed futures to prevent duplicates
+        except (BrokenProcessPool, OSError):
+            # The executor could not be created / a worker crashed at pool level.
+            parallel_failed = True
+
+        if parallel_failed:
+            print(
+                "[graphify-sf] WARNING: parallel worker pool failed — "
+                "falling back to sequential extraction (graph will be complete, just slower)",
+                file=sys.stderr,
+            )
+            # Discard partial parallel results to prevent duplicates, then redo
+            # the full single-file extraction sequentially below.
             all_nodes.clear()
             all_edges.clear()
             use_parallel = False

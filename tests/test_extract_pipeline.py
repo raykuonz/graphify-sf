@@ -187,3 +187,76 @@ def test_stub_node_exists_for_standard_object_after_extract(tmp_path):
 
     lead_node = next(n for n in extraction["nodes"] if n["id"] == "object_lead")
     assert lead_node.get("stub") is True
+
+
+# ---------------------------------------------------------------------------
+# Parallel worker-pool failure → sequential fallback (0.3.7 macOS spawn bug)
+# ---------------------------------------------------------------------------
+
+
+def _make_multi_object_tree(root):
+    """Create >8 single-file metadata entries so parallel extraction is used."""
+    objects = root / "force-app" / "main" / "default" / "objects"
+    for i in range(12):
+        obj = objects / f"Obj{i}__c"
+        (obj / "fields").mkdir(parents=True)
+        (obj / f"Obj{i}__c.object-meta.xml").write_text(
+            '<?xml version="1.0"?><CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">'
+            f"<label>Obj{i}</label></CustomObject>"
+        )
+        (obj / "fields" / f"F{i}__c.field-meta.xml").write_text(
+            '<?xml version="1.0"?><CustomField xmlns="http://soap.sforce.com/2006/04/metadata">'
+            f"<fullName>F{i}__c</fullName><type>Text</type><label>F{i}</label></CustomField>"
+        )
+
+
+def test_parallel_pool_failure_falls_back_to_complete_sequential_graph(tmp_path, monkeypatch, capsys):
+    """If the worker pool dies (e.g. PyInstaller spawn bootstrap on macOS), extraction
+    must fall back to sequential and still produce the COMPLETE graph — never a
+    silently-truncated one. Regression for the 0.3.6 macOS bug."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    from graphify_sf import extract as extract_mod
+    from graphify_sf.detect import detect
+    from graphify_sf.extract import extract
+
+    _make_multi_object_tree(tmp_path)
+    detection = detect(tmp_path)
+
+    # Baseline: what a healthy sequential run produces.
+    baseline = extract(detection, parallel=False)
+    baseline_ids = {n["id"] for n in baseline["nodes"]}
+    assert any(i.startswith("object_") for i in baseline_ids)
+    assert any(i.startswith("field_") for i in baseline_ids)
+
+    # Simulate a broken pool: the executor's futures all raise BrokenProcessPool.
+    class _BrokenExecutor:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def submit(self, *a, **k):
+            class _F:
+                def result(self_inner):
+                    raise BrokenProcessPool("simulated worker crash")
+
+            return _F()
+
+    monkeypatch.setattr(extract_mod, "ProcessPoolExecutor", _BrokenExecutor)
+    # as_completed must just yield the futures back
+    monkeypatch.setattr(extract_mod, "as_completed", lambda futs: list(futs))
+
+    degraded = extract(detection, parallel=True)
+    degraded_ids = {n["id"] for n in degraded["nodes"]}
+
+    # The fallback graph must equal the healthy sequential graph — no truncation.
+    assert degraded_ids == baseline_ids, "pool failure must fall back to a COMPLETE graph"
+    # And it must be loud about it.
+    err = capsys.readouterr().err
+    assert "parallel worker pool failed" in err
+    assert "falling back to sequential" in err

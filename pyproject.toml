@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graphify-sf"
-version = "0.3.6"
+version = "0.3.7"
 description = "Turn any Salesforce SFDX project into a queryable knowledge graph — fully offline, no org connection required."
 readme = "README.md"
 requires-python = ">=3.10"
