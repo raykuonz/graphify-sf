@@ -120,12 +120,34 @@ async function download() {
   process.stdout.write(`graphify-sf: installed to ${dest}\n`);
 }
 
-async function ensureBinary() {
-  const dest = binaryPath();
-  if (!fs.existsSync(dest)) {
-    await download();
+// Resolve a user-supplied binary path from the GRAPHIFY_BIN environment
+// variable. This is the highest-priority resolution and is the documented
+// escape hatch for locked-down networks where the GitHub download is blocked.
+// Returns the path if it points at an existing file, otherwise null.
+function envBinary() {
+  const p = process.env.GRAPHIFY_BIN;
+  if (p && fs.existsSync(p)) {
+    return p;
   }
+  return null;
+}
+
+async function ensureBinary() {
+  // 1. Explicit override always wins.
+  const fromEnv = envBinary();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  // 2. Already-downloaded binary in the package's bin/ dir.
+  const dest = binaryPath();
+  if (fs.existsSync(dest)) {
+    return dest;
+  }
+
+  // 3. Lazily download on first use.
+  await download();
   return dest;
 }
 
-module.exports = { assetName, binaryPath, binDir, download, ensureBinary };
+module.exports = { assetName, binaryPath, binDir, download, ensureBinary, envBinary };

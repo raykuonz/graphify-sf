@@ -11,6 +11,31 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.8] — 2026-06-16
+
+### Fixed
+- **A blocked or failed binary download during `npm install` no longer aborts the consumer's install.**
+  The npm wrapper's `postinstall` hook fetches a prebuilt CLI binary from GitHub Releases. On locked-down
+  corporate networks (proxy/firewall blocking GitHub, or a 404), the download would reject and the hook
+  called `process.exit(1)`, which fails the entire `npm install` for every package depending on
+  graphify-sf. The hook now always exits `0`: a failed pre-fetch is non-fatal, the binary is fetched
+  lazily on first run instead, and a clear remediation message is printed (use `pipx install graphify-sf`,
+  or set `GRAPHIFY_BIN` to an existing binary). Verified with a regression test that simulates a failed
+  download and asserts the postinstall exit code is `0`.
+- **Corrected the in-repo npm package version (`0.3.1` → `0.3.8`).** The download URL is derived from the
+  package version; the stale `0.3.1` produced a guaranteed `404` against the `v0.3.1` release asset on any
+  local/dev install of the wrapper. (Published installs were unaffected because the release workflow
+  rewrites the version from the tag, but the drift was a latent footgun.)
+
+### Added
+- **`GRAPHIFY_BIN` environment variable** — point graphify-sf at an existing binary to bypass the download
+  entirely (highest-priority resolution in `ensureBinary()`). The documented escape hatch for air-gapped or
+  proxy-restricted environments.
+- npm-side regression test suite (`npm/test/`, Node's built-in `node:test`, zero dependencies) covering the
+  non-fatal postinstall behaviour and `GRAPHIFY_BIN` resolution precedence.
+
+---
+
 ## [0.3.7] — 2026-06-14
 
 ### Fixed
