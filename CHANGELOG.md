@@ -21,6 +21,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so the binary arrives with the dependency tree itself — even on networks that block GitHub Releases.
   Verified end-to-end in a real consumer `node_modules` layout: postinstall is silent, exits 0, and makes
   zero network calls when the platform subpackage is present.
+- Python package version bumped to 0.3.9 to keep PyPI, npm and the release tag in lockstep (no functional
+  Python changes in this release; the distribution improvements are all in the npm wrapper).
 - `lib/download.js` `ensureBinary()` resolution order is now: (1) `GRAPHIFY_BIN`, (2) the installed platform
   subpackage (new, no network), (3) a previously-downloaded binary in `bin/`, (4) GitHub Releases download.
 - `install.js` postinstall short-circuits (no network) when a binary already resolves from the env override
