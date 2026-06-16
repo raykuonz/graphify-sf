@@ -46,7 +46,13 @@ from .doc import extract_doc_file
 from .flow import extract_flow
 from .layout import extract_layout
 from .lwc import extract_lwc_bundle
-from .object import extract_child_object, extract_custom_field, extract_custom_object
+from .object import (
+    extract_child_object,
+    extract_custom_field,
+    extract_custom_object,
+    extract_field_set,
+    extract_global_value_set,
+)
 from .profile import extract_permset, extract_profile
 from .rules import extract_duplicate_rule, extract_matching_rule, extract_restriction_rule
 from .sharing import extract_sharing_rules, extract_sharing_set
@@ -70,6 +76,9 @@ _DISPATCH: dict[str, object] = {
     ".recordType-meta.xml": extract_child_object,
     ".listView-meta.xml": extract_child_object,
     ".compactLayout-meta.xml": extract_child_object,
+    ".businessProcess-meta.xml": extract_child_object,  # E2: creates node for RecordType ref target
+    ".fieldSet-meta.xml": extract_field_set,  # E1
+    ".globalValueSet-meta.xml": extract_global_value_set,  # E1
     # UI
     ".layout-meta.xml": extract_layout,
     ".flexipage-meta.xml": extract_flexipage,

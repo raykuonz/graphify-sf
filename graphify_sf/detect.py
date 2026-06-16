@@ -40,6 +40,7 @@ _COMPOUND_EXT_MAP = {
     ".recordType-meta.xml": SFFileType.CHILD_OBJECT,
     ".listView-meta.xml": SFFileType.CHILD_OBJECT,
     ".compactLayout-meta.xml": SFFileType.CHILD_OBJECT,
+    ".businessProcess-meta.xml": SFFileType.CHILD_OBJECT,  # E2: target for RecordType refs
     ".layout-meta.xml": SFFileType.LAYOUT,
     ".profile-meta.xml": SFFileType.PROFILE,
     ".permissionset-meta.xml": SFFileType.PERMISSIONSET,
@@ -65,6 +66,8 @@ _COMPOUND_EXT_MAP = {
     ".restrictionRule-meta.xml": SFFileType.CONFIG,  # B5
     ".duplicateRule-meta.xml": SFFileType.CONFIG,  # B5
     ".matchingRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".fieldSet-meta.xml": SFFileType.CHILD_OBJECT,  # E1: FieldSet
+    ".globalValueSet-meta.xml": SFFileType.CONFIG,  # E1: GlobalValueSet
     ".resource-meta.xml": SFFileType.CONFIG,  # D3: StaticResource
     ".quickAction-meta.xml": SFFileType.CONFIG,  # D3: QuickAction
     ".role-meta.xml": SFFileType.CONFIG,
