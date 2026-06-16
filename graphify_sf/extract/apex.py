@@ -156,6 +156,8 @@ _APEX_KEYWORDS = frozenset(
         "standardcontroller",
         "standardsetcontroller",
         "componentcontroller",
+        # Platform services that look like class references but are not user-defined Apex
+        "eventbus",
     }
 )
 

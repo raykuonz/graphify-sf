@@ -31,14 +31,19 @@ def test_build_from_json_node_attributes(simple_extraction):
 
 
 def test_build_from_json_edge_attributes(simple_extraction):
-    """Test that edges have correct attributes."""
-    from graphify_sf.build import build_from_json
+    """Test that edges have correct attributes.
+
+    Updated for MultiDiGraph (0.4.0): G[u][v] on a MultiDiGraph returns a dict
+    keyed by edge-key integers, not a plain attribute dict. Use edge_data() which
+    returns the first edge's attribute dict and is graph-type-agnostic.
+    """
+    from graphify_sf.build import build_from_json, edge_data
 
     G = build_from_json(simple_extraction)
 
     # Check that edges have expected attributes
     for u, v in list(G.edges())[:5]:  # Check first 5 edges
-        data = G[u][v]
+        data = edge_data(G, u, v)
         assert "relation" in data or "confidence" in data
 
 
@@ -251,10 +256,15 @@ def test_dedup_still_merges_same_sf_type_chunks():
 
 
 def test_self_lookup_keeps_contains_edge():
-    """A self-referencing lookup field (object→field `contains` collides with
-    field→object `references` in the undirected simple graph) must keep the
-    `contains` ownership edge — it outranks `references`."""
-    from graphify_sf.build import build_from_json
+    """A self-referencing lookup field emits object→field `contains` and
+    field→object `references`.
+
+    Under MultiDiGraph (0.4.0 default) BOTH directed edges are stored — no
+    collision occurs because the directions are different.  The test verifies
+    `contains` is present; under the legacy multigraph=False simple-graph path
+    the priority mechanism keeps `contains` over `references` when they collapse.
+    """
+    from graphify_sf.build import build_from_json, edge_datas
 
     extraction = {
         "nodes": [
@@ -271,14 +281,26 @@ def test_self_lookup_keeps_contains_edge():
             {"source": "field_account_parent__c", "target": "object_account", "relation": "references"},
         ],
     }
-    G = build_from_json(extraction)  # undirected (default)
+    # MultiDiGraph default: both directed edges survive
+    G = build_from_json(extraction)
     assert G.has_edge("object_account", "field_account_parent__c")
-    assert G.get_edge_data("object_account", "field_account_parent__c")["relation"] == "contains"
+    rels = {ed.get("relation") for ed in edge_datas(G, "object_account", "field_account_parent__c")}
+    assert "contains" in rels
+
+    # Legacy simple-graph path: priority mechanism keeps contains
+    G_simple = build_from_json(extraction, multigraph=False)
+    assert G_simple.has_edge("object_account", "field_account_parent__c")
+    assert G_simple.get_edge_data("object_account", "field_account_parent__c")["relation"] == "contains"
 
 
 def test_contains_not_overwritten_regardless_of_edge_order():
-    """contains must win even when the weaker relation is added second."""
-    from graphify_sf.build import build_from_json
+    """contains must survive regardless of edge order.
+
+    Under MultiDiGraph (default) both edges are stored (no collision).
+    Under multigraph=False the priority mechanism keeps contains even when
+    references is added first.
+    """
+    from graphify_sf.build import build_from_json, edge_datas
 
     extraction = {
         "nodes": [
@@ -291,8 +313,14 @@ def test_contains_not_overwritten_regardless_of_edge_order():
             {"source": "object_x", "target": "field_x_self__c", "relation": "contains"},
         ],
     }
+    # MultiDiGraph default: both directed edges survive
     G = build_from_json(extraction)
-    assert G.get_edge_data("object_x", "field_x_self__c")["relation"] == "contains"
+    rels = {ed.get("relation") for ed in edge_datas(G, "object_x", "field_x_self__c")}
+    assert "contains" in rels
+
+    # Legacy simple-graph path: priority mechanism keeps contains over references
+    G_simple = build_from_json(extraction, multigraph=False)
+    assert G_simple.get_edge_data("object_x", "field_x_self__c")["relation"] == "contains"
 
 
 # ---------------------------------------------------------------------------

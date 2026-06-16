@@ -11,6 +11,69 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.0]
+
+### ⚠️ BREAKING CONTRACT CHANGE — graph.json is now a MultiDiGraph
+
+**graph.json now declares `"multigraph": true`.** Every entry in `links` carries
+a `"key"` integer. A single node-pair **may appear multiple times** in `links`,
+each entry with a distinct `key` and its own `relation`. Downstream consumers that
+assume "one edge per source→target pair" will silently read only the **first**
+relation and drop the rest — a correctness regression, not a crash. **Every
+consumer must switch from `find(…)` to `filter(…)` when reading `links`.**
+
+This fulfils the planned 0.4.0 MultiGraph work noted in the 0.3.6 CHANGELOG.
+
+#### Why the change is needed
+`build_from_json` previously built an undirected simple `nx.Graph()` where a
+node-pair holds ONE edge. Same-direction parallel relations — e.g. an Apex class
+that BOTH `queries` AND `dml`-writes the same object — collapsed silently: the
+second `add_edge` overwrote the first. On a real org this erases ~149
+`{queries,dml}` pairs. The loss was invisible in graph.json (0 multi-relation
+pairs ever survived).
+
+#### What changes
+- `build_from_json` / `build` / `build_merge_sf` now default to
+  `multigraph=True`, constructing a `nx.MultiDiGraph` that stores **all**
+  parallel directed edges without collision.
+- The old `_RELATION_PRIORITY` collision path (kept for `multigraph=False`) is
+  bypassed entirely for the default MultiDiGraph path.
+- `node_link_data(G, edges="links")` serialises the MultiDiGraph natively; each
+  link gains a `"key"` field. `node_link_graph` reconstructs the MultiDiGraph
+  automatically when it sees `"multigraph": true`.
+- Consumer query sites (`--explain --filter-relation`, Obsidian export, analysis)
+  now iterate `edge_datas(G, u, v)` so all parallel relations are found, not just
+  the first.
+
+### Added (Epic A–F coverage breadth)
+- Integration & external dependencies (A1–A8): HTTP callouts, Flow callouts,
+  RemoteSiteSetting, ExternalDataSource/ExternalObject, PlatformEvent/CDC,
+  Custom Metadata/Settings config reads, AuthProvider/CSP/CORS, Workflow outbound
+  messages.
+- Security & sharing (B1–B5): Org-Wide Defaults, SharingRules/SharingSets,
+  PermSetGroup membership, Profile/PermSet userPermissions + tab/app visibility,
+  RestrictionRule + Duplicate/MatchingRule.
+- Automation completeness (C1–C4): WorkflowFieldUpdate/Task, ProcessBuilder
+  distinction, Flow trigger completeness, ValidationRule standard field refs.
+- UI layer → backend linkage (D1–D3): LWC schema/label/resource imports,
+  Aura/VF controller linkage, FlexiPage Aura embeds + StaticResource/QuickAction/
+  CustomTab-App edges.
+- Data model completeness (E1–E3): FieldSet/GlobalValueSet, CompactLayout/
+  ListView/RecordType inner refs, polymorphic lookups.
+- Reporting & packaging (F1–F2): Report/Dashboard/ReportType extraction,
+  Package/InstalledPackage nodes + namespace tagging.
+
+### Fixed (cleanups)
+- `EventBus` platform type no longer becomes a phantom `ApexClass` node when
+  `EventBus.publish(...)` appears in Apex. `eventbus` is now in the keyword
+  exclusion set so it is never treated as a user-defined class reference.
+- `CustomField --uses--> GlobalValueSet` edge is now emitted exactly once per
+  field even when the underlying XML has multiple `<valueSet>` elements.
+- `ApexTrigger --subscribes--> PlatformEvent` edge is now emitted (in addition
+  to the existing `triggers` edge) whenever a trigger fires on a `__e` object.
+
+---
+
 ## [0.3.9] — 2026-06-16
 
 ### Changed

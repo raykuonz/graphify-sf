@@ -11,7 +11,7 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 from graphify_sf.analyze import _node_community_map
-from graphify_sf.build import edge_data
+from graphify_sf.build import edge_datas
 from graphify_sf.security import sanitize_label
 
 
@@ -682,11 +682,11 @@ def to_obsidian(
         if neighbors:
             lines.append("## Connections")
             for neighbor in sorted(neighbors, key=lambda n: G.nodes[n].get("label", n)):
-                edata = edge_data(G, node_id, neighbor)
                 neighbor_label = node_filename[neighbor]
-                relation = edata.get("relation", "")
-                confidence = edata.get("confidence", "EXTRACTED")
-                lines.append(f"- [[{neighbor_label}]] - `{relation}` [{confidence}]")
+                for edata in edge_datas(G, node_id, neighbor):
+                    relation = edata.get("relation", "")
+                    confidence = edata.get("confidence", "EXTRACTED")
+                    lines.append(f"- [[{neighbor_label}]] - `{relation}` [{confidence}]")
             lines.append("")
 
         inline_tags = " ".join(f"#{t}" for t in node_tags)

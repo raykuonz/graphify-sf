@@ -301,20 +301,25 @@ def extract_custom_field(path: Path) -> dict:
                     )
 
         # E1: picklist field referencing a Global Value Set → uses edge EXTRACTED.
-        vs_el = _findall(root_el, "valueSet", ns)
-        if vs_el:
-            vsn_el = _findall(vs_el[0], "valueSetName", ns)
+        # Dedup guard: some XML structures can produce multiple <valueSet> elements
+        # or nested <valueSetName> occurrences; emit the edge at most once per GVS.
+        seen_gvs: set[str] = set()
+        for vs_item in _findall(root_el, "valueSet", ns):
+            vsn_el = _findall(vs_item, "valueSetName", ns)
             if vsn_el and vsn_el[0].text:
                 gvs_name = vsn_el[0].text.strip()
-                edges.append(
-                    _make_edge(
-                        field_nid,
-                        make_sf_id("globalvalueset", gvs_name),
-                        "uses",
-                        "EXTRACTED",
-                        str_path,
+                gvs_tgt = make_sf_id("globalvalueset", gvs_name)
+                if gvs_tgt not in seen_gvs:
+                    seen_gvs.add(gvs_tgt)
+                    edges.append(
+                        _make_edge(
+                            field_nid,
+                            gvs_tgt,
+                            "uses",
+                            "EXTRACTED",
+                            str_path,
+                        )
                     )
-                )
     except (ET.ParseError, OSError):
         pass
 

@@ -58,8 +58,13 @@ def edge_datas(G: nx.Graph, u: str, v: str) -> list[dict]:
     return [raw]
 
 
-def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
-    """Build a NetworkX graph from an extraction dict."""
+def build_from_json(extraction: dict, *, directed: bool = False, multigraph: bool = True) -> nx.Graph:
+    """Build a NetworkX graph from an extraction dict.
+
+    multigraph=True (default) creates a MultiDiGraph so same-direction parallel
+    relations (e.g. queries + dml on the same apex→object pair) are preserved.
+    multigraph=False falls back to the pre-0.4.0 simple-graph behaviour.
+    """
     if "edges" not in extraction and "links" in extraction:
         extraction = dict(extraction, edges=extraction["links"])
 
@@ -70,7 +75,10 @@ def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
     _ensure_stub_nodes(nodes_list, edges_list)
     extraction = dict(extraction, nodes=nodes_list, edges=edges_list)
 
-    G: nx.Graph = nx.DiGraph() if directed else nx.Graph()
+    if multigraph:
+        G: nx.Graph = nx.MultiDiGraph()
+    else:
+        G = nx.DiGraph() if directed else nx.Graph()
     for node in extraction.get("nodes", []):
         if not isinstance(node, dict) or "id" not in node:
             continue
@@ -109,12 +117,9 @@ def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
         attrs["_src"] = src
         attrs["_tgt"] = tgt
         # In a simple (non-multi) graph a node-pair holds ONE edge, so adding a
-        # second edge between the same pair overwrites the first. This happens for
-        # self-referencing lookups (object→field `contains` + field→object
-        # `references` are the same undirected pair). Keep the structurally more
-        # important relation: `contains` (ownership, used by componentsOnObject /
-        # bfsImpact) must win over a weaker relation rather than be overwritten.
-        # (Full multi-relation preservation is the 0.4.0 MultiGraph work.)
+        # second edge between the same pair overwrites the first. Keep the
+        # structurally more important relation (`contains` outranks `references`).
+        # For MultiDiGraph this branch is skipped — ALL parallel edges are stored.
         if not isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)) and G.has_edge(src, tgt):
             existing_rel = G.get_edge_data(src, tgt).get("relation")
             if _relation_priority(existing_rel) >= _relation_priority(attrs.get("relation")):
@@ -309,7 +314,7 @@ def _ensure_stub_nodes(nodes: list[dict], edges: list[dict]) -> None:
     nodes.extend(stubs)
 
 
-def build(extractions: list[dict], *, directed: bool = False) -> nx.Graph:
+def build(extractions: list[dict], *, directed: bool = False, multigraph: bool = True) -> nx.Graph:
     """Merge multiple extraction results into one graph."""
     combined: dict = {
         "nodes": [],
@@ -332,7 +337,7 @@ def build(extractions: list[dict], *, directed: bool = False) -> nx.Graph:
     # no .object-meta.xml but are referenced by triggers or flows).
     _ensure_stub_nodes(combined["nodes"], combined["edges"])
 
-    return build_from_json(combined, directed=directed)
+    return build_from_json(combined, directed=directed, multigraph=multigraph)
 
 
 def build_merge_sf(
@@ -340,6 +345,7 @@ def build_merge_sf(
     graph_path: str | Path = "graphify-sf-out/graph.json",
     *,
     directed: bool = False,
+    multigraph: bool = True,
 ) -> nx.Graph:
     """Load existing graph.json, merge new extraction into it.
 
@@ -361,7 +367,7 @@ def build_merge_sf(
     else:
         existing = {"nodes": [], "edges": []}
 
-    return build([existing, new_extraction], directed=directed)
+    return build([existing, new_extraction], directed=directed, multigraph=multigraph)
 
 
 def _norm_label(label: str) -> str:

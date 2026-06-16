@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import networkx as nx
 
-from graphify_sf.build import edge_data
+from graphify_sf.build import edge_datas
 
 # SF metadata file-type to category mapping
 _SF_TYPE_CATEGORY: dict[str, str] = {
@@ -233,8 +233,13 @@ def _cross_community_surprises(
         betweenness = nx.edge_betweenness_centrality(G)
         top_edges = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:top_n]
         result = []
-        for (u, v), score in top_edges:
-            data = edge_data(G, u, v)
+        for edge_key, score in top_edges:
+            # MultiDiGraph betweenness keys are (u, v, key); simple graphs use (u, v)
+            u, v = edge_key[0], edge_key[1]
+            eds = edge_datas(G, u, v)
+            data = eds[0] if eds else {}
+            # Collect all distinct relations for this pair
+            relations = ", ".join(sorted({ed.get("relation", "") for ed in eds if ed.get("relation")}))
             result.append(
                 {
                     "source": G.nodes[u].get("label", u),
@@ -244,7 +249,7 @@ def _cross_community_surprises(
                         G.nodes[v].get("source_file", ""),
                     ],
                     "confidence": data.get("confidence", "EXTRACTED"),
-                    "relation": data.get("relation", ""),
+                    "relation": relations or data.get("relation", ""),
                     "note": f"Bridges graph structure (betweenness={score:.3f})",
                 }
             )
