@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<InstalledPackage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <versionNumber>3.200.0</versionNumber>
+    <activateRSS>false</activateRSS>
+    <namespace>npsp</namespace>
+</InstalledPackage>

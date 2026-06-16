@@ -5,11 +5,19 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ._ids import apex_class_id, make_sf_id, page_id
+from ._ids import apex_class_id, make_sf_id, object_id, page_id
 
-_CONTROLLER_RE = re.compile(r'controller\s*=\s*["\'](\w+)["\']', re.IGNORECASE)
+# Use a negative lookbehind so this does NOT match inside `standardController="..."`
+# (the substring `Controller="Account"` would otherwise be parsed as a custom Apex
+# controller and emit a phantom `apex_account` reference for a standard object).
+# standardController is handled separately by _STD_CONTROLLER_RE below.
+_CONTROLLER_RE = re.compile(r'(?<![a-zA-Z])controller\s*=\s*["\'](\w+)["\']', re.IGNORECASE)
 _EXTENSIONS_RE = re.compile(r'extensions\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 _ACTION_RE = re.compile(r'action\s*=\s*["\']{\s*!\s*(\w+)\.', re.IGNORECASE)
+# D2: standardController="ObjectName"
+_STD_CONTROLLER_RE = re.compile(r'standardController\s*=\s*["\'](\w+)["\']', re.IGNORECASE)
+# D2: <c:componentName …> child VF component references
+_CHILD_VF_COMPONENT_RE = re.compile(r"<c:(\w+)", re.IGNORECASE)
 
 
 def _make_edge(src: str, tgt: str, relation: str, confidence: str, source_file: str, weight: float = 1.0) -> dict:
@@ -64,6 +72,19 @@ def extract_vf_page(path: Path) -> dict:
             ext = ext.strip()
             if ext:
                 edges.append(_make_edge(page_nid, apex_class_id(ext), "references", "EXTRACTED", str_path))
+
+    # D2: standardController="ObjectName" → references object node
+    sm = _STD_CONTROLLER_RE.search(text)
+    if sm:
+        edges.append(_make_edge(page_nid, object_id(sm.group(1)), "references", "EXTRACTED", str_path))
+
+    # D2: <c:foo> child VF component tags → uses edge to vfcomponent
+    seen_comps: set[str] = set()
+    for cm in _CHILD_VF_COMPONENT_RE.finditer(text):
+        comp_name = cm.group(1)
+        if comp_name not in seen_comps:
+            seen_comps.add(comp_name)
+            edges.append(_make_edge(page_nid, make_sf_id("vfcomponent", comp_name), "uses", "EXTRACTED", str_path))
 
     return {"nodes": nodes, "edges": edges}
 

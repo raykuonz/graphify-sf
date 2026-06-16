@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SharingRules xmlns="http://soap.sforce.com/2006/04/metadata">
+    <sharingCriteriaRules>
+        <fullName>Account_Criteria_Rule</fullName>
+        <label>Account Criteria Rule</label>
+        <accessLevel>Read</accessLevel>
+        <accountSettings>
+            <caseAccessLevel>None</caseAccessLevel>
+            <contactAccessLevel>None</contactAccessLevel>
+            <opportunityAccessLevel>None</opportunityAccessLevel>
+        </accountSettings>
+        <criteriaItems>
+            <field>Account.Type</field>
+            <operation>equals</operation>
+            <value>Customer</value>
+        </criteriaItems>
+        <sharedTo>
+            <role>SalesRep</role>
+        </sharedTo>
+    </sharingCriteriaRules>
+    <sharingOwnerRules>
+        <fullName>Account_Owner_Rule</fullName>
+        <label>Account Owner Rule</label>
+        <accessLevel>Edit</accessLevel>
+        <sharedTo>
+            <group>AllInternalUsers</group>
+        </sharedTo>
+    </sharingOwnerRules>
+</SharingRules>

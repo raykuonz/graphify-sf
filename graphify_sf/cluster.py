@@ -126,12 +126,18 @@ def _split_community(G: nx.Graph, nodes: list[str]) -> list[list[str]]:
 
 
 def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:
-    """Ratio of actual intra-community edges to maximum possible."""
+    """Ratio of actual intra-community edges to maximum possible.
+
+    Normalises to a simple undirected view so the result stays in [0, 1]
+    regardless of whether G is a MultiDiGraph (0.4.0 default) or a plain Graph.
+    """
     n = len(community_nodes)
     if n <= 1:
         return 1.0
     subgraph = G.subgraph(community_nodes)
-    actual = subgraph.number_of_edges()
+    # Collapse parallel/directed edges to get a consistent density measure.
+    simple = nx.Graph(subgraph)
+    actual = simple.number_of_edges()
     possible = n * (n - 1) / 2
     return round(actual / possible, 2) if possible > 0 else 0.0
 

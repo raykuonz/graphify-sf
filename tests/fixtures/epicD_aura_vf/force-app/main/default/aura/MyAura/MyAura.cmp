@@ -1,0 +1,4 @@
+<aura:component controller="MyCtrl" xmlns:aura="http://schemas.aura.force.com/auradoc">
+    <aura:handler name="init" value="{!this}" action="{!c.doInit}"/>
+    <p>Hello from Aura</p>
+</aura:component>

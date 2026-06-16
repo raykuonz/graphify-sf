@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ._ids import apex_class_id, aura_id, make_sf_id
+from ._ids import apex_class_id, apex_method_id, aura_id, make_sf_id
 
 _CONTROLLER_ATTR_RE = re.compile(r'controller\s*=\s*["\'](\w+)["\']', re.IGNORECASE)
 _EXTENDS_ATTR_RE = re.compile(r'extends\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
@@ -49,6 +49,7 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
     ]
     edges: list[dict] = []
     seen: set[str] = set()
+    ctrl_class: str | None = None  # resolved from controller= attr for D2 method edges
 
     def add_edge(tgt: str, relation: str, confidence: str, weight: float = 1.0) -> None:
         key = f"{relation}:{tgt}"
@@ -66,7 +67,8 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
         # Controller attribute
         m = _CONTROLLER_ATTR_RE.search(cmp_text)
         if m:
-            add_edge(apex_class_id(m.group(1)), "references", "EXTRACTED")
+            ctrl_class = m.group(1)
+            add_edge(apex_class_id(ctrl_class), "references", "EXTRACTED")
 
         # Extends attribute (Aura component inheritance)
         for em in _EXTENDS_ATTR_RE.finditer(cmp_text):
@@ -105,6 +107,12 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
             )
             edges.append(_make_edge(nid, method_nid, "contains", "EXTRACTED", str(ctrl_file)))
 
+        # D2: scan for server-action calls via .get("c.MethodName")
+        if ctrl_class:
+            for m in _ACTION_GET_RE.finditer(ctrl_text):
+                server_method = m.group(1)
+                add_edge(apex_method_id(ctrl_class, server_method), "calls", "INFERRED", 0.7)
+
     # Parse Helper.js
     helper_file = bundle_dir / f"{name}Helper.js"
     if helper_file.exists():
@@ -127,5 +135,11 @@ def extract_aura_bundle(bundle_dir: Path) -> dict:
                 }
             )
             edges.append(_make_edge(nid, method_nid, "contains", "EXTRACTED", str(helper_file)))
+
+        # D2: scan Helper.js too for server-action calls
+        if ctrl_class:
+            for m in _ACTION_GET_RE.finditer(helper_text):
+                server_method = m.group(1)
+                add_edge(apex_method_id(ctrl_class, server_method), "calls", "INFERRED", 0.7)
 
     return {"nodes": nodes, "edges": edges}

@@ -40,6 +40,7 @@ _COMPOUND_EXT_MAP = {
     ".recordType-meta.xml": SFFileType.CHILD_OBJECT,
     ".listView-meta.xml": SFFileType.CHILD_OBJECT,
     ".compactLayout-meta.xml": SFFileType.CHILD_OBJECT,
+    ".businessProcess-meta.xml": SFFileType.CHILD_OBJECT,  # E2: target for RecordType refs
     ".layout-meta.xml": SFFileType.LAYOUT,
     ".profile-meta.xml": SFFileType.PROFILE,
     ".permissionset-meta.xml": SFFileType.PERMISSIONSET,
@@ -55,6 +56,20 @@ _COMPOUND_EXT_MAP = {
     ".flexipage-meta.xml": SFFileType.CONFIG,
     ".testSuite-meta.xml": SFFileType.CONFIG,
     ".remoteSite-meta.xml": SFFileType.CONFIG,
+    ".remoteSiteSetting-meta.xml": SFFileType.CONFIG,  # A3: correct SFDX extension
+    ".externalDataSource-meta.xml": SFFileType.CONFIG,  # A4
+    ".authprovider-meta.xml": SFFileType.CONFIG,  # A7
+    ".cspTrustedSite-meta.xml": SFFileType.CONFIG,  # A7
+    ".corsWhitelistOrigins-meta.xml": SFFileType.CONFIG,  # A7
+    ".sharingRules-meta.xml": SFFileType.CONFIG,  # B2
+    ".sharingSet-meta.xml": SFFileType.CONFIG,  # B2
+    ".restrictionRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".duplicateRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".matchingRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".fieldSet-meta.xml": SFFileType.CHILD_OBJECT,  # E1: FieldSet
+    ".globalValueSet-meta.xml": SFFileType.CONFIG,  # E1: GlobalValueSet
+    ".resource-meta.xml": SFFileType.CONFIG,  # D3: StaticResource
+    ".quickAction-meta.xml": SFFileType.CONFIG,  # D3: QuickAction
     ".role-meta.xml": SFFileType.CONFIG,
     ".site-meta.xml": SFFileType.EXPERIENCE,
     ".network-meta.xml": SFFileType.EXPERIENCE,
@@ -63,6 +78,12 @@ _COMPOUND_EXT_MAP = {
     ".escalationRules-meta.xml": SFFileType.AUTOMATION,
     ".assignmentRules-meta.xml": SFFileType.AUTOMATION,
     ".autoResponseRules-meta.xml": SFFileType.AUTOMATION,
+    # Reporting (F1)
+    ".report-meta.xml": SFFileType.CONFIG,
+    ".dashboard-meta.xml": SFFileType.CONFIG,
+    ".reportType-meta.xml": SFFileType.CONFIG,
+    # Packaging (F2)
+    ".installedPackage-meta.xml": SFFileType.CONFIG,
     # Agentforce
     ".bot-meta.xml": SFFileType.AGENTFORCE,
     ".botVersion-meta.xml": SFFileType.AGENTFORCE,

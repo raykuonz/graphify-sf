@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ReportType xmlns="http://soap.sforce.com/2006/04/metadata">
+    <baseObject>Account</baseObject>
+    <category>other</category>
+    <deployed>true</deployed>
+    <description>Custom Account Report Type</description>
+    <label>Account Custom Type</label>
+    <sections>
+        <columns>
+            <checkedByDefault>true</checkedByDefault>
+            <field>Industry</field>
+        </columns>
+        <columns>
+            <checkedByDefault>true</checkedByDefault>
+            <field>AnnualRevenue</field>
+        </columns>
+        <label>Account Fields</label>
+    </sections>
+</ReportType>

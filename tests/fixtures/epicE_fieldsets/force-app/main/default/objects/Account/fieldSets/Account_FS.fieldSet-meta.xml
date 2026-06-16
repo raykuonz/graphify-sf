@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FieldSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Account_FS</fullName>
+    <label>Account Field Set</label>
+    <displayedFields>
+        <field>Name</field>
+        <required>false</required>
+    </displayedFields>
+    <displayedFields>
+        <field>Phone</field>
+        <required>false</required>
+    </displayedFields>
+</FieldSet>

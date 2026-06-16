@@ -194,8 +194,8 @@ def test_extract_flow_before_save_triggers_edge(tmp_path):
     assert triggers_edges[0].get("trigger_type") == "RecordBeforeSave"
 
 
-def test_extract_flow_scheduled_does_not_create_triggers_edge(tmp_path):
-    """Scheduled flows should NOT produce a triggers edge (only record-triggered types do)."""
+def test_extract_flow_scheduled_creates_triggers_edge_with_trigger_type(tmp_path):
+    """C3: Scheduled flows with an <object> emit a triggers edge with trigger_type=scheduled."""
     from graphify_sf.extract.flow import extract_flow
 
     f = tmp_path / "ScheduledJob.flow-meta.xml"
@@ -203,7 +203,9 @@ def test_extract_flow_scheduled_does_not_create_triggers_edge(tmp_path):
 
     result = extract_flow(f)
     triggers_edges = [e for e in result["edges"] if e.get("relation") == "triggers"]
-    assert len(triggers_edges) == 0, "Scheduled flows should not have triggers edges"
+    assert len(triggers_edges) == 1, "Scheduled flow with object should produce a triggers edge"
+    assert triggers_edges[0].get("trigger_type") == "scheduled"
+    assert triggers_edges[0].get("confidence") == "EXTRACTED"
 
 
 def test_extract_flow_fixture_has_record_triggers_edge(simple_project_path):

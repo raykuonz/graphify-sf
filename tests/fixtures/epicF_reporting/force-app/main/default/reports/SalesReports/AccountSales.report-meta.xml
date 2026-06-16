@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://soap.sforce.com/2006/04/metadata">
+    <reportType>AccountCustom</reportType>
+    <name>Account Sales</name>
+    <format>Tabular</format>
+    <showDetails>true</showDetails>
+    <columns>
+        <field>Account.Industry</field>
+    </columns>
+    <columns>
+        <field>Account.AnnualRevenue</field>
+    </columns>
+    <columns>
+        <field>CREATED_DATE</field>
+    </columns>
+    <filter>
+        <criteriaItems>
+            <column>Account.AnnualRevenue</column>
+            <operator>greaterThan</operator>
+            <value>0</value>
+        </criteriaItems>
+    </filter>
+</Report>

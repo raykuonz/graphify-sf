@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ._ids import apex_class_id, flow_id, make_sf_id, object_id
 
@@ -80,11 +82,16 @@ def extract_flow(path: Path) -> dict:
     process_type = _find_text(root_el, "processType", ns) or "Flow"
     trigger_type = _find_text(root_el, "triggerType", ns)
 
+    # C2: Process Builder flows declare processType="Workflow". We override sf_type
+    # (rather than adding a subtype attr) so every type-based filter sees "ProcessBuilder"
+    # as a first-class value, consistent with all other sf_type filters in the codebase.
+    sf_type_for_node = "ProcessBuilder" if process_type == "Workflow" else "Flow"
+
     nodes.append(
         {
             "id": flow_nid,
             "label": flow_name,
-            "sf_type": "Flow",
+            "sf_type": sf_type_for_node,
             "file_type": "flow",
             "source_file": str_path,
             "source_location": None,
@@ -109,8 +116,19 @@ def extract_flow(path: Path) -> dict:
             if record_trigger_type:
                 trigger_edge["trigger_event"] = record_trigger_type
             edges.append(trigger_edge)
+        # C3: Platform-event triggered flows — target is the __e object node.
+        # The object field in <start> names the platform event API name.
+        elif trigger_obj and start_trigger_type == "PlatformEvent":
+            trigger_edge = _make_edge(flow_nid, object_id(trigger_obj), "triggers", "EXTRACTED", str_path)
+            trigger_edge["trigger_type"] = "platform_event"
+            edges.append(trigger_edge)
+        # C3: Scheduled flows — emit triggers edge to the target object when declared.
+        elif start_trigger_type == "Scheduled" and trigger_obj:
+            trigger_edge = _make_edge(flow_nid, object_id(trigger_obj), "triggers", "EXTRACTED", str_path)
+            trigger_edge["trigger_type"] = "scheduled"
+            edges.append(trigger_edge)
 
-    # Action calls (Apex, email alerts, etc.)
+    # Action calls (Apex, email alerts, HTTP callouts, etc.)
     for action in _find_all(root_el, "actionCalls", ns):
         action_type = _find_text(action, "actionType", ns)
         if action_type == "apex":
@@ -121,6 +139,25 @@ def extract_flow(path: Path) -> dict:
             sub_name = _find_text(action, "actionName", ns)
             if sub_name:
                 edges.append(_make_edge(flow_nid, flow_id(sub_name), "invokes", "EXTRACTED", str_path))
+        # A2: HTTP callout or ExternalService action — scan all <stringValue> for endpoints
+        for sv_el in _find_all(action, "stringValue", ns):
+            if not sv_el.text:
+                continue
+            endpoint = sv_el.text.strip()
+            nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
+            if nc_match:
+                nc_name = nc_match.group(1).strip()
+                edges.append(
+                    _make_edge(flow_nid, make_sf_id("namedcredential", nc_name), "makes_callout", "EXTRACTED", str_path)
+                )
+            elif endpoint.startswith(("http://", "https://")):
+                try:
+                    host = urlparse(endpoint).hostname or endpoint
+                except Exception:
+                    host = endpoint
+                edges.append(
+                    _make_edge(flow_nid, make_sf_id("externalendpoint", host), "makes_callout", "INFERRED", str_path)
+                )
 
     # Object record operations. The relation stays "references" (a generic relation
     # reused by many extractors — never change its semantics), but each edge carries an

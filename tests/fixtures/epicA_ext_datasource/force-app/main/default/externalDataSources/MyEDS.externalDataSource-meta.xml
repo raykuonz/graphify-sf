@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalDataSource xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>My EDS</label>
+    <namedCredential>My_NC</namedCredential>
+    <principalType>NamedUser</principalType>
+    <type>SimpleURL</type>
+</ExternalDataSource>

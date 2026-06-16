@@ -1,0 +1,3 @@
+<aura:component xmlns:aura="http://schemas.aura.force.com/auradoc">
+    <p>Aura component embedded in FlexiPage</p>
+</aura:component>

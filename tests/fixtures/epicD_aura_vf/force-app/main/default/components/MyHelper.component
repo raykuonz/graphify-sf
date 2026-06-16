@@ -1,0 +1,4 @@
+<apex:component xmlns:apex="http://soap.sforce.com/2006/04/metadata">
+    <apex:attribute name="recordId" type="Id" description="Record Id"/>
+    <p>Helper component</p>
+</apex:component>

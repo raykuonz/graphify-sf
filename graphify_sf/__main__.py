@@ -548,25 +548,30 @@ def _cmd_explain(label: str, graph_path: Path, relation: str | None = None) -> N
     print(f"  Degree:    {G.degree(nid)}")
     neighbors = list(G.neighbors(nid))
     if neighbors:
-        from graphify_sf.build import edge_data
+        from graphify_sf.build import edge_datas as _edge_datas
 
         if relation:
-            # Filter to matching relation — show ALL matches (no cap)
-            filtered = [nb for nb in neighbors if edge_data(G, nid, nb).get("relation") == relation]
+            # Filter to matching relation — iterate ALL parallel edges so a
+            # {queries,dml} pair is found by BOTH a queries AND a dml filter.
+            filtered = [nb for nb in neighbors if any(ed.get("relation") == relation for ed in _edge_datas(G, nid, nb))]
             print(f"\nConnections with relation={relation} ({len(filtered)}):")
             for nb in sorted(filtered, key=lambda n: G.degree(n), reverse=True):
-                edata = edge_data(G, nid, nb)
-                conf = edata.get("confidence", "")
-                print(f"  --> {G.nodes[nb].get('label', nb)} [{relation}] [{conf}]")
+                for edata in [ed for ed in _edge_datas(G, nid, nb) if ed.get("relation") == relation]:
+                    conf = edata.get("confidence", "")
+                    print(f"  --> {G.nodes[nb].get('label', nb)} [{relation}] [{conf}]")
             if not filtered:
                 print("  (none)")
         else:
             print(f"\nConnections ({len(neighbors)}):")
-            for nb in sorted(neighbors, key=lambda n: G.degree(n), reverse=True)[:20]:
-                edata = edge_data(G, nid, nb)
-                rel = edata.get("relation", "")
-                conf = edata.get("confidence", "")
-                print(f"  --> {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]")
+            displayed = 0
+            for nb in sorted(neighbors, key=lambda n: G.degree(n), reverse=True):
+                if displayed >= 20:
+                    break
+                for edata in _edge_datas(G, nid, nb):
+                    rel = edata.get("relation", "")
+                    conf = edata.get("confidence", "")
+                    print(f"  --> {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]")
+                displayed += 1
             if len(neighbors) > 20:
                 print(f"  ... and {len(neighbors) - 20} more")
 

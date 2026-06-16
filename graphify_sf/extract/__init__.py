@@ -8,6 +8,7 @@ Two-pass pipeline:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -26,20 +27,46 @@ from .apex import extract_apex_class, extract_apex_trigger
 from .aura import extract_aura_bundle
 from .automation import extract_approval_process, extract_generic_automation, extract_workflow
 from .config import (
+    extract_auth_provider,
+    extract_cors_origin,
+    extract_csp_trusted_site,
+    extract_custom_app,
     extract_custom_labels,
     extract_custom_metadata_record,
+    extract_custom_tab,
+    extract_external_data_source,
     extract_external_service,
     extract_flexipage,
     extract_generic_config,
     extract_named_credential,
+    extract_quick_action,
+    extract_remote_site_setting,
+    extract_static_resource,
 )
 from .doc import extract_doc_file
 from .flow import extract_flow
 from .layout import extract_layout
 from .lwc import extract_lwc_bundle
-from .object import extract_child_object, extract_custom_field, extract_custom_object
+from .object import (
+    extract_child_object,
+    extract_custom_field,
+    extract_custom_object,
+    extract_field_set,
+    extract_global_value_set,
+)
 from .profile import extract_permset, extract_profile
+from .reporting import (
+    extract_dashboard,
+    extract_installed_package,
+    extract_report,
+    extract_report_type,
+)
+from .rules import extract_duplicate_rule, extract_matching_rule, extract_restriction_rule
+from .sharing import extract_sharing_rules, extract_sharing_set
 from .visualforce import extract_vf_component, extract_vf_page
+
+# F2: detect managed-package namespace prefix (e.g. "npsp__Name" → namespace="npsp")
+_NS_PREFIX_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)__")
 
 # ---------------------------------------------------------------------------
 # Compound-suffix dispatch table — longest suffix wins
@@ -59,6 +86,9 @@ _DISPATCH: dict[str, object] = {
     ".recordType-meta.xml": extract_child_object,
     ".listView-meta.xml": extract_child_object,
     ".compactLayout-meta.xml": extract_child_object,
+    ".businessProcess-meta.xml": extract_child_object,  # E2: creates node for RecordType ref target
+    ".fieldSet-meta.xml": extract_field_set,  # E1
+    ".globalValueSet-meta.xml": extract_global_value_set,  # E1
     # UI
     ".layout-meta.xml": extract_layout,
     ".flexipage-meta.xml": extract_flexipage,
@@ -73,10 +103,28 @@ _DISPATCH: dict[str, object] = {
     ".externalService-meta.xml": extract_external_service,
     ".settings-meta.xml": extract_generic_config,
     ".connectedApp-meta.xml": extract_generic_config,
-    ".app-meta.xml": extract_generic_config,
-    ".tab-meta.xml": extract_generic_config,
+    ".app-meta.xml": extract_custom_app,  # D3: CustomApplication with contains edges
+    ".tab-meta.xml": extract_custom_tab,  # D3: CustomTab with references edges
     ".testSuite-meta.xml": extract_generic_config,
-    ".remoteSite-meta.xml": extract_generic_config,
+    ".remoteSite-meta.xml": extract_remote_site_setting,  # A3: old alias
+    ".remoteSiteSetting-meta.xml": extract_remote_site_setting,  # A3: correct extension
+    ".externalDataSource-meta.xml": extract_external_data_source,  # A4
+    ".authprovider-meta.xml": extract_auth_provider,  # A7
+    ".cspTrustedSite-meta.xml": extract_csp_trusted_site,  # A7
+    ".corsWhitelistOrigins-meta.xml": extract_cors_origin,  # A7
+    ".sharingRules-meta.xml": extract_sharing_rules,  # B2
+    ".sharingSet-meta.xml": extract_sharing_set,  # B2
+    ".restrictionRule-meta.xml": extract_restriction_rule,  # B5
+    ".duplicateRule-meta.xml": extract_duplicate_rule,  # B5
+    ".matchingRule-meta.xml": extract_matching_rule,  # B5
+    ".resource-meta.xml": extract_static_resource,  # D3: StaticResource
+    ".quickAction-meta.xml": extract_quick_action,  # D3: QuickAction
+    # Reporting (F1)
+    ".report-meta.xml": extract_report,
+    ".dashboard-meta.xml": extract_dashboard,
+    ".reportType-meta.xml": extract_report_type,
+    # Packaging (F2)
+    ".installedPackage-meta.xml": extract_installed_package,
     ".role-meta.xml": extract_generic_config,
     ".site-meta.xml": extract_generic_config,
     ".network-meta.xml": extract_generic_config,
@@ -210,6 +258,14 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
             resolved_edges.append(new_edge)
         else:
             resolved_edges.append(edge)
+
+    # F2: tag nodes whose label carries a managed-package namespace prefix (ns__Name)
+    for node in nodes:
+        if "namespace" not in node:
+            label = node.get("label", "")
+            m = _NS_PREFIX_RE.match(label)
+            if m:
+                node["namespace"] = m.group(1)
 
     return nodes, resolved_edges
 

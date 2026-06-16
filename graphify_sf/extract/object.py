@@ -15,6 +15,95 @@ from ._ids import field_id, make_sf_id, object_id
 _VR_CUSTOM_FIELD_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*__[cr])\b")
 _VR_CROSS_OBJECT_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]+)\.([A-Za-z][A-Za-z0-9_]*__[cr])\b")
 
+# C4: Standard (non-custom) field detection in ValidationRule formulas. Stays
+# INFERRED because regex cannot distinguish a field reference from a formula
+# function name at every callsite. Conservative strategy: only match identifiers
+# that appear in a direct comparison context OR as the first argument of common
+# field-inspection functions. False-positive sources: formula function names that
+# happen to be CamelCase (TEXT, VALUE…) are excluded via _VR_FORMULA_FUNCTIONS;
+# identifiers not in these positions are silently ignored to limit noise.
+_VR_FORMULA_FUNCTIONS = frozenset(
+    {
+        "AND",
+        "OR",
+        "NOT",
+        "IF",
+        "CASE",
+        "WHEN",
+        "THEN",
+        "ELSE",
+        "END",
+        "TEXT",
+        "VALUE",
+        "DATE",
+        "DATEVALUE",
+        "DATETIMEVALUE",
+        "TODAY",
+        "NOW",
+        "YEAR",
+        "MONTH",
+        "DAY",
+        "HOUR",
+        "MINUTE",
+        "SECOND",
+        "WEEKDAY",
+        "ADDMONTHS",
+        "ISBLANK",
+        "ISNULL",
+        "ISCHANGED",
+        "ISNEW",
+        "ISPICKVAL",
+        "LEFT",
+        "RIGHT",
+        "MID",
+        "LEN",
+        "FIND",
+        "SUBSTITUTE",
+        "TRIM",
+        "UPPER",
+        "LOWER",
+        "CONTAINS",
+        "BEGINS",
+        "INCLUDES",
+        "EXCLUDES",
+        "MAX",
+        "MIN",
+        "ABS",
+        "SQRT",
+        "MOD",
+        "ROUND",
+        "MROUND",
+        "FLOOR",
+        "CEILING",
+        "LOG",
+        "EXP",
+        "LN",
+        "BLANKVALUE",
+        "NULLVALUE",
+        "PRIORVALUE",
+        "REGEX",
+        "IMAGE",
+        "HYPERLINK",
+        "BR",
+        "VLOOKUP",
+        "TRUE",
+        "FALSE",
+        "NULL",
+        "LABEL",
+        "GETRECORDIDS",
+        "PARENTGROUPVAL",
+        "PREVGROUPVAL",
+    }
+)
+# Identifier immediately before a comparison operator (not preceded by a dot,
+# so cross-object path segments like Account__r.Field are not double-counted).
+_VR_STD_FIELD_CMP_RE = re.compile(r"(?<!\.)(\b[A-Z][A-Za-z0-9_]*\b)\s*(?:!=|<>|<=|>=|<|>|==|=(?!=))")
+# Identifier as first argument of common field-inspection functions.
+_VR_STD_FIELD_FUNC_RE = re.compile(
+    r"\b(?:ISBLANK|ISNULL|ISPICKVAL|ISCHANGED|PRIORVALUE)\s*\(\s*(\b[A-Z][A-Za-z0-9_]*\b)",
+    re.IGNORECASE,
+)
+
 
 def _find_text(el: ET.Element, tag: str, ns: str = "") -> str | None:
     if ns:
@@ -24,6 +113,15 @@ def _find_text(el: ET.Element, tag: str, ns: str = "") -> str | None:
     else:
         child = el.find(tag)
     return child.text.strip() if child is not None and child.text else None
+
+
+def _findall(el: ET.Element, tag: str, ns: str = "") -> list:
+    """findall with namespace fallback."""
+    if ns:
+        results = el.findall(f"{{{ns}}}{tag}")
+        if results:
+            return results
+    return el.findall(tag)
 
 
 def _get_ns(root_el: ET.Element) -> str:
@@ -66,25 +164,39 @@ def _parent_object_name(path: Path) -> str:
 
 
 def extract_custom_object(path: Path) -> dict:
-    """Extract a CustomObject node from .object-meta.xml."""
+    """Extract a CustomObject node from .object-meta.xml.
+
+    Detects special object types by API-name suffix:
+    - ``__x`` → ExternalObject (A4)
+    - ``__e`` → PlatformEvent (A5)
+    - ``<customSettingsType>`` element → CustomSetting (A6)
+    """
     if not path.exists():
         return {"nodes": [], "edges": []}
     str_path = str(path)
     obj_name = _object_name_from_stem(path)
     obj_nid = object_id(obj_name)
 
+    # Determine sf_type from object API name suffix
+    if obj_name.endswith("__x"):
+        sf_type = "ExternalObject"
+    elif obj_name.endswith("__e"):
+        sf_type = "PlatformEvent"
+    else:
+        sf_type = "CustomObject"  # may be overridden by <customSettingsType> below
+
     nodes: list[dict] = [
         {
             "id": obj_nid,
             "label": obj_name,
-            "sf_type": "CustomObject",
+            "sf_type": sf_type,
             "file_type": "object",
             "source_file": str_path,
             "source_location": None,
         }
     ]
+    edges: list[dict] = []
 
-    # Try to enrich with label/description from XML
     try:
         tree = ET.parse(str_path)
         root_el = tree.getroot()
@@ -95,10 +207,38 @@ def extract_custom_object(path: Path) -> dict:
         desc = _find_text(root_el, "description", ns)
         if desc:
             nodes[0]["description"] = desc[:200]
+
+        # CustomSetting: <customSettingsType> overrides sf_type for __c objects
+        if sf_type == "CustomObject":
+            custom_settings_type = _find_text(root_el, "customSettingsType", ns)
+            if custom_settings_type:
+                nodes[0]["sf_type"] = "CustomSetting"
+
+        # B1: Org-Wide Defaults — read sharing model declarations
+        sharing_model = _find_text(root_el, "sharingModel", ns)
+        if sharing_model:
+            nodes[0]["sharing_model"] = sharing_model
+        ext_sharing_model = _find_text(root_el, "externalSharingModel", ns)
+        if ext_sharing_model:
+            nodes[0]["external_sharing_model"] = ext_sharing_model
+
+        # ExternalObject: parse <externalDataSource> → backed_by edge (A4)
+        if sf_type == "ExternalObject":
+            ext_ds = _find_text(root_el, "externalDataSource", ns)
+            if ext_ds:
+                edges.append(
+                    _make_edge(
+                        obj_nid,
+                        make_sf_id("externaldatasource", ext_ds),
+                        "backed_by",
+                        "EXTRACTED",
+                        str_path,
+                    )
+                )
     except (ET.ParseError, OSError):
         pass
 
-    return {"nodes": nodes, "edges": []}
+    return {"nodes": nodes, "edges": edges}
 
 
 def extract_custom_field(path: Path) -> dict:
@@ -142,21 +282,44 @@ def extract_custom_field(path: Path) -> dict:
         if label:
             nodes[0]["display_label"] = label
 
-        # Lookup / MasterDetail / Hierarchy → references the target object
-        # MasterDetail gets its own relation name to distinguish ownership semantics.
-        if field_type in ("Lookup", "MasterDetail", "Hierarchy"):
-            ref_to = _find_text(root_el, "referenceTo", ns)
-            if ref_to:
-                relation = "master_detail" if field_type == "MasterDetail" else "references"
-                edges.append(
-                    _make_edge(
-                        field_nid,
-                        object_id(ref_to),
-                        relation,
-                        "EXTRACTED",
-                        str_path,
+        # Lookup / MasterDetail / Hierarchy / ExternalLookup → references target object(s).
+        # E3: loop ALL <referenceTo> elements so polymorphic lookups emit one edge per target.
+        # MasterDetail keeps its own relation name to distinguish ownership semantics.
+        if field_type in ("Lookup", "MasterDetail", "Hierarchy", "ExternalLookup"):
+            relation = "master_detail" if field_type == "MasterDetail" else "references"
+            for ref_el in _findall(root_el, "referenceTo", ns):
+                if ref_el.text:
+                    ref_to = ref_el.text.strip()
+                    edges.append(
+                        _make_edge(
+                            field_nid,
+                            object_id(ref_to),
+                            relation,
+                            "EXTRACTED",
+                            str_path,
+                        )
                     )
-                )
+
+        # E1: picklist field referencing a Global Value Set → uses edge EXTRACTED.
+        # Dedup guard: some XML structures can produce multiple <valueSet> elements
+        # or nested <valueSetName> occurrences; emit the edge at most once per GVS.
+        seen_gvs: set[str] = set()
+        for vs_item in _findall(root_el, "valueSet", ns):
+            vsn_el = _findall(vs_item, "valueSetName", ns)
+            if vsn_el and vsn_el[0].text:
+                gvs_name = vsn_el[0].text.strip()
+                gvs_tgt = make_sf_id("globalvalueset", gvs_name)
+                if gvs_tgt not in seen_gvs:
+                    seen_gvs.add(gvs_tgt)
+                    edges.append(
+                        _make_edge(
+                            field_nid,
+                            gvs_tgt,
+                            "uses",
+                            "EXTRACTED",
+                            str_path,
+                        )
+                    )
     except (ET.ParseError, OSError):
         pass
 
@@ -215,9 +378,50 @@ def extract_child_object(path: Path) -> dict:
         _make_edge(obj_nid, child_nid, "contains", "EXTRACTED", str_path),
     ]
 
+    # E2: CompactLayout inner field refs → uses edges EXTRACTED.
+    if sf_type == "CompactLayout":
+        try:
+            tree = ET.parse(str_path)
+            root_el = tree.getroot()
+            ns = _get_ns(root_el)
+            for fld_el in _findall(root_el, "fields", ns):
+                if fld_el.text:
+                    fname = fld_el.text.strip()
+                    if fname:
+                        edges.append(_make_edge(child_nid, field_id(obj_name, fname), "uses", "EXTRACTED", str_path))
+        except (ET.ParseError, OSError):
+            pass
+
+    # E2: ListView column refs → uses edges EXTRACTED.
+    elif sf_type == "ListView":
+        try:
+            tree = ET.parse(str_path)
+            root_el = tree.getroot()
+            ns = _get_ns(root_el)
+            for col_el in _findall(root_el, "columns", ns):
+                if col_el.text:
+                    col = col_el.text.strip()
+                    if col:
+                        edges.append(_make_edge(child_nid, field_id(obj_name, col), "uses", "EXTRACTED", str_path))
+        except (ET.ParseError, OSError):
+            pass
+
+    # E2: RecordType businessProcess reference → references edge EXTRACTED.
+    elif sf_type == "RecordType":
+        try:
+            tree = ET.parse(str_path)
+            root_el = tree.getroot()
+            ns = _get_ns(root_el)
+            bp = _find_text(root_el, "businessProcess", ns)
+            if bp:
+                bp_nid = make_sf_id("businessprocess", obj_name, bp)
+                edges.append(_make_edge(child_nid, bp_nid, "references", "EXTRACTED", str_path))
+        except (ET.ParseError, OSError):
+            pass
+
     # For ValidationRules: extract field references from the formula expression.
     # These are INFERRED edges because regex-based formula parsing is imprecise.
-    if sf_type == "ValidationRule":
+    elif sf_type == "ValidationRule":
         try:
             tree = ET.parse(str_path)
             root_el = tree.getroot()
@@ -257,7 +461,114 @@ def extract_child_object(path: Path) -> dict:
                                 weight=0.7,
                             )
                         )
+                # C4: Standard field references — identifiers in comparison context or
+                # as first arg of field-inspection functions. Weight 0.5 (lower than
+                # custom fields) because standard-field regex has higher noise risk.
+                # Dangling targets (no field node in the graph) are kept as-is; the
+                # cross-ref pass leaves INFERRED edges alone regardless of target existence.
+                for pat in (_VR_STD_FIELD_CMP_RE, _VR_STD_FIELD_FUNC_RE):
+                    for m in pat.finditer(formula):
+                        fname = m.group(1)
+                        if fname.upper() in _VR_FORMULA_FUNCTIONS:
+                            continue
+                        if fname.endswith(("__c", "__r", "__x", "__e")):
+                            continue  # custom / event types — handled by other patterns
+                        fid = field_id(obj_name, fname)
+                        if fid not in seen_fields:
+                            seen_fields.add(fid)
+                            edges.append(
+                                _make_edge(
+                                    child_nid,
+                                    fid,
+                                    "references",
+                                    "INFERRED",
+                                    str_path,
+                                    weight=0.5,
+                                )
+                            )
         except (ET.ParseError, OSError):
             pass
 
     return {"nodes": nodes, "edges": edges}
+
+
+def extract_field_set(path: Path) -> dict:
+    """Extract a FieldSet node, object-contains edge, and field-member edges.
+
+    Expects path: objects/<Obj>/fieldSets/<Name>.fieldSet-meta.xml
+    Parses <displayedFields> and <availableFields> sections for <field> children.
+    Edges: object --contains--> fieldset; fieldset --contains--> field (EXTRACTED).
+    """
+    str_path = str(path)
+    obj_name = _parent_object_name(path)
+
+    stem = path.name
+    if stem.endswith(".fieldSet-meta.xml"):
+        stem = stem[: -len(".fieldSet-meta.xml")]
+    elif stem.endswith(".fieldSet-meta"):
+        stem = stem[: -len(".fieldSet-meta")]
+    else:
+        stem = path.stem
+
+    fs_nid = make_sf_id("fieldset", obj_name, stem)
+    obj_nid = object_id(obj_name)
+
+    nodes: list[dict] = [
+        {
+            "id": fs_nid,
+            "label": f"{obj_name}: {stem}",
+            "sf_type": "FieldSet",
+            "file_type": "object",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
+    edges: list[dict] = [
+        _make_edge(obj_nid, fs_nid, "contains", "EXTRACTED", str_path),
+    ]
+
+    try:
+        tree = ET.parse(str_path)
+        root_el = tree.getroot()
+        ns = _get_ns(root_el)
+        seen: set[str] = set()
+        for section_tag in ("displayedFields", "availableFields"):
+            for section_el in _findall(root_el, section_tag, ns):
+                for fld_el in _findall(section_el, "field", ns):
+                    if fld_el.text:
+                        fname = fld_el.text.strip()
+                        fid = field_id(obj_name, fname)
+                        if fname and fid not in seen:
+                            seen.add(fid)
+                            edges.append(_make_edge(fs_nid, fid, "contains", "EXTRACTED", str_path))
+    except (ET.ParseError, OSError):
+        pass
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def extract_global_value_set(path: Path) -> dict:
+    """Extract a GlobalValueSet node from a .globalValueSet-meta.xml file."""
+    str_path = str(path)
+
+    stem = path.name
+    if stem.endswith(".globalValueSet-meta.xml"):
+        stem = stem[: -len(".globalValueSet-meta.xml")]
+    elif stem.endswith(".globalValueSet-meta"):
+        stem = stem[: -len(".globalValueSet-meta")]
+    else:
+        stem = path.stem
+
+    gvs_nid = make_sf_id("globalvalueset", stem)
+
+    nodes: list[dict] = [
+        {
+            "id": gvs_nid,
+            "label": stem,
+            "sf_type": "GlobalValueSet",
+            "file_type": "object",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
+    return {"nodes": nodes, "edges": []}

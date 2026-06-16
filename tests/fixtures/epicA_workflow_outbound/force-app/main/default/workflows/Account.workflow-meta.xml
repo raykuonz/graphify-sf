@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workflow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Account</fullName>
+    <alerts/>
+    <outboundMessages>
+        <fullName>SendOrder</fullName>
+        <apiVersion>58.0</apiVersion>
+        <endpointUrl>https://erp.example.com/orders</endpointUrl>
+        <fields>Id</fields>
+        <includeSessionId>false</includeSessionId>
+        <integrationUser>integration@example.com</integrationUser>
+        <name>Send Order</name>
+        <protected>false</protected>
+        <sendSessionId>false</sendSessionId>
+    </outboundMessages>
+    <rules>
+        <fullName>New Account Alert</fullName>
+        <active>true</active>
+        <criteriaItems>
+            <field>Account.Name</field>
+            <operation>notEqual</operation>
+        </criteriaItems>
+        <triggerType>onCreateOnly</triggerType>
+    </rules>
+</Workflow>

@@ -5,12 +5,18 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ._ids import apex_class_id, lwc_id, make_sf_id
+from ._ids import apex_class_id, apex_method_id, field_id, label_id, lwc_id, make_sf_id, object_id
 
 _IMPORT_RE = re.compile(r"""import\s+(?:\{[^}]+\}|\w+)\s+from\s+['"]([^'"]+)['"]""")
 _CLASS_RE = re.compile(r"export\s+default\s+class\s+(\w+)\s+extends\s+(\w+)", re.IGNORECASE)
 _WIRE_RE = re.compile(r"@wire\(\s*(\w+)")
 _APEX_IMPORT_RE = re.compile(r"@salesforce/apex/([\w.]+)")
+# D1: @salesforce/schema/Object.Field or @salesforce/schema/Object
+_SCHEMA_IMPORT_RE = re.compile(r"@salesforce/schema/([\w]+)(?:\.([\w]+))?")
+# D1: @salesforce/label/c.LabelName
+_LABEL_IMPORT_RE = re.compile(r"@salesforce/label/c\.([\w]+)")
+# D1: @salesforce/resourceUrl/ResourceName
+_RESOURCE_IMPORT_RE = re.compile(r"@salesforce/resourceUrl/([\w]+)")
 _CHILD_TAG_RE = re.compile(r"<(c-[\w-]+|lightning-[\w-]+)")
 _METHOD_RE = re.compile(r"^\s{4}(\w+)\s*\([^)]*\)\s*\{", re.MULTILINE)
 
@@ -76,12 +82,40 @@ def extract_lwc_bundle(bundle_dir: Path) -> dict:
         for m in _IMPORT_RE.finditer(text):
             module = m.group(1)
 
-            # @salesforce/apex/ClassName.methodName
+            # @salesforce/apex/ClassName.methodName — D1: prefer method-level id
             apex_m = _APEX_IMPORT_RE.match(module)
             if apex_m:
                 apex_qualified = apex_m.group(1)  # e.g. "AccountService.findByName"
-                class_name = apex_qualified.split(".")[0]
-                add_edge(apex_class_id(class_name), "calls", "EXTRACTED")
+                parts = apex_qualified.split(".", 1)
+                class_name = parts[0]
+                if len(parts) == 2 and parts[1]:
+                    # Emit to method-level id; cross-ref pass downgrades if method absent
+                    add_edge(apex_method_id(class_name, parts[1]), "calls", "EXTRACTED")
+                else:
+                    add_edge(apex_class_id(class_name), "calls", "EXTRACTED")
+                continue
+
+            # D1: @salesforce/schema/Object.Field or @salesforce/schema/Object
+            schema_m = _SCHEMA_IMPORT_RE.match(module)
+            if schema_m:
+                obj_name = schema_m.group(1)
+                field_name = schema_m.group(2)
+                if field_name:
+                    add_edge(field_id(obj_name, field_name), "references", "EXTRACTED")
+                else:
+                    add_edge(object_id(obj_name), "references", "EXTRACTED")
+                continue
+
+            # D1: @salesforce/label/c.LabelName
+            label_m = _LABEL_IMPORT_RE.match(module)
+            if label_m:
+                add_edge(label_id(label_m.group(1)), "uses", "EXTRACTED")
+                continue
+
+            # D1: @salesforce/resourceUrl/ResourceName
+            resource_m = _RESOURCE_IMPORT_RE.match(module)
+            if resource_m:
+                add_edge(make_sf_id("staticresource", resource_m.group(1)), "uses", "EXTRACTED")
                 continue
 
             # c/componentName (camelCase) → another LWC

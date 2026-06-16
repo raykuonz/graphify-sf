@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>AmountCheck</fullName>
+    <active>true</active>
+    <description>Require non-negative Amount and check custom field</description>
+    <errorConditionFormula><![CDATA[Amount < 0 || ISBLANK(Custom__c)]]></errorConditionFormula>
+    <errorMessage>Amount must be non-negative.</errorMessage>
+</ValidationRule>
