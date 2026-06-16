@@ -2,27 +2,42 @@
 
 // postinstall hook.
 //
-// The graphify-sf npm package is a thin wrapper that fetches a prebuilt binary
-// from the project's GitHub Releases. In locked-down corporate networks the
-// download can be blocked by a proxy or firewall. A failed download here MUST
-// NOT abort `npm install` for the whole dependency tree — graphify-sf is an
-// optional second engine for its consumers, so a missing binary should degrade
-// gracefully (the binary is fetched lazily on first run, and there are offline
-// remediation paths).
+// As of 0.3.9 the prebuilt binary normally arrives WITH `npm install`, shipped
+// inside a platform-specific scoped subpackage (@graphify-sf/cli-<plat>-<arch>)
+// declared in optionalDependencies. npm installs only the subpackage matching
+// the host os/cpu, so on a supported platform the binary is already present and
+// this hook makes ZERO network requests.
 //
-// Therefore: never exit non-zero from postinstall. Print a clear, actionable
-// warning and exit 0. The actual binary resolution happens later via
-// download.ensureBinary() at first invocation.
+// Resolution order (see lib/download.js ensureBinary):
+//   1. GRAPHIFY_BIN env override
+//   2. the installed platform subpackage  <-- 0.3.9 happy path, no network
+//   3. a previously-downloaded binary in bin/
+//   4. download from GitHub Releases       <-- fallback only
+//
+// A failed download in step 4 MUST NOT abort the consumer's `npm install`
+// (graphify-sf is an optional second engine for its consumers). So this hook
+// always exits 0: if no binary resolves and the fallback download fails, we
+// print actionable remediation and still exit 0; the binary is fetched lazily
+// on first run instead.
 
-const { download } = require("./lib/download");
+const { envBinary, subpackageBinary, download } = require("./lib/download");
 
-download()
-  .then(() => {
+async function main() {
+  // If a binary already resolves (env override or the platform subpackage),
+  // there is nothing to do — and crucially, no network request.
+  if (envBinary() || subpackageBinary()) {
     process.exit(0);
-  })
-  .catch((err) => {
+  }
+
+  // No prebuilt binary available for this platform (unsupported platform,
+  // --no-optional, or a registry that doesn't carry the scoped subpackages).
+  // Try the GitHub Releases fallback, but never fail the install.
+  try {
+    await download();
+    process.exit(0);
+  } catch (err) {
     process.stderr.write(
-      `\ngraphify-sf: could not pre-fetch the CLI binary during install.\n` +
+      `\ngraphify-sf: no prebuilt binary for this platform and the fallback download failed.\n` +
         `  Reason: ${err.message}\n` +
         `\n` +
         `  This is non-fatal — installation will continue. The binary will be\n` +
@@ -34,6 +49,8 @@ download()
         `    • Point at an existing binary:           export GRAPHIFY_BIN=/path/to/graphify-sf\n` +
         `\n`
     );
-    // Non-fatal: do not break the consumer's `npm install`.
     process.exit(0);
-  });
+  }
+}
+
+main();

@@ -136,7 +136,7 @@ jobs:
             --clobber
 
   publish-npm:
-    name: Publish to npm
+    name: Publish to npm (platform subpackages + main)
     needs: build-binaries
     runs-on: ubuntu-latest
 
@@ -150,6 +150,7 @@ jobs:
           else
             TAG="${{ github.event.release.tag_name }}"
           fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
@@ -160,26 +161,72 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Write release version into npm/package.json
+      # Pull the binaries that build-binaries just uploaded to the GitHub
+      # Release. These are the exact artifacts shipped inside the platform
+      # subpackages, so the npm channel and the GitHub-download fallback serve
+      # byte-identical binaries.
+      - name: Download release binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mkdir -p release-bin
+          cd release-bin
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "graphify-sf-*" \
+            --clobber
+          ls -l
+
+      # Scaffold npm/platforms/<plat>-<arch>/ for every target whose binary is
+      # present. --strict fails the job if any of the five is missing, so a
+      # partial matrix never ships an incomplete set.
+      - name: Scaffold platform subpackages
+        run: |
+          node npm/scripts/build-subpackages.js \
+            --version "${{ steps.tag.outputs.version }}" \
+            --bin-dir release-bin \
+            --out-dir npm/platforms \
+            --strict
+
+      # Subpackages MUST publish before the main package: the main package pins
+      # exact subpackage versions in optionalDependencies. Re-running for an
+      # already-published version will 403; acceptable on manual re-dispatch
+      # (the main publish still proceeds).
+      - name: Publish platform subpackages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+          for dir in npm/platforms/*/; do
+            echo "Publishing ${dir} ..."
+            npm publish "${dir}" --access public
+          done
+
+      # Stamp the release version into the main package (its version and its
+      # optionalDependencies pins) directly via node — idempotent, unlike
+      # `npm version` which errors with "Version not changed" when the in-repo
+      # version already equals VERSION (it does, bumped in the release PR).
+      - name: Stamp version into main package + optionalDependencies
         shell: bash
         env:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          # Idempotent version stamp. `npm version` errors with "Version not
-          # changed" when package.json already equals VERSION (which it does
-          # when the in-repo version was bumped in the release PR), so we write
-          # the field directly instead.
           node -e '
             const fs = require("fs");
             const p = "npm/package.json";
             const v = process.env.VERSION;
             const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
             pkg.version = v;
+            for (const k of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[k] = v;
+            }
             fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
-            console.log("npm package version set to", v);
+            console.log("main package stamped to", v);
           '
 
-      - name: Publish to npm
+      - name: Publish main package
         run: npm publish ./npm --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

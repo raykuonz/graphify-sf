@@ -132,6 +132,63 @@ function envBinary() {
   return null;
 }
 
+// Name of the platform-specific scoped subpackage that ships the prebuilt
+// binary for the current platform/arch, e.g. "@graphify-sf/cli-linux-x64".
+// Returns null on unsupported platforms.
+function subpackageName() {
+  const plat = process.platform;
+  const arch = process.arch;
+  const supported = SUPPORTED[plat];
+  if (!supported || !supported.includes(arch)) {
+    return null;
+  }
+  return `@graphify-sf/cli-${plat}-${arch}`;
+}
+
+// Resolve the binary from an installed platform subpackage (the 0.3.9 happy
+// path — the binary arrives with `npm install` via optionalDependencies, no
+// network). Returns the absolute path, or null if the subpackage is not
+// installed (unsupported platform, --no-optional, or a registry mirror that
+// does not carry the scoped subpackages).
+function subpackageBinary() {
+  const name = subpackageName();
+  if (!name) return null;
+  const binName = process.platform === "win32" ? "graphify-sf.exe" : "graphify-sf";
+
+  // Build a robust set of resolution roots. In a normal install the subpackage
+  // is a peer in the consumer's node_modules and resolves from this module's
+  // own location; but with non-hoisted / nested layouts (or when invoked from a
+  // different cwd, e.g. tests) it may live elsewhere. Searching from this
+  // module, the package root, and the current working directory covers npm,
+  // pnpm and yarn layouts.
+  const searchPaths = [__dirname, path.join(__dirname, ".."), process.cwd()];
+
+  let resolved = null;
+  try {
+    resolved = require.resolve(`${name}/${binName}`, { paths: searchPaths });
+  } catch {
+    // Subpackage not installed — fall through to other resolution strategies.
+    return null;
+  }
+
+  if (resolved && fs.existsSync(resolved)) {
+    // Defensive: npm tarballs preserve mode, but ensure executable on Unix.
+    if (process.platform !== "win32") {
+      try {
+        fs.accessSync(resolved, fs.constants.X_OK);
+      } catch {
+        try {
+          fs.chmodSync(resolved, 0o755);
+        } catch {
+          /* best-effort; resolution still returned below */
+        }
+      }
+    }
+    return resolved;
+  }
+  return null;
+}
+
 async function ensureBinary() {
   // 1. Explicit override always wins.
   const fromEnv = envBinary();
@@ -139,15 +196,31 @@ async function ensureBinary() {
     return fromEnv;
   }
 
-  // 2. Already-downloaded binary in the package's bin/ dir.
+  // 2. Prebuilt binary shipped in the platform subpackage (0.3.9 happy path,
+  //    no network).
+  const fromSubpkg = subpackageBinary();
+  if (fromSubpkg) {
+    return fromSubpkg;
+  }
+
+  // 3. Already-downloaded binary in the package's bin/ dir (legacy cache).
   const dest = binaryPath();
   if (fs.existsSync(dest)) {
     return dest;
   }
 
-  // 3. Lazily download on first use.
+  // 4. Last resort: lazily download from GitHub Releases on first use.
   await download();
   return dest;
 }
 
-module.exports = { assetName, binaryPath, binDir, download, ensureBinary, envBinary };
+module.exports = {
+  assetName,
+  binaryPath,
+  binDir,
+  download,
+  ensureBinary,
+  envBinary,
+  subpackageName,
+  subpackageBinary,
+};

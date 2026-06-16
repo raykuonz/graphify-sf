@@ -30,19 +30,22 @@ function runInstallWithFailingDownload() {
     const Module = require("node:module");
     const origLoad = Module._load;
     Module._load = function (request, parent, isMain) {
+      const real = origLoad.apply(this, arguments);
       const resolved = (() => {
         try { return Module._resolveFilename(request, parent, isMain); }
         catch { return request; }
       })();
       if (resolved === ${JSON.stringify(downloadAbs)}) {
-        return {
+        // Preserve the real module (envBinary/subpackageBinary) and only force
+        // the network download() to fail.
+        return Object.assign({}, real, {
           download: () =>
             Promise.reject(
               new Error("simulated: download failed with HTTP 404 (network blocked)")
             ),
-        };
+        });
       }
-      return origLoad.apply(this, arguments);
+      return real;
     };
     require(${JSON.stringify(INSTALL_JS)});
   `;
