@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>58.0</apiVersion>
+    <label>Scheduled Flow</label>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <object>Account</object>
+        <triggerType>Scheduled</triggerType>
+        <scheduledPaths>
+            <maxBatchSize>200</maxBatchSize>
+            <name>DefaultPath</name>
+        </scheduledPaths>
+    </start>
+    <status>Active</status>
+</Flow>

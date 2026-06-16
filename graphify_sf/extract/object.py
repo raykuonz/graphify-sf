@@ -15,6 +15,95 @@ from ._ids import field_id, make_sf_id, object_id
 _VR_CUSTOM_FIELD_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*__[cr])\b")
 _VR_CROSS_OBJECT_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]+)\.([A-Za-z][A-Za-z0-9_]*__[cr])\b")
 
+# C4: Standard (non-custom) field detection in ValidationRule formulas. Stays
+# INFERRED because regex cannot distinguish a field reference from a formula
+# function name at every callsite. Conservative strategy: only match identifiers
+# that appear in a direct comparison context OR as the first argument of common
+# field-inspection functions. False-positive sources: formula function names that
+# happen to be CamelCase (TEXT, VALUE…) are excluded via _VR_FORMULA_FUNCTIONS;
+# identifiers not in these positions are silently ignored to limit noise.
+_VR_FORMULA_FUNCTIONS = frozenset(
+    {
+        "AND",
+        "OR",
+        "NOT",
+        "IF",
+        "CASE",
+        "WHEN",
+        "THEN",
+        "ELSE",
+        "END",
+        "TEXT",
+        "VALUE",
+        "DATE",
+        "DATEVALUE",
+        "DATETIMEVALUE",
+        "TODAY",
+        "NOW",
+        "YEAR",
+        "MONTH",
+        "DAY",
+        "HOUR",
+        "MINUTE",
+        "SECOND",
+        "WEEKDAY",
+        "ADDMONTHS",
+        "ISBLANK",
+        "ISNULL",
+        "ISCHANGED",
+        "ISNEW",
+        "ISPICKVAL",
+        "LEFT",
+        "RIGHT",
+        "MID",
+        "LEN",
+        "FIND",
+        "SUBSTITUTE",
+        "TRIM",
+        "UPPER",
+        "LOWER",
+        "CONTAINS",
+        "BEGINS",
+        "INCLUDES",
+        "EXCLUDES",
+        "MAX",
+        "MIN",
+        "ABS",
+        "SQRT",
+        "MOD",
+        "ROUND",
+        "MROUND",
+        "FLOOR",
+        "CEILING",
+        "LOG",
+        "EXP",
+        "LN",
+        "BLANKVALUE",
+        "NULLVALUE",
+        "PRIORVALUE",
+        "REGEX",
+        "IMAGE",
+        "HYPERLINK",
+        "BR",
+        "VLOOKUP",
+        "TRUE",
+        "FALSE",
+        "NULL",
+        "LABEL",
+        "GETRECORDIDS",
+        "PARENTGROUPVAL",
+        "PREVGROUPVAL",
+    }
+)
+# Identifier immediately before a comparison operator (not preceded by a dot,
+# so cross-object path segments like Account__r.Field are not double-counted).
+_VR_STD_FIELD_CMP_RE = re.compile(r"(?<!\.)(\b[A-Z][A-Za-z0-9_]*\b)\s*(?:!=|<>|<=|>=|<|>|==|=(?!=))")
+# Identifier as first argument of common field-inspection functions.
+_VR_STD_FIELD_FUNC_RE = re.compile(
+    r"\b(?:ISBLANK|ISNULL|ISPICKVAL|ISCHANGED|PRIORVALUE)\s*\(\s*(\b[A-Z][A-Za-z0-9_]*\b)",
+    re.IGNORECASE,
+)
+
 
 def _find_text(el: ET.Element, tag: str, ns: str = "") -> str | None:
     if ns:
@@ -299,6 +388,31 @@ def extract_child_object(path: Path) -> dict:
                                 weight=0.7,
                             )
                         )
+                # C4: Standard field references — identifiers in comparison context or
+                # as first arg of field-inspection functions. Weight 0.5 (lower than
+                # custom fields) because standard-field regex has higher noise risk.
+                # Dangling targets (no field node in the graph) are kept as-is; the
+                # cross-ref pass leaves INFERRED edges alone regardless of target existence.
+                for pat in (_VR_STD_FIELD_CMP_RE, _VR_STD_FIELD_FUNC_RE):
+                    for m in pat.finditer(formula):
+                        fname = m.group(1)
+                        if fname.upper() in _VR_FORMULA_FUNCTIONS:
+                            continue
+                        if fname.endswith(("__c", "__r", "__x", "__e")):
+                            continue  # custom / event types — handled by other patterns
+                        fid = field_id(obj_name, fname)
+                        if fid not in seen_fields:
+                            seen_fields.add(fid)
+                            edges.append(
+                                _make_edge(
+                                    child_nid,
+                                    fid,
+                                    "references",
+                                    "INFERRED",
+                                    str_path,
+                                    weight=0.5,
+                                )
+                            )
         except (ET.ParseError, OSError):
             pass
 

@@ -82,11 +82,16 @@ def extract_flow(path: Path) -> dict:
     process_type = _find_text(root_el, "processType", ns) or "Flow"
     trigger_type = _find_text(root_el, "triggerType", ns)
 
+    # C2: Process Builder flows declare processType="Workflow". We override sf_type
+    # (rather than adding a subtype attr) so every type-based filter sees "ProcessBuilder"
+    # as a first-class value, consistent with all other sf_type filters in the codebase.
+    sf_type_for_node = "ProcessBuilder" if process_type == "Workflow" else "Flow"
+
     nodes.append(
         {
             "id": flow_nid,
             "label": flow_name,
-            "sf_type": "Flow",
+            "sf_type": sf_type_for_node,
             "file_type": "flow",
             "source_file": str_path,
             "source_location": None,
@@ -110,6 +115,17 @@ def extract_flow(path: Path) -> dict:
             trigger_edge["trigger_type"] = start_trigger_type
             if record_trigger_type:
                 trigger_edge["trigger_event"] = record_trigger_type
+            edges.append(trigger_edge)
+        # C3: Platform-event triggered flows — target is the __e object node.
+        # The object field in <start> names the platform event API name.
+        elif trigger_obj and start_trigger_type == "PlatformEvent":
+            trigger_edge = _make_edge(flow_nid, object_id(trigger_obj), "triggers", "EXTRACTED", str_path)
+            trigger_edge["trigger_type"] = "platform_event"
+            edges.append(trigger_edge)
+        # C3: Scheduled flows — emit triggers edge to the target object when declared.
+        elif start_trigger_type == "Scheduled" and trigger_obj:
+            trigger_edge = _make_edge(flow_nid, object_id(trigger_obj), "triggers", "EXTRACTED", str_path)
+            trigger_edge["trigger_type"] = "scheduled"
             edges.append(trigger_edge)
 
     # Action calls (Apex, email alerts, HTTP callouts, etc.)
