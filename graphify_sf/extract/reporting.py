@@ -219,9 +219,7 @@ def extract_report_type(path: Path) -> dict:
             for col_el in _find_all(root, "columns", ns):
                 field_val = _find_text(col_el, "field", ns)
                 if field_val:
-                    edges.append(
-                        _make_edge(nid, field_id(base_obj, field_val), "uses", "EXTRACTED", str_path)
-                    )
+                    edges.append(_make_edge(nid, field_id(base_obj, field_val), "uses", "EXTRACTED", str_path))
 
     except (ET.ParseError, OSError):
         pass

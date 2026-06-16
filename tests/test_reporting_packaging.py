@@ -227,9 +227,7 @@ def test_f1_negative_no_phantom_object_for_report_type_name(f1_result):
 def test_f1_negative_no_phantom_apex_or_object_for_standard_field(f1_result):
     nodes = _nodes_by_id(f1_result)
     spurious = [
-        nid
-        for nid, n in nodes.items()
-        if "created_date" in nid and n.get("sf_type") in ("CustomObject", "ApexClass")
+        nid for nid, n in nodes.items() if "created_date" in nid and n.get("sf_type") in ("CustomObject", "ApexClass")
     ]
     assert spurious == [], f"standard field CREATED_DATE must not spawn object/apex nodes: {spurious}"
 
@@ -301,9 +299,7 @@ def test_f2_negative_no_namespace_on_plain_node(f1_result):
     nodes = _nodes_by_id(f1_result)
     account = nodes.get("object_account")
     assert account is not None, "object_account should exist in F1 fixture"
-    assert "namespace" not in account, (
-        "plain Account object must not have a namespace attr"
-    )
+    assert "namespace" not in account, "plain Account object must not have a namespace attr"
 
 
 # NEGATIVE: InstalledPackage node must have no outgoing edges (F2 descoped sfdx-project.json)

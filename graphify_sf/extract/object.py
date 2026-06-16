@@ -388,9 +388,7 @@ def extract_child_object(path: Path) -> dict:
                 if fld_el.text:
                     fname = fld_el.text.strip()
                     if fname:
-                        edges.append(
-                            _make_edge(child_nid, field_id(obj_name, fname), "uses", "EXTRACTED", str_path)
-                        )
+                        edges.append(_make_edge(child_nid, field_id(obj_name, fname), "uses", "EXTRACTED", str_path))
         except (ET.ParseError, OSError):
             pass
 
@@ -404,9 +402,7 @@ def extract_child_object(path: Path) -> dict:
                 if col_el.text:
                     col = col_el.text.strip()
                     if col:
-                        edges.append(
-                            _make_edge(child_nid, field_id(obj_name, col), "uses", "EXTRACTED", str_path)
-                        )
+                        edges.append(_make_edge(child_nid, field_id(obj_name, col), "uses", "EXTRACTED", str_path))
         except (ET.ParseError, OSError):
             pass
 
@@ -419,9 +415,7 @@ def extract_child_object(path: Path) -> dict:
             bp = _find_text(root_el, "businessProcess", ns)
             if bp:
                 bp_nid = make_sf_id("businessprocess", obj_name, bp)
-                edges.append(
-                    _make_edge(child_nid, bp_nid, "references", "EXTRACTED", str_path)
-                )
+                edges.append(_make_edge(child_nid, bp_nid, "references", "EXTRACTED", str_path))
         except (ET.ParseError, OSError):
             pass
 
@@ -546,9 +540,7 @@ def extract_field_set(path: Path) -> dict:
                         fid = field_id(obj_name, fname)
                         if fname and fid not in seen:
                             seen.add(fid)
-                            edges.append(
-                                _make_edge(fs_nid, fid, "contains", "EXTRACTED", str_path)
-                            )
+                            edges.append(_make_edge(fs_nid, fid, "contains", "EXTRACTED", str_path))
     except (ET.ParseError, OSError):
         pass
 

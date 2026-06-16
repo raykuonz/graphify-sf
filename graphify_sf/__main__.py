@@ -553,11 +553,7 @@ def _cmd_explain(label: str, graph_path: Path, relation: str | None = None) -> N
         if relation:
             # Filter to matching relation — iterate ALL parallel edges so a
             # {queries,dml} pair is found by BOTH a queries AND a dml filter.
-            filtered = [
-                nb
-                for nb in neighbors
-                if any(ed.get("relation") == relation for ed in _edge_datas(G, nid, nb))
-            ]
+            filtered = [nb for nb in neighbors if any(ed.get("relation") == relation for ed in _edge_datas(G, nid, nb))]
             print(f"\nConnections with relation={relation} ({len(filtered)}):")
             for nb in sorted(filtered, key=lambda n: G.degree(n), reverse=True):
                 for edata in [ed for ed in _edge_datas(G, nid, nb) if ed.get("relation") == relation]:

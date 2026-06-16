@@ -201,11 +201,7 @@ def test_d2_vf_standard_controller_does_not_emit_phantom_apex_class(d2_result):
     `Controller="Account"` inside `standardController="Account"` previously matched
     _CONTROLLER_RE; a negative lookbehind now prevents it."""
     edges = _edges(d2_result)
-    phantom = [
-        e
-        for e in edges
-        if e.get("source") == "page_accountdetailpage" and e.get("target") == "apex_account"
-    ]
+    phantom = [e for e in edges if e.get("source") == "page_accountdetailpage" and e.get("target") == "apex_account"]
     assert phantom == [], f"phantom apex_account reference leaked from standardController: {phantom}"
 
 
@@ -240,9 +236,7 @@ def test_d2_aura_calls_apex_method_inferred(d2_result):
         None,
     )
     assert edge is not None, "expected Aura→method_myctrl_dothing calls edge"
-    assert edge["confidence"] == "INFERRED", (
-        f"Aura server-action calls must be INFERRED, got {edge['confidence']!r}"
-    )
+    assert edge["confidence"] == "INFERRED", f"Aura server-action calls must be INFERRED, got {edge['confidence']!r}"
 
 
 def test_d2_aura_still_references_controller_class_extracted(d2_result):

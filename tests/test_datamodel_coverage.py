@@ -159,8 +159,7 @@ def test_e1_negative_no_gvs_edge_for_non_picklist(e1_result):
     bad = [
         e
         for e in edges
-        if e.get("target") == "globalvalueset_my_gvs"
-        and e.get("source") not in ("field_account_rating__c",)
+        if e.get("target") == "globalvalueset_my_gvs" and e.get("source") not in ("field_account_rating__c",)
     ]
     assert bad == [], f"unexpected GVS edges from non-picklist fields: {bad}"
 
@@ -278,9 +277,7 @@ def test_e2_negative_compactlayout_no_spurious_uses_edges(e2_result):
     """CompactLayout must not emit uses edges to targets other than the declared fields."""
     edges = _edges(e2_result)
     cl_uses = [
-        e
-        for e in edges
-        if e.get("source") == "compactlayout_account_account_cl" and e.get("relation") == "uses"
+        e for e in edges if e.get("source") == "compactlayout_account_account_cl" and e.get("relation") == "uses"
     ]
     targets = {e["target"] for e in cl_uses}
     allowed = {"field_account_name", "field_account_phone"}
@@ -335,14 +332,8 @@ def test_e3_whoid_references_lead_extracted(e3_result):
 def test_e3_polymorphic_lookup_emits_exactly_two_references_edges(e3_result):
     """WhoId__c with two referenceTo elements must emit exactly 2 references edges."""
     edges = _edges(e3_result)
-    ref_edges = [
-        e
-        for e in edges
-        if e.get("source") == "field_task__c_whoid__c" and e.get("relation") == "references"
-    ]
-    assert len(ref_edges) == 2, (
-        f"expected exactly 2 references edges from WhoId__c, got {len(ref_edges)}: {ref_edges}"
-    )
+    ref_edges = [e for e in edges if e.get("source") == "field_task__c_whoid__c" and e.get("relation") == "references"]
+    assert len(ref_edges) == 2, f"expected exactly 2 references edges from WhoId__c, got {len(ref_edges)}: {ref_edges}"
 
 
 def test_e3_negative_single_lookup_emits_exactly_one_references_edge(e3_result):
@@ -352,9 +343,7 @@ def test_e3_negative_single_lookup_emits_exactly_one_references_edge(e3_result):
     """
     edges = _edges(e3_result)
     ref_edges = [
-        e
-        for e in edges
-        if e.get("source") == "field_opportunity_account__c" and e.get("relation") == "references"
+        e for e in edges if e.get("source") == "field_opportunity_account__c" and e.get("relation") == "references"
     ]
     assert len(ref_edges) == 1, (
         f"single-referenceTo lookup must emit exactly 1 references edge, got {len(ref_edges)}: {ref_edges}"

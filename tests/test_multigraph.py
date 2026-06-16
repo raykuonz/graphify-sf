@@ -107,9 +107,7 @@ def test_round_trip_preserves_parallel_edges(tmp_path):
     except TypeError:
         G = _jg.node_link_graph(data)
 
-    assert isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)), (
-        f"loaded graph is {type(G).__name__}, expected MultiDiGraph"
-    )
+    assert isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)), f"loaded graph is {type(G).__name__}, expected MultiDiGraph"
 
     src, tgt = "apex_accountprocessor", "object_account"
     assert G.has_edge(src, tgt), f"edge {src}→{tgt} missing after round-trip"
@@ -163,12 +161,8 @@ def test_relation_filter_finds_pair_via_dml(tmp_path):
 
     src = "apex_accountprocessor"
     neighbors = list(G.neighbors(src))
-    dml_neighbors = [
-        nb for nb in neighbors if any(ed.get("relation") == "dml" for ed in edge_datas(G, src, nb))
-    ]
-    assert "object_account" in dml_neighbors, (
-        f"object_account not found via dml filter; dml_neighbors={dml_neighbors}"
-    )
+    dml_neighbors = [nb for nb in neighbors if any(ed.get("relation") == "dml" for ed in edge_datas(G, src, nb))]
+    assert "object_account" in dml_neighbors, f"object_account not found via dml filter; dml_neighbors={dml_neighbors}"
 
 
 # ---------------------------------------------------------------------------
