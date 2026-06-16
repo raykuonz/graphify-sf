@@ -116,6 +116,14 @@ def extract_custom_object(path: Path) -> dict:
             if custom_settings_type:
                 nodes[0]["sf_type"] = "CustomSetting"
 
+        # B1: Org-Wide Defaults — read sharing model declarations
+        sharing_model = _find_text(root_el, "sharingModel", ns)
+        if sharing_model:
+            nodes[0]["sharing_model"] = sharing_model
+        ext_sharing_model = _find_text(root_el, "externalSharingModel", ns)
+        if ext_sharing_model:
+            nodes[0]["external_sharing_model"] = ext_sharing_model
+
         # ExternalObject: parse <externalDataSource> → backed_by edge (A4)
         if sf_type == "ExternalObject":
             ext_ds = _find_text(root_el, "externalDataSource", ns)

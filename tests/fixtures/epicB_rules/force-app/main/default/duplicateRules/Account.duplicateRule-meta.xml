@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DuplicateRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Account</fullName>
+    <label>Account Duplicate Rule</label>
+    <isActive>true</isActive>
+    <operationsOnEdit>Block</operationsOnEdit>
+    <operationsOnInsert>Block</operationsOnInsert>
+    <sobjectType>Account</sobjectType>
+    <duplicateRuleMatchingRules>
+        <matchingRule>Account.Standard_Account_Match_Rule_v1</matchingRule>
+        <matchingRuleItems>
+            <fieldName>Name</fieldName>
+            <matchBlank>false</matchBlank>
+            <sortOrder>1</sortOrder>
+        </matchingRuleItems>
+        <objectMapping>
+            <inputObject>Account</inputObject>
+            <outputObject>Account</outputObject>
+        </objectMapping>
+    </duplicateRuleMatchingRules>
+</DuplicateRule>

@@ -60,6 +60,11 @@ _COMPOUND_EXT_MAP = {
     ".authprovider-meta.xml": SFFileType.CONFIG,  # A7
     ".cspTrustedSite-meta.xml": SFFileType.CONFIG,  # A7
     ".corsWhitelistOrigins-meta.xml": SFFileType.CONFIG,  # A7
+    ".sharingRules-meta.xml": SFFileType.CONFIG,  # B2
+    ".sharingSet-meta.xml": SFFileType.CONFIG,  # B2
+    ".restrictionRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".duplicateRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".matchingRule-meta.xml": SFFileType.CONFIG,  # B5
     ".role-meta.xml": SFFileType.CONFIG,
     ".site-meta.xml": SFFileType.EXPERIENCE,
     ".network-meta.xml": SFFileType.EXPERIENCE,

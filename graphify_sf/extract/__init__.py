@@ -44,6 +44,8 @@ from .layout import extract_layout
 from .lwc import extract_lwc_bundle
 from .object import extract_child_object, extract_custom_field, extract_custom_object
 from .profile import extract_permset, extract_profile
+from .rules import extract_duplicate_rule, extract_matching_rule, extract_restriction_rule
+from .sharing import extract_sharing_rules, extract_sharing_set
 from .visualforce import extract_vf_component, extract_vf_page
 
 # ---------------------------------------------------------------------------
@@ -87,6 +89,11 @@ _DISPATCH: dict[str, object] = {
     ".authprovider-meta.xml": extract_auth_provider,  # A7
     ".cspTrustedSite-meta.xml": extract_csp_trusted_site,  # A7
     ".corsWhitelistOrigins-meta.xml": extract_cors_origin,  # A7
+    ".sharingRules-meta.xml": extract_sharing_rules,  # B2
+    ".sharingSet-meta.xml": extract_sharing_set,  # B2
+    ".restrictionRule-meta.xml": extract_restriction_rule,  # B5
+    ".duplicateRule-meta.xml": extract_duplicate_rule,  # B5
+    ".matchingRule-meta.xml": extract_matching_rule,  # B5
     ".role-meta.xml": extract_generic_config,
     ".site-meta.xml": extract_generic_config,
     ".network-meta.xml": extract_generic_config,
