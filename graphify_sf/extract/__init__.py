@@ -29,14 +29,18 @@ from .config import (
     extract_auth_provider,
     extract_cors_origin,
     extract_csp_trusted_site,
+    extract_custom_app,
     extract_custom_labels,
     extract_custom_metadata_record,
+    extract_custom_tab,
     extract_external_data_source,
     extract_external_service,
     extract_flexipage,
     extract_generic_config,
     extract_named_credential,
+    extract_quick_action,
     extract_remote_site_setting,
+    extract_static_resource,
 )
 from .doc import extract_doc_file
 from .flow import extract_flow
@@ -80,8 +84,8 @@ _DISPATCH: dict[str, object] = {
     ".externalService-meta.xml": extract_external_service,
     ".settings-meta.xml": extract_generic_config,
     ".connectedApp-meta.xml": extract_generic_config,
-    ".app-meta.xml": extract_generic_config,
-    ".tab-meta.xml": extract_generic_config,
+    ".app-meta.xml": extract_custom_app,  # D3: CustomApplication with contains edges
+    ".tab-meta.xml": extract_custom_tab,  # D3: CustomTab with references edges
     ".testSuite-meta.xml": extract_generic_config,
     ".remoteSite-meta.xml": extract_remote_site_setting,  # A3: old alias
     ".remoteSiteSetting-meta.xml": extract_remote_site_setting,  # A3: correct extension
@@ -94,6 +98,8 @@ _DISPATCH: dict[str, object] = {
     ".restrictionRule-meta.xml": extract_restriction_rule,  # B5
     ".duplicateRule-meta.xml": extract_duplicate_rule,  # B5
     ".matchingRule-meta.xml": extract_matching_rule,  # B5
+    ".resource-meta.xml": extract_static_resource,  # D3: StaticResource
+    ".quickAction-meta.xml": extract_quick_action,  # D3: QuickAction
     ".role-meta.xml": extract_generic_config,
     ".site-meta.xml": extract_generic_config,
     ".network-meta.xml": extract_generic_config,

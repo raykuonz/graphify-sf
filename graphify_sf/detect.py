@@ -65,6 +65,8 @@ _COMPOUND_EXT_MAP = {
     ".restrictionRule-meta.xml": SFFileType.CONFIG,  # B5
     ".duplicateRule-meta.xml": SFFileType.CONFIG,  # B5
     ".matchingRule-meta.xml": SFFileType.CONFIG,  # B5
+    ".resource-meta.xml": SFFileType.CONFIG,  # D3: StaticResource
+    ".quickAction-meta.xml": SFFileType.CONFIG,  # D3: QuickAction
     ".role-meta.xml": SFFileType.CONFIG,
     ".site-meta.xml": SFFileType.EXPERIENCE,
     ".network-meta.xml": SFFileType.EXPERIENCE,
