@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>58.0</apiVersion>
+    <label>Callout Flow</label>
+    <processType>AutoLaunchedFlow</processType>
+    <status>Active</status>
+    <actionCalls>
+        <actionType>httpCallout</actionType>
+        <actionName>CalloutFlow_httpAction</actionName>
+        <label>HTTP Callout</label>
+        <locationX>176</locationX>
+        <locationY>158</locationY>
+        <name>CalloutFlow_httpAction</name>
+        <inputParameters>
+            <name>endpoint</name>
+            <value>
+                <stringValue>callout:My_NC</stringValue>
+            </value>
+        </inputParameters>
+    </actionCalls>
+</Flow>

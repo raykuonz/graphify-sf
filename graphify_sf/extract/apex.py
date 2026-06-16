@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
-from ._ids import apex_class_id, apex_method_id, flow_id, object_id, trigger_id
+from ._ids import apex_class_id, apex_method_id, flow_id, make_sf_id, object_id, trigger_id
 
 # ---------------------------------------------------------------------------
 # Apex regex patterns
@@ -45,6 +46,18 @@ _TRIGGER_RE = re.compile(
 
 # Apex → Flow: Flow.Interview.FlowApiName
 _FLOW_INVOKE_RE = re.compile(r"Flow\.Interview\.(\w+)", re.IGNORECASE)
+
+# A1: HTTP callout detection — endpoint literal in setEndpoint('...')
+_ENDPOINT_RE = re.compile(r'\.setEndpoint\s*\(\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+# A5: EventBus.publish(new SomeEvent__e(...)) — extract the platform event type name
+_EVENT_BUS_PUBLISH_RE = re.compile(r"EventBus\.publish\s*\(\s*new\s+(\w+__e)\s*\(", re.IGNORECASE)
+
+# A6: Custom Metadata type access: SomeType__mdt.getInstance(...)
+_CUSTOM_MDT_ACCESS_RE = re.compile(r"\b(\w+__mdt)\s*\.\s*getInstance\s*\(", re.IGNORECASE)
+
+# A6: Custom Settings access: SomeType__c.getInstance(...) or .getOrgDefaults(...)
+_CUSTOM_SETTING_ACCESS_RE = re.compile(r"\b(\w+__c)\s*\.\s*(?:getInstance|getOrgDefaults)\s*\(", re.IGNORECASE)
 
 # Variable declaration patterns used to resolve DML operands to their declared SObject type.
 # Simple: TypeName varName [= ...] ; or TypeName varName , or TypeName varName )
@@ -417,6 +430,63 @@ def extract_apex_class(path: Path) -> dict:
                     )
                 )
 
+        # A1: HTTP callout detection via .setEndpoint('...')
+        seen_callout_targets: set[str] = set()
+        for em in _ENDPOINT_RE.finditer(text):
+            endpoint = em.group(1).strip()
+            nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
+            if nc_match:
+                nc_name = nc_match.group(1).strip()
+                tgt_id = make_sf_id("namedcredential", nc_name)
+                if tgt_id not in seen_callout_targets:
+                    seen_callout_targets.add(tgt_id)
+                    edges.append(_make_edge(class_nid, tgt_id, "makes_callout", "EXTRACTED", str_path))
+            elif endpoint.startswith(("http://", "https://")):
+                try:
+                    host = urlparse(endpoint).hostname or endpoint
+                except Exception:
+                    host = endpoint
+                tgt_id = make_sf_id("externalendpoint", host)
+                if tgt_id not in seen_callout_targets:
+                    seen_callout_targets.add(tgt_id)
+                    # Create ExternalEndpoint node inline
+                    nodes.append(
+                        {
+                            "id": tgt_id,
+                            "label": host,
+                            "sf_type": "ExternalEndpoint",
+                            "file_type": "apex",
+                            "source_file": str_path,
+                            "source_location": None,
+                            "confidence": "INFERRED",
+                        }
+                    )
+                    edges.append(_make_edge(class_nid, tgt_id, "makes_callout", "INFERRED", str_path))
+
+        # A5: EventBus.publish(new X__e(...)) → publishes edge
+        seen_publishes: set[str] = set()
+        for pm in _EVENT_BUS_PUBLISH_RE.finditer(text):
+            event_name = pm.group(1)
+            tgt_id = object_id(event_name)
+            if tgt_id not in seen_publishes:
+                seen_publishes.add(tgt_id)
+                edges.append(_make_edge(class_nid, tgt_id, "publishes", "EXTRACTED", str_path))
+
+        # A6: Custom Metadata / Custom Settings config reads (INFERRED — by-type fetch)
+        seen_config_reads: set[str] = set()
+        for cm in _CUSTOM_MDT_ACCESS_RE.finditer(text):
+            mdt_type = cm.group(1)
+            tgt_id = make_sf_id("custommetadata", mdt_type)
+            if tgt_id not in seen_config_reads:
+                seen_config_reads.add(tgt_id)
+                edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
+        for cm in _CUSTOM_SETTING_ACCESS_RE.finditer(text):
+            cs_type = cm.group(1)
+            tgt_id = object_id(cs_type)
+            if tgt_id not in seen_config_reads:
+                seen_config_reads.add(tgt_id)
+                edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
+
         # Stash raw_calls in the class node for cross-file resolution
         if raw_calls and nodes:
             nodes[0]["_raw_calls"] = raw_calls
@@ -478,6 +548,18 @@ def extract_apex_trigger(path: Path) -> dict:
             str_path,
         )
     )
+
+    # A5: trigger on a Platform Event (__e) → subscribes edge
+    if obj_name.lower().endswith("__e"):
+        edges.append(
+            _make_edge(
+                trigger_nid,
+                object_id(obj_name),
+                "subscribes",
+                "EXTRACTED",
+                str_path,
+            )
+        )
 
     # Collect raw calls for cross-file resolution
     raw_calls: list[dict] = []

@@ -26,12 +26,17 @@ from .apex import extract_apex_class, extract_apex_trigger
 from .aura import extract_aura_bundle
 from .automation import extract_approval_process, extract_generic_automation, extract_workflow
 from .config import (
+    extract_auth_provider,
+    extract_cors_origin,
+    extract_csp_trusted_site,
     extract_custom_labels,
     extract_custom_metadata_record,
+    extract_external_data_source,
     extract_external_service,
     extract_flexipage,
     extract_generic_config,
     extract_named_credential,
+    extract_remote_site_setting,
 )
 from .doc import extract_doc_file
 from .flow import extract_flow
@@ -76,7 +81,12 @@ _DISPATCH: dict[str, object] = {
     ".app-meta.xml": extract_generic_config,
     ".tab-meta.xml": extract_generic_config,
     ".testSuite-meta.xml": extract_generic_config,
-    ".remoteSite-meta.xml": extract_generic_config,
+    ".remoteSite-meta.xml": extract_remote_site_setting,  # A3: old alias
+    ".remoteSiteSetting-meta.xml": extract_remote_site_setting,  # A3: correct extension
+    ".externalDataSource-meta.xml": extract_external_data_source,  # A4
+    ".authprovider-meta.xml": extract_auth_provider,  # A7
+    ".cspTrustedSite-meta.xml": extract_csp_trusted_site,  # A7
+    ".corsWhitelistOrigins-meta.xml": extract_cors_origin,  # A7
     ".role-meta.xml": extract_generic_config,
     ".site-meta.xml": extract_generic_config,
     ".network-meta.xml": extract_generic_config,

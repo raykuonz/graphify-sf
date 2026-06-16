@@ -10,7 +10,7 @@ from ._ids import apex_class_id, make_sf_id, object_id
 
 def _get_ns(root_el: ET.Element) -> str:
     if root_el.tag.startswith("{"):
-        return root_el.tag.split("}", 1)[1]
+        return root_el.tag.split("}")[0][1:]
     return ""
 
 
@@ -109,6 +109,25 @@ def extract_workflow(path: Path) -> dict:
                     }
                 )
                 edges.append(_make_edge(workflow_nid, alert_nid, "contains", "EXTRACTED", str_path))
+
+        # A8: Outbound messages — extract endpoint URL and emit contains edge
+        for msg in _find_all(root_el, "outboundMessages", ns):
+            msg_name = _find_text(msg, "fullName", ns)
+            if msg_name:
+                msg_nid = make_sf_id("workflowoutboundmessage", stem, msg_name)
+                endpoint_url = _find_text(msg, "endpointUrl", ns)
+                msg_node: dict = {
+                    "id": msg_nid,
+                    "label": msg_name,
+                    "sf_type": "WorkflowOutboundMessage",
+                    "file_type": "automation",
+                    "source_file": str_path,
+                    "source_location": None,
+                }
+                if endpoint_url:
+                    msg_node["endpoint_url"] = endpoint_url
+                nodes.append(msg_node)
+                edges.append(_make_edge(workflow_nid, msg_nid, "contains", "EXTRACTED", str_path))
 
     except ET.ParseError:
         pass

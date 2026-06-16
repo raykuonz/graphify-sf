@@ -204,6 +204,139 @@ def extract_flexipage(path: Path) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def extract_remote_site_setting(path: Path) -> dict:
+    """Extract a RemoteSiteSetting node with endpoint_url from <url>."""
+    str_path = str(path)
+    stem = path.stem
+    for suffix in (".remoteSiteSetting-meta", ".remoteSite-meta"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    nid = make_sf_id("remotesitesetting", stem)
+    node: dict = {
+        "id": nid,
+        "label": stem,
+        "sf_type": "RemoteSiteSetting",
+        "file_type": "config",
+        "source_file": str_path,
+        "source_location": None,
+    }
+    try:
+        tree = ET.parse(str_path)
+        root_el = tree.getroot()
+        ns = _get_ns(root_el)
+        url = _find_text(root_el, "url", ns)
+        if url:
+            node["endpoint_url"] = url
+    except ET.ParseError:
+        pass
+    return {"nodes": [node], "edges": []}
+
+
+def extract_external_data_source(path: Path) -> dict:
+    """Extract an ExternalDataSource node; emit uses→NamedCredential if present."""
+    str_path = str(path)
+    stem = path.stem
+    if stem.endswith(".externalDataSource-meta"):
+        stem = stem[: -len(".externalDataSource-meta")]
+    nid = make_sf_id("externaldatasource", stem)
+    node: dict = {
+        "id": nid,
+        "label": stem,
+        "sf_type": "ExternalDataSource",
+        "file_type": "config",
+        "source_file": str_path,
+        "source_location": None,
+    }
+    edges: list[dict] = []
+    try:
+        tree = ET.parse(str_path)
+        root_el = tree.getroot()
+        ns = _get_ns(root_el)
+        nc = _find_text(root_el, "namedCredential", ns)
+        if nc:
+            edges.append(_make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path))
+    except ET.ParseError:
+        pass
+    return {"nodes": [node], "edges": edges}
+
+
+def extract_auth_provider(path: Path) -> dict:
+    """Extract an AuthProvider node."""
+    str_path = str(path)
+    stem = path.stem
+    if stem.endswith(".authprovider-meta"):
+        stem = stem[: -len(".authprovider-meta")]
+    nid = make_sf_id("authprovider", stem)
+    return {
+        "nodes": [
+            {
+                "id": nid,
+                "label": stem,
+                "sf_type": "AuthProvider",
+                "file_type": "config",
+                "source_file": str_path,
+                "source_location": None,
+            }
+        ],
+        "edges": [],
+    }
+
+
+def extract_csp_trusted_site(path: Path) -> dict:
+    """Extract a CspTrustedSite node with endpoint_url from <endpointUrl> or <url>."""
+    str_path = str(path)
+    stem = path.stem
+    if stem.endswith(".cspTrustedSite-meta"):
+        stem = stem[: -len(".cspTrustedSite-meta")]
+    nid = make_sf_id("csptrustedsite", stem)
+    node: dict = {
+        "id": nid,
+        "label": stem,
+        "sf_type": "CspTrustedSite",
+        "file_type": "config",
+        "source_file": str_path,
+        "source_location": None,
+    }
+    try:
+        tree = ET.parse(str_path)
+        root_el = tree.getroot()
+        ns = _get_ns(root_el)
+        url = _find_text(root_el, "endpointUrl", ns) or _find_text(root_el, "url", ns)
+        if url:
+            node["endpoint_url"] = url
+    except ET.ParseError:
+        pass
+    return {"nodes": [node], "edges": []}
+
+
+def extract_cors_origin(path: Path) -> dict:
+    """Extract a CorsOrigin node with url_pattern from <urlPattern>."""
+    str_path = str(path)
+    stem = path.stem
+    if stem.endswith(".corsWhitelistOrigins-meta"):
+        stem = stem[: -len(".corsWhitelistOrigins-meta")]
+    nid = make_sf_id("corsorigin", stem)
+    node: dict = {
+        "id": nid,
+        "label": stem,
+        "sf_type": "CorsOrigin",
+        "file_type": "config",
+        "source_file": str_path,
+        "source_location": None,
+    }
+    try:
+        tree = ET.parse(str_path)
+        root_el = tree.getroot()
+        ns = _get_ns(root_el)
+        url_pattern = _find_text(root_el, "urlPattern", ns)
+        if url_pattern:
+            node["url_pattern"] = url_pattern
+    except ET.ParseError:
+        pass
+    return {"nodes": [node], "edges": []}
+
+
 def extract_generic_config(path: Path) -> dict:
     """Generic extractor for config files not covered by specific extractors."""
     str_path = str(path)

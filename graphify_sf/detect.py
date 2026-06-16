@@ -55,6 +55,11 @@ _COMPOUND_EXT_MAP = {
     ".flexipage-meta.xml": SFFileType.CONFIG,
     ".testSuite-meta.xml": SFFileType.CONFIG,
     ".remoteSite-meta.xml": SFFileType.CONFIG,
+    ".remoteSiteSetting-meta.xml": SFFileType.CONFIG,  # A3: correct SFDX extension
+    ".externalDataSource-meta.xml": SFFileType.CONFIG,  # A4
+    ".authprovider-meta.xml": SFFileType.CONFIG,  # A7
+    ".cspTrustedSite-meta.xml": SFFileType.CONFIG,  # A7
+    ".corsWhitelistOrigins-meta.xml": SFFileType.CONFIG,  # A7
     ".role-meta.xml": SFFileType.CONFIG,
     ".site-meta.xml": SFFileType.EXPERIENCE,
     ".network-meta.xml": SFFileType.EXPERIENCE,

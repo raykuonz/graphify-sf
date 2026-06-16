@@ -66,25 +66,39 @@ def _parent_object_name(path: Path) -> str:
 
 
 def extract_custom_object(path: Path) -> dict:
-    """Extract a CustomObject node from .object-meta.xml."""
+    """Extract a CustomObject node from .object-meta.xml.
+
+    Detects special object types by API-name suffix:
+    - ``__x`` → ExternalObject (A4)
+    - ``__e`` → PlatformEvent (A5)
+    - ``<customSettingsType>`` element → CustomSetting (A6)
+    """
     if not path.exists():
         return {"nodes": [], "edges": []}
     str_path = str(path)
     obj_name = _object_name_from_stem(path)
     obj_nid = object_id(obj_name)
 
+    # Determine sf_type from object API name suffix
+    if obj_name.endswith("__x"):
+        sf_type = "ExternalObject"
+    elif obj_name.endswith("__e"):
+        sf_type = "PlatformEvent"
+    else:
+        sf_type = "CustomObject"  # may be overridden by <customSettingsType> below
+
     nodes: list[dict] = [
         {
             "id": obj_nid,
             "label": obj_name,
-            "sf_type": "CustomObject",
+            "sf_type": sf_type,
             "file_type": "object",
             "source_file": str_path,
             "source_location": None,
         }
     ]
+    edges: list[dict] = []
 
-    # Try to enrich with label/description from XML
     try:
         tree = ET.parse(str_path)
         root_el = tree.getroot()
@@ -95,10 +109,30 @@ def extract_custom_object(path: Path) -> dict:
         desc = _find_text(root_el, "description", ns)
         if desc:
             nodes[0]["description"] = desc[:200]
+
+        # CustomSetting: <customSettingsType> overrides sf_type for __c objects
+        if sf_type == "CustomObject":
+            custom_settings_type = _find_text(root_el, "customSettingsType", ns)
+            if custom_settings_type:
+                nodes[0]["sf_type"] = "CustomSetting"
+
+        # ExternalObject: parse <externalDataSource> → backed_by edge (A4)
+        if sf_type == "ExternalObject":
+            ext_ds = _find_text(root_el, "externalDataSource", ns)
+            if ext_ds:
+                edges.append(
+                    _make_edge(
+                        obj_nid,
+                        make_sf_id("externaldatasource", ext_ds),
+                        "backed_by",
+                        "EXTRACTED",
+                        str_path,
+                    )
+                )
     except (ET.ParseError, OSError):
         pass
 
-    return {"nodes": nodes, "edges": []}
+    return {"nodes": nodes, "edges": edges}
 
 
 def extract_custom_field(path: Path) -> dict:
