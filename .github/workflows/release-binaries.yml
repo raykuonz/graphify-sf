@@ -161,12 +161,23 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Write release version into npm/package.json
+        shell: bash
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          VERSION="${{ steps.tag.outputs.version }}"
-          # Use npm version to update package.json without creating a git tag
-          cd npm
-          npm version "${VERSION}" --no-git-tag-version
-          echo "npm package version set to ${VERSION}"
+          # Idempotent version stamp. `npm version` errors with "Version not
+          # changed" when package.json already equals VERSION (which it does
+          # when the in-repo version was bumped in the release PR), so we write
+          # the field directly instead.
+          node -e '
+            const fs = require("fs");
+            const p = "npm/package.json";
+            const v = process.env.VERSION;
+            const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+            pkg.version = v;
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
+            console.log("npm package version set to", v);
+          '
 
       - name: Publish to npm
         run: npm publish ./npm --access public
