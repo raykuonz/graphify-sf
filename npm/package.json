@@ -1,6 +1,6 @@
 {
   "name": "graphify-sf",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Turn any Salesforce SFDX project into a queryable knowledge graph — no Python required.",
   "bin": {
     "graphify-sf": "bin/graphify-sf.js"
@@ -9,6 +9,13 @@
   "scripts": {
     "postinstall": "node install.js",
     "test": "node --test"
+  },
+  "optionalDependencies": {
+    "@graphify-sf/cli-linux-x64": "0.3.9",
+    "@graphify-sf/cli-linux-arm64": "0.3.9",
+    "@graphify-sf/cli-darwin-x64": "0.3.9",
+    "@graphify-sf/cli-darwin-arm64": "0.3.9",
+    "@graphify-sf/cli-win32-x64": "0.3.9"
   },
   "files": [
     "bin/",

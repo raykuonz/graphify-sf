@@ -11,6 +11,39 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.9] — 2026-06-16
+
+### Changed
+- **The prebuilt CLI binary now ships *inside* npm — `npm install` no longer makes a network request on the
+  happy path.** Following the well-established esbuild/@swc/turbo pattern, the binary for each platform is
+  published as a scoped subpackage (`@graphify-sf/cli-<plat>-<arch>`) and pulled in via
+  `optionalDependencies` with `os`/`cpu` constraints. npm installs only the subpackage matching the host,
+  so the binary arrives with the dependency tree itself — even on networks that block GitHub Releases.
+  Verified end-to-end in a real consumer `node_modules` layout: postinstall is silent, exits 0, and makes
+  zero network calls when the platform subpackage is present.
+- `lib/download.js` `ensureBinary()` resolution order is now: (1) `GRAPHIFY_BIN`, (2) the installed platform
+  subpackage (new, no network), (3) a previously-downloaded binary in `bin/`, (4) GitHub Releases download.
+- `install.js` postinstall short-circuits (no network) when a binary already resolves from the env override
+  or a subpackage; the GitHub download remains a non-fatal last-resort fallback (the 0.3.8 `exit(0)`
+  behaviour is preserved).
+
+### Added
+- `@graphify-sf/cli-{linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64}` scoped subpackages, each
+  shipping the renamed prebuilt binary with the correct `os`/`cpu` so npm selects exactly one.
+- `npm/scripts/build-subpackages.js` — deterministic, zero-dependency scaffolder that turns the release
+  assets into the five subpackage directories (used by the release workflow; runnable locally).
+- `release-binaries.yml` now downloads the release binaries, scaffolds the subpackages, publishes them
+  (before the main package, which pins their exact versions), then stamps the version into the main
+  package + its `optionalDependencies` and publishes it.
+- npm regression tests for subpackage resolution, `ensureBinary()` precedence, and no-network postinstall.
+
+### Release prerequisite (one-time)
+- The `@graphify-sf` npm scope/org must exist and the `NPM_TOKEN` secret must be authorized to publish to
+  it (`--access public`). Create the org on npmjs.com and grant the publish token access before cutting the
+  0.3.9 release, otherwise the `Publish platform subpackages` step will 402/403 on first publish.
+
+---
+
 ## [0.3.8] — 2026-06-16
 
 ### Fixed
