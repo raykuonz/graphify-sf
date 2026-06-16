@@ -8,6 +8,7 @@ Two-pass pipeline:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -54,9 +55,18 @@ from .object import (
     extract_global_value_set,
 )
 from .profile import extract_permset, extract_profile
+from .reporting import (
+    extract_dashboard,
+    extract_installed_package,
+    extract_report,
+    extract_report_type,
+)
 from .rules import extract_duplicate_rule, extract_matching_rule, extract_restriction_rule
 from .sharing import extract_sharing_rules, extract_sharing_set
 from .visualforce import extract_vf_component, extract_vf_page
+
+# F2: detect managed-package namespace prefix (e.g. "npsp__Name" → namespace="npsp")
+_NS_PREFIX_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)__")
 
 # ---------------------------------------------------------------------------
 # Compound-suffix dispatch table — longest suffix wins
@@ -109,6 +119,12 @@ _DISPATCH: dict[str, object] = {
     ".matchingRule-meta.xml": extract_matching_rule,  # B5
     ".resource-meta.xml": extract_static_resource,  # D3: StaticResource
     ".quickAction-meta.xml": extract_quick_action,  # D3: QuickAction
+    # Reporting (F1)
+    ".report-meta.xml": extract_report,
+    ".dashboard-meta.xml": extract_dashboard,
+    ".reportType-meta.xml": extract_report_type,
+    # Packaging (F2)
+    ".installedPackage-meta.xml": extract_installed_package,
     ".role-meta.xml": extract_generic_config,
     ".site-meta.xml": extract_generic_config,
     ".network-meta.xml": extract_generic_config,
@@ -242,6 +258,14 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
             resolved_edges.append(new_edge)
         else:
             resolved_edges.append(edge)
+
+    # F2: tag nodes whose label carries a managed-package namespace prefix (ns__Name)
+    for node in nodes:
+        if "namespace" not in node:
+            label = node.get("label", "")
+            m = _NS_PREFIX_RE.match(label)
+            if m:
+                node["namespace"] = m.group(1)
 
     return nodes, resolved_edges
 

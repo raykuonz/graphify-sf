@@ -78,6 +78,12 @@ _COMPOUND_EXT_MAP = {
     ".escalationRules-meta.xml": SFFileType.AUTOMATION,
     ".assignmentRules-meta.xml": SFFileType.AUTOMATION,
     ".autoResponseRules-meta.xml": SFFileType.AUTOMATION,
+    # Reporting (F1)
+    ".report-meta.xml": SFFileType.CONFIG,
+    ".dashboard-meta.xml": SFFileType.CONFIG,
+    ".reportType-meta.xml": SFFileType.CONFIG,
+    # Packaging (F2)
+    ".installedPackage-meta.xml": SFFileType.CONFIG,
     # Agentforce
     ".bot-meta.xml": SFFileType.AGENTFORCE,
     ".botVersion-meta.xml": SFFileType.AGENTFORCE,
