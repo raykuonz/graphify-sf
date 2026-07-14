@@ -646,7 +646,11 @@ def _tool_bfs_impact(args: dict) -> dict:
                     continue
                 yield nb, rel, conf
 
-    # BFS: record the first (shallowest) depth and its edge metadata per node.
+    # BFS: record the shallowest depth per node and accumulate EVERY parallel edge
+    # discovered at that depth. A single neighbour may be reached by several
+    # parallel edges (e.g. queries + dml to one object); keeping only the first
+    # would silently drop the rest, the same collapse the MultiDiGraph contract
+    # forbids and the sibling tools already avoid.
     impacted: dict[str, dict] = {}
     visited: set = {nid}
     queue: deque = deque([(nid, 0)])
@@ -655,8 +659,12 @@ def _tool_bfs_impact(args: dict) -> dict:
         if depth >= max_depth:
             continue
         for nb, rel, conf in _outgoing(cur):
-            if nb not in impacted and nb != nid:
-                impacted[nb] = {"relation": rel, "confidence": conf, "depth": depth + 1}
+            if nb == nid:
+                continue
+            if nb not in impacted:
+                impacted[nb] = {"edges": [], "depth": depth + 1}
+            if depth + 1 == impacted[nb]["depth"]:
+                impacted[nb]["edges"].append((rel, conf))
             if nb not in visited:
                 visited.add(nb)
                 queue.append((nb, depth + 1))
@@ -674,13 +682,17 @@ def _tool_bfs_impact(args: dict) -> dict:
         data = _G.nodes[node_id]
         sf_type = data.get("sf_type", "")
         by_type[sf_type] += 1
+        # Mirror _tool_shortest_path: scalar for the common single-edge case,
+        # list when a node is impacted through several parallel edges.
+        relations = [e[0] for e in meta["edges"]]
+        confidences = [e[1] for e in meta["edges"]]
         nodes_out.append(
             {
                 "id": node_id,
                 "label": data.get("label", node_id),
                 "sf_type": sf_type,
-                "relation": meta["relation"],
-                "confidence": meta["confidence"],
+                "relation": relations[0] if len(relations) == 1 else relations,
+                "confidence": confidences[0] if len(confidences) == 1 else confidences,
                 "depth": meta["depth"],
             }
         )

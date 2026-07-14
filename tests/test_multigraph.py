@@ -435,6 +435,61 @@ def test_bfs_impact_unknown_node_returns_not_found(monkeypatch):
     assert result["found"] is False
 
 
+def test_bfs_impact_surfaces_all_parallel_relations_to_neighbor(monkeypatch):
+    """A neighbour reached via several parallel edges must report ALL of them.
+
+    Regression for the MultiDiGraph collapse: AccountProcessor both queries AND
+    dml-writes Account, so bfs_impact must list both relations, not just the
+    first-encountered one.
+    """
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_bfs_impact({"node": "AccountProcessor", "direction": "forward", "max_depth": 1})
+    entry = next(n for n in result["nodes"] if n["id"] == "object_account")
+    rel = entry["relation"]
+    rels = set(rel) if isinstance(rel, list) else {rel}
+    assert rels == {"queries", "dml"}, f"bfs_impact lost a parallel relation: {rel}"
+
+
+def _multi_confidence_serve_graph():
+    """AccountProcessor writes Account via one EXTRACTED and one INFERRED edge."""
+    from graphify_sf.build import build_from_json
+
+    extraction = {
+        "nodes": [
+            {"id": "apex_accountprocessor", "label": "AccountProcessor", "sf_type": "ApexClass", "file_type": "apex"},
+            {"id": "object_account", "label": "Account", "sf_type": "CustomObject", "file_type": "object"},
+        ],
+        "edges": [
+            {
+                "source": "apex_accountprocessor",
+                "target": "object_account",
+                "relation": "dml",
+                "confidence": "EXTRACTED",
+            },
+            {
+                "source": "apex_accountprocessor",
+                "target": "object_account",
+                "relation": "reads_config",
+                "confidence": "INFERRED",
+            },
+        ],
+    }
+    return build_from_json(extraction, multigraph=True)
+
+
+def test_bfs_impact_surfaces_all_parallel_confidences_to_neighbor(monkeypatch):
+    """Confidence must not collapse either: an EXTRACTED + INFERRED pair to one
+    target reports both confidences when include_inferred is set."""
+    serve = _install_serve_graph(monkeypatch, _multi_confidence_serve_graph())
+    result = serve._tool_bfs_impact(
+        {"node": "AccountProcessor", "direction": "forward", "max_depth": 1, "include_inferred": True}
+    )
+    entry = next(n for n in result["nodes"] if n["id"] == "object_account")
+    conf = entry["confidence"]
+    confs = set(conf) if isinstance(conf, list) else {conf}
+    assert confs == {"EXTRACTED", "INFERRED"}, f"bfs_impact collapsed confidence: {conf}"
+
+
 # ---------------------------------------------------------------------------
 # _get_int hardening — non-numeric / oversized MCP args must not crash or
 # return unbounded results (serve.py's int(args.get(...)) call sites)
