@@ -162,6 +162,95 @@ _APEX_KEYWORDS = frozenset(
 )
 
 
+def _scrub_comments_and_strings(text: str) -> str:
+    """Return *text* with the contents of comments and string literals blanked.
+
+    Line comments (``//...``), block comments (``/* ... */``) and string
+    literals (``'...'`` and ``"..."``, honouring backslash escapes) have their
+    *contents* replaced by spaces. Delimiters, newlines and overall length are
+    preserved so line numbers and character offsets line up with the raw text.
+    A single left-to-right scan tracks the current lexical state so a comment
+    marker inside a string (or a quote inside a comment) is not misread. Routing
+    every subsequent regex pass through the scrubbed text guarantees that any
+    ``{``/``}``/``;`` a downstream regex sees is real code, never text buried in
+    a comment or string literal.
+    """
+    out = list(text)
+    n = len(text)
+    i = 0
+    # state: 0=code, 1=line comment, 2=block comment, 3=string literal
+    state = 0
+    quote = ""
+    while i < n:
+        c = text[i]
+        if state == 0:
+            if c == "/" and i + 1 < n and text[i + 1] == "/":
+                state = 1
+                i += 2
+                continue
+            if c == "/" and i + 1 < n and text[i + 1] == "*":
+                state = 2
+                i += 2
+                continue
+            if c in ("'", '"'):
+                state = 3
+                quote = c
+                i += 1
+                continue
+            i += 1
+        elif state == 1:  # line comment
+            if c == "\n":
+                state = 0
+            else:
+                out[i] = " "
+            i += 1
+        elif state == 2:  # block comment
+            if c == "*" and i + 1 < n and text[i + 1] == "/":
+                state = 0
+                i += 2
+                continue
+            if c != "\n":
+                out[i] = " "
+            i += 1
+        else:  # string literal
+            if c == "\\" and i + 1 < n:
+                out[i] = " "
+                if text[i + 1] != "\n":
+                    out[i + 1] = " "
+                i += 2
+                continue
+            if c == quote:
+                state = 0
+                i += 1
+                continue
+            if c != "\n":
+                out[i] = " "
+            i += 1
+    return "".join(out)
+
+
+def _matching_brace_end(text: str, open_pos: int) -> int:
+    """Return the index just past the ``}`` matching the ``{`` at *open_pos*.
+
+    Assumes *text* has already been scrubbed of comments/strings (see
+    :func:`_scrub_comments_and_strings`) so every literal ``{``/``}`` is real
+    code. Falls back to ``len(text)`` if the braces are unbalanced.
+    """
+    depth = 0
+    n = len(text)
+    i = open_pos
+    while i < n:
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
 def _extract_var_types(text: str) -> dict[str, str]:
     """Return a varName → declared SObject type map from class source text.
 
@@ -255,11 +344,18 @@ def extract_apex_class(path: Path) -> dict:
     except OSError:
         return {"nodes": [], "edges": []}
 
+    # Blank out comment/string contents once, up front. Every code-structure
+    # regex pass below runs over ``scrubbed`` so it never matches a DML verb,
+    # call, brace or SOQL keyword that lives inside a comment or string literal.
+    # ``text`` (raw) is retained only for _ENDPOINT_RE, which intentionally reads
+    # the endpoint URL out of a string literal.
+    scrubbed = _scrub_comments_and_strings(text)
+
     nodes: list[dict] = []
     edges: list[dict] = []
 
     # Find the class declaration
-    m = _CLASS_RE.search(text)
+    m = _CLASS_RE.search(scrubbed)
     if not m:
         # Fallback: try to extract class name from filename
         class_name = path.stem
@@ -312,14 +408,19 @@ def extract_apex_class(path: Path) -> dict:
                         )
                     )
 
-        # Method extraction
+        # Method extraction. Track each method's span (signature start → matching
+        # closing brace) so calls and DML operands are attributed to the method
+        # that actually contains them, not to everything below it in the file.
         raw_calls: list[dict] = []
-        for mm in _METHOD_RE.finditer(text):
+        # (region_start, body_end, var_types) per method — region_start includes
+        # the signature so parameter declarations are in scope for that method.
+        method_regions: list[tuple[int, int, dict[str, str]]] = []
+        for mm in _METHOD_RE.finditer(scrubbed):
             method_name = mm.group(1)
             if method_name.lower() in _APEX_KEYWORDS:
                 continue
             method_nid = apex_method_id(class_name, method_name)
-            line_no = text[: mm.start()].count("\n") + 1
+            line_no = scrubbed[: mm.start()].count("\n") + 1
             nodes.append(
                 {
                     "id": method_nid,
@@ -340,10 +441,17 @@ def extract_apex_class(path: Path) -> dict:
                 )
             )
 
-            # Collect method calls within this method for cross-file resolution
-            # (Find the method body: from { to matching })
+            # Method body: from the opening { to its matching }, brace-balanced.
             start = mm.end() - 1  # position of {
-            for cm in _CALL_RE.finditer(text, start):
+            body_end = _matching_brace_end(scrubbed, start)
+            # Per-method variable-type map (includes parameters via the signature
+            # span) so two methods reusing a local name with different declared
+            # types do not collide.
+            method_var_types = _extract_var_types(scrubbed[mm.start() : body_end])
+            method_regions.append((mm.start(), body_end, method_var_types))
+
+            # Collect method calls within *this* method's body only.
+            for cm in _CALL_RE.finditer(scrubbed, start, body_end):
                 callee_class = cm.group(1)
                 callee_method = cm.group(2)
                 if _looks_like_apex_class(callee_class):
@@ -357,7 +465,7 @@ def extract_apex_class(path: Path) -> dict:
 
         # SOQL → queries edges
         seen_soql_targets: set[str] = set()
-        for sm in _SOQL_RE.finditer(text):
+        for sm in _SOQL_RE.finditer(scrubbed):
             obj_name = sm.group(1)
             if obj_name.lower() not in _APEX_KEYWORDS and obj_name not in seen_soql_targets:
                 seen_soql_targets.add(obj_name)
@@ -386,13 +494,25 @@ def extract_apex_class(path: Path) -> dict:
             "merge": "merge",
             "undelete": "undelete",
         }
-        var_types = _extract_var_types(text)
+        # Class-wide fallback map for DML that lives outside any detected method
+        # body (e.g. constructors or static initializers _METHOD_RE misses).
+        class_var_types = _extract_var_types(scrubbed)
         seen_dml_ops: set[tuple[str, str]] = set()
-        for dm in _DML_RE.finditer(text):
+        for dm in _DML_RE.finditer(scrubbed):
             operation = _DML_VERB_TO_OP[dm.group(1).lower()]
             obj_var = dm.group(2)
             if obj_var.lower() in _APEX_KEYWORDS:
                 continue
+            # Resolve against the innermost enclosing method's var map so two
+            # methods that reuse a local name with different types don't collide.
+            var_types = class_var_types
+            best_span = None
+            for region_start, region_end, region_vars in method_regions:
+                if region_start <= dm.start() < region_end:
+                    span = region_end - region_start
+                    if best_span is None or span < best_span:
+                        best_span = span
+                        var_types = region_vars
             resolved_type = var_types.get(obj_var)
             if resolved_type is None:
                 # Fallback: operand is itself PascalCase — treat as the type name
@@ -418,7 +538,7 @@ def extract_apex_class(path: Path) -> dict:
 
         # Apex → Flow invocations via Flow.Interview.FlowName
         seen_flow_invokes: set[str] = set()
-        for fm in _FLOW_INVOKE_RE.finditer(text):
+        for fm in _FLOW_INVOKE_RE.finditer(scrubbed):
             flow_name = fm.group(1)
             if flow_name not in seen_flow_invokes:
                 seen_flow_invokes.add(flow_name)
@@ -432,7 +552,9 @@ def extract_apex_class(path: Path) -> dict:
                     )
                 )
 
-        # A1: HTTP callout detection via .setEndpoint('...')
+        # A1: HTTP callout detection via .setEndpoint('...'). This deliberately
+        # reads the endpoint URL out of a string literal, so it runs over the
+        # RAW text (the scrubbed copy would have blanked the URL contents).
         seen_callout_targets: set[str] = set()
         for em in _ENDPOINT_RE.finditer(text):
             endpoint = em.group(1).strip()
@@ -467,7 +589,7 @@ def extract_apex_class(path: Path) -> dict:
 
         # A5: EventBus.publish(new X__e(...)) → publishes edge
         seen_publishes: set[str] = set()
-        for pm in _EVENT_BUS_PUBLISH_RE.finditer(text):
+        for pm in _EVENT_BUS_PUBLISH_RE.finditer(scrubbed):
             event_name = pm.group(1)
             tgt_id = object_id(event_name)
             if tgt_id not in seen_publishes:
@@ -476,13 +598,13 @@ def extract_apex_class(path: Path) -> dict:
 
         # A6: Custom Metadata / Custom Settings config reads (INFERRED — by-type fetch)
         seen_config_reads: set[str] = set()
-        for cm in _CUSTOM_MDT_ACCESS_RE.finditer(text):
+        for cm in _CUSTOM_MDT_ACCESS_RE.finditer(scrubbed):
             mdt_type = cm.group(1)
             tgt_id = make_sf_id("custommetadata", mdt_type)
             if tgt_id not in seen_config_reads:
                 seen_config_reads.add(tgt_id)
                 edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
-        for cm in _CUSTOM_SETTING_ACCESS_RE.finditer(text):
+        for cm in _CUSTOM_SETTING_ACCESS_RE.finditer(scrubbed):
             cs_type = cm.group(1)
             tgt_id = object_id(cs_type)
             if tgt_id not in seen_config_reads:
