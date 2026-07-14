@@ -20,9 +20,14 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `nx.Graph()`, collapsing same-direction parallel edges before the multigraph-aware rebuild ever ran.
   It now unions raw node/link JSON directly (mirroring `merge-driver`'s existing correct approach) and
   preserves every edge across 2- and 3-way merges.
-- **Apex extraction no longer treats commented-out or string-literal code as real.** `insert`/`update`/
-  etc. inside `//`, `/* */`, or a string literal previously produced real `dml` edges to a nonexistent
-  target; comments and string contents are now scrubbed before extraction.
+- **Apex class extraction no longer treats commented-out or string-literal code as real.** `insert`/
+  `update`/etc. inside `//`, `/* */`, or a string literal previously produced real edges to a nonexistent
+  target; comments and string contents are now scrubbed before `extract_apex_class`'s DML, method-call,
+  SOQL, `EventBus.publish`, and Custom Metadata/Setting-access extraction.
+- **Known gap:** Apex HTTP-callout detection (`extract_apex_class`'s endpoint scan) and
+  `extract_apex_trigger`'s call-scanning still read raw, unscrubbed source, so commented-out or
+  string-embedded code in those two paths can still produce a phantom edge. Pre-existing, not introduced
+  by the fix above; tracked for a future release.
 - **Apex `calls` edges no longer leak across method boundaries.** A method's call-edge scan previously
   ran to end-of-file instead of to its own closing brace, so every method accumulated calls that
   actually belonged to methods below it in the same class.
