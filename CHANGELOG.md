@@ -51,6 +51,24 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `INFERRED` confidence score when the ambiguity is real. A small denylist now filters common English
   words that happen to be PascalCase-shaped (suffixed names like `Account__c` always bypass it), and a
   mention inside a fenced or inline code span now gets a higher confidence score than one in bare prose.
+- **`merge-graphs`/`merge-driver` no longer drop edges that share a relation but differ in `operation`.**
+  The raw-JSON union introduced above originally deduped links on `(source, target, relation)`, which
+  silently collapsed e.g. two `dml` edges (one `create`, one `update`) on the same pair to one. It now
+  hashes the full edge identity (minus the per-graph `key`/`source_file` fields), so distinct parallel
+  edges of every kind survive while genuinely-identical duplicates (the base/ours/theirs 3-way case)
+  still coalesce.
+- **`bfs_impact` (see Added below) now reports every parallel relation to a neighbor, not just the
+  first.** Its BFS accumulation initially stored one `{relation, confidence}` pair per neighbor id,
+  re-introducing — in code this same release added — the exact parallel-edge collapse fixed above for
+  `get_node`/`get_neighbors`/`shortest_path`. `relation`/`confidence` are now lists when a neighbor has
+  more than one parallel edge (scalar for the common single-edge case), mirroring `shortest_path`.
+- **MCP tool int arguments (`bfs_impact`'s `max_depth`/`limit` and others) no longer raise on
+  non-numeric input.** A caller-supplied non-numeric value previously raised an uncaught `ValueError`;
+  a new `_get_int` helper now degrades to the tool's default and clamps out-of-range values.
+- **`--verbose` node accounting no longer mislabels retained nodes as stubs on `--update`.** Incremental
+  mode merges with the entire prior `graph.json`, so a node carried over unchanged from a file no longer
+  on disk was counted as a build-injected stub; the stub term now reports `n/a (incremental merge)` on
+  the incremental path, matching the existing `n_pruned_edges` guard.
 
 ### Added
 - **`bfs_impact` MCP tool** — a depth-bounded, direction-aware (`forward`/`reverse`/`both`) blast-radius
