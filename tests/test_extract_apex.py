@@ -682,7 +682,7 @@ def test_extract_apex_dml_inside_string_not_extracted(tmp_path):
         """\
 public class StringDml {
     public void run() {
-        String note = 'insert fakeLead; then update fakeThing;';
+        String note = 'insert FakeLead; then update FakeThing;';
         Account realAcc = new Account();
         insert realAcc;
     }

@@ -511,11 +511,32 @@ def test_bfs_impact_non_numeric_limit_falls_back_to_default(monkeypatch):
     assert result["returned"] == result["total_impacted"]
 
 
-def test_bfs_impact_oversized_limit_is_capped(monkeypatch):
-    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
-    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "limit": 1_000_000})
+def _bfs_long_chain_graph(length: int = 6):
+    """A linear chain n0→n1→…→n{length} of EXTRACTED 'calls' edges.
+
+    ``length`` nodes are reachable forward from n0, enough to set a limit below
+    the reachable count and actually observe truncation.
+    """
+    from graphify_sf.build import build_from_json
+
+    nodes = [{"id": f"n{i}", "label": f"N{i}", "sf_type": "ApexClass", "file_type": "apex"} for i in range(length + 1)]
+    edges = [
+        {"source": f"n{i}", "target": f"n{i + 1}", "relation": "calls", "confidence": "EXTRACTED"}
+        for i in range(length)
+    ]
+    return build_from_json({"nodes": nodes, "edges": edges}, multigraph=True)
+
+
+def test_bfs_impact_limit_caps_returned_on_long_chain(monkeypatch):
+    """A limit below the reachable count must truncate the returned list while
+    still reporting the true total — observable only when reachable > limit."""
+    serve = _install_serve_graph(monkeypatch, _bfs_long_chain_graph(6))
+    result = serve._tool_bfs_impact({"node": "N0", "direction": "forward", "max_depth": 10, "limit": 3})
     assert result["found"] is True
-    assert result["returned"] == result["total_impacted"]
+    assert result["total_impacted"] == 6, f"all 6 downstream nodes are impacted, got {result['total_impacted']}"
+    assert result["returned"] == 3, f"returned must be capped at the limit, got {result['returned']}"
+    assert result["truncated"] is True
+    assert len(result["nodes"]) == 3
 
 
 def test_get_neighbors_non_numeric_limit_falls_back_to_default(monkeypatch):
