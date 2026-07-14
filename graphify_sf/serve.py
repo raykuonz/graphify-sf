@@ -11,6 +11,7 @@ Tools exposed:
   - god_nodes          — highest-degree nodes (most central)
   - list_communities   — community names and member counts
   - get_community      — all nodes belonging to a specific community
+  - bfs_impact         — bounded, direction-aware impact traversal from a node
 
 Resources exposed:
   - graphify-sf://report       — GRAPH_REPORT.md contents
@@ -150,6 +151,48 @@ _TOOLS = [
                     "description": "Max members to return (default: 50)",
                 },
             },
+        },
+    },
+    {
+        "name": "bfs_impact",
+        "description": (
+            "Bounded, direction-aware impact traversal: 'what does changing X affect' "
+            "(forward), 'what feeds into X' (reverse), or both. Walks the graph up to "
+            "max_depth hops from a node, returning every reachable node with the hop "
+            "depth it was first found at. EXTRACTED-only by default (per the honesty "
+            "contract); set include_inferred to also traverse INFERRED edges."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "node": {"type": "string", "description": "Starting node label or id"},
+                "direction": {
+                    "type": "string",
+                    "enum": ["forward", "reverse", "both"],
+                    "description": (
+                        "forward = things this node affects (successors); "
+                        "reverse = things that affect this node (predecessors); "
+                        "both = union (default: forward)"
+                    ),
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Max hops to traverse (default: 3, capped at 10)",
+                },
+                "relation_filter": {
+                    "type": "string",
+                    "description": "Only traverse edges with this relation type (omit for all)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max impacted nodes to return (default: 200)",
+                },
+                "include_inferred": {
+                    "type": "boolean",
+                    "description": "Also traverse INFERRED edges (default: false — EXTRACTED only)",
+                },
+            },
+            "required": ["node"],
         },
     },
 ]
@@ -345,19 +388,22 @@ def _tool_get_node(args: dict) -> dict:
     if nid is None:
         return {"found": False, "message": f"No node matching '{label}'"}
     data = _G.nodes[nid]
-    from graphify_sf.build import edge_data
+    from graphify_sf.build import edge_datas
 
+    # MultiDiGraph: a node-pair may carry several parallel edges (e.g. queries +
+    # dml). Emit one entry per relation so every connection is surfaced, not just
+    # the first parallel edge (mirrors _cmd_explain's edge_datas idiom).
     neighbors = []
     for nb in sorted(_G.neighbors(nid), key=lambda n: _G.degree(n), reverse=True)[:20]:
-        edata = edge_data(_G, nid, nb)
-        neighbors.append(
-            {
-                "id": nb,
-                "label": _G.nodes[nb].get("label", nb),
-                "relation": edata.get("relation", ""),
-                "confidence": edata.get("confidence", ""),
-            }
-        )
+        for edata in edge_datas(_G, nid, nb):
+            neighbors.append(
+                {
+                    "id": nb,
+                    "label": _G.nodes[nb].get("label", nb),
+                    "relation": edata.get("relation", ""),
+                    "confidence": edata.get("confidence", ""),
+                }
+            )
     return {
         "found": True,
         "id": nid,
@@ -380,25 +426,31 @@ def _tool_get_neighbors(args: dict) -> dict:
     nid = _find_node(label)
     if nid is None:
         return {"found": False, "message": f"No node matching '{label}'"}
-    from graphify_sf.build import edge_data
+    from graphify_sf.build import edge_datas
 
+    # MultiDiGraph: iterate ALL parallel edges per neighbor so a {queries, dml}
+    # pair surfaces via BOTH a queries filter AND a dml filter (mirrors
+    # _cmd_explain). Without a filter, emit one entry per relation so every
+    # connection is visible, not just the first parallel edge.
     neighbors = []
     for nb in sorted(_G.neighbors(nid), key=lambda n: _G.degree(n), reverse=True):
         if len(neighbors) >= limit:
             break
-        edata = edge_data(_G, nid, nb)
-        rel = edata.get("relation", "")
-        if relation_filter and rel.lower() != relation_filter:
-            continue
-        neighbors.append(
-            {
-                "id": nb,
-                "label": _G.nodes[nb].get("label", nb),
-                "sf_type": _G.nodes[nb].get("sf_type", ""),
-                "relation": rel,
-                "confidence": edata.get("confidence", ""),
-            }
-        )
+        for edata in edge_datas(_G, nid, nb):
+            if len(neighbors) >= limit:
+                break
+            rel = edata.get("relation", "")
+            if relation_filter and rel.lower() != relation_filter:
+                continue
+            neighbors.append(
+                {
+                    "id": nb,
+                    "label": _G.nodes[nb].get("label", nb),
+                    "sf_type": _G.nodes[nb].get("sf_type", ""),
+                    "relation": rel,
+                    "confidence": edata.get("confidence", ""),
+                }
+            )
     return {
         "found": True,
         "node": _G.nodes[nid].get("label", nid),
@@ -411,7 +463,7 @@ def _tool_get_neighbors(args: dict) -> dict:
 def _tool_shortest_path(args: dict) -> dict:
     import networkx as nx
 
-    from graphify_sf.build import edge_data
+    from graphify_sf.build import edge_datas
 
     src_nid = _find_node(args["source"])
     tgt_nid = _find_node(args["target"])
@@ -426,13 +478,17 @@ def _tool_shortest_path(args: dict) -> dict:
     hops = []
     for i in range(len(path_nodes) - 1):
         u, v = path_nodes[i], path_nodes[i + 1]
-        edata = edge_data(_G, u, v)
+        # MultiDiGraph: a hop may be backed by several parallel edges. Report the
+        # full set of relations/confidences rather than an arbitrary first one.
+        edatas = edge_datas(_G, u, v)
+        relations = [ed.get("relation", "") for ed in edatas]
+        confidences = [ed.get("confidence", "") for ed in edatas]
         hops.append(
             {
                 "from": _G.nodes[u].get("label", u),
                 "to": _G.nodes[v].get("label", v),
-                "relation": edata.get("relation", ""),
-                "confidence": edata.get("confidence", ""),
+                "relation": relations[0] if len(relations) == 1 else relations,
+                "confidence": confidences[0] if len(confidences) == 1 else confidences,
             }
         )
     return {
@@ -525,6 +581,103 @@ def _tool_get_community(args: dict) -> dict:
     }
 
 
+def _tool_bfs_impact(args: dict) -> dict:
+    """Bounded, direction-aware impact traversal from a node.
+
+    Forward uses successors (what this node affects), reverse uses predecessors
+    (what affects this node), both unions the two per hop. Reads ALL parallel
+    edges per hop via edge_datas (never edge_data, per the MultiDiGraph contract),
+    filters to EXTRACTED-only unless include_inferred is set, and honours an
+    optional relation_filter. Reports the true total impacted count even when the
+    returned list is truncated to ``limit``.
+    """
+    from collections import deque
+
+    from graphify_sf.build import edge_datas
+
+    node_arg = args["node"]
+    direction = args.get("direction", "forward")
+    if direction not in ("forward", "reverse", "both"):
+        direction = "forward"
+    max_depth = max(0, min(int(args.get("max_depth", 3)), 10))
+    relation_filter = (args.get("relation_filter") or "").strip().lower() or None
+    limit = int(args.get("limit", 200))
+    include_inferred = bool(args.get("include_inferred", False))
+
+    nid = _find_node(node_arg)
+    if nid is None:
+        return {"found": False, "message": f"No node matching '{node_arg}'"}
+
+    def _outgoing(u: str):
+        """Yield (neighbor, relation, confidence) for each qualifying parallel edge."""
+        pairs = []
+        if direction in ("forward", "both"):
+            pairs.extend((u, nb) for nb in _G.successors(u))
+        if direction in ("reverse", "both"):
+            pairs.extend((nb, u) for nb in _G.predecessors(u))
+        for src, tgt in pairs:
+            nb = tgt if src == u else src
+            for edata in edge_datas(_G, src, tgt):
+                conf = edata.get("confidence", "EXTRACTED") or "EXTRACTED"
+                if not include_inferred and conf != "EXTRACTED":
+                    continue
+                rel = edata.get("relation", "")
+                if relation_filter and rel.lower() != relation_filter:
+                    continue
+                yield nb, rel, conf
+
+    # BFS: record the first (shallowest) depth and its edge metadata per node.
+    impacted: dict[str, dict] = {}
+    visited: set = {nid}
+    queue: deque = deque([(nid, 0)])
+    while queue:
+        cur, depth = queue.popleft()
+        if depth >= max_depth:
+            continue
+        for nb, rel, conf in _outgoing(cur):
+            if nb not in impacted and nb != nid:
+                impacted[nb] = {"relation": rel, "confidence": conf, "depth": depth + 1}
+            if nb not in visited:
+                visited.add(nb)
+                queue.append((nb, depth + 1))
+
+    total_impacted = len(impacted)
+    ordered = sorted(impacted.items(), key=lambda kv: (kv[1]["depth"], kv[0]))
+    truncated = total_impacted > limit
+    selected = ordered[:limit]
+
+    from collections import Counter
+
+    by_type: Counter = Counter()
+    nodes_out = []
+    for node_id, meta in selected:
+        data = _G.nodes[node_id]
+        sf_type = data.get("sf_type", "")
+        by_type[sf_type] += 1
+        nodes_out.append(
+            {
+                "id": node_id,
+                "label": data.get("label", node_id),
+                "sf_type": sf_type,
+                "relation": meta["relation"],
+                "confidence": meta["confidence"],
+                "depth": meta["depth"],
+            }
+        )
+
+    return {
+        "found": True,
+        "node": _G.nodes[nid].get("label", nid),
+        "direction": direction,
+        "max_depth": max_depth,
+        "total_impacted": total_impacted,
+        "returned": len(nodes_out),
+        "truncated": truncated,
+        "by_type": dict(by_type),
+        "nodes": nodes_out,
+    }
+
+
 _TOOL_HANDLERS = {
     "graph_stats": _tool_graph_stats,
     "query": _tool_query,
@@ -534,6 +687,7 @@ _TOOL_HANDLERS = {
     "god_nodes": _tool_god_nodes,
     "list_communities": _tool_list_communities,
     "get_community": _tool_get_community,
+    "bfs_impact": _tool_bfs_impact,
 }
 
 
