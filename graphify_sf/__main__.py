@@ -37,6 +37,54 @@ def _load_graph_from_json(path: Path):
         return _jg.node_link_graph(raw), raw
 
 
+def _load_graph_json_raw(path: Path) -> dict:
+    """Load a graph.json's raw ``nodes``/``links`` lists (no NetworkX collapse).
+
+    Returns ``{"nodes": [...], "links": [...]}`` — empty lists if the file is
+    missing or unreadable. The merge paths use this instead of a ``nx.Graph()``
+    union so same-direction parallel edges survive until the multigraph build.
+    """
+    if not path.exists():
+        return {"nodes": [], "links": []}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if "links" not in raw and "edges" in raw:
+            raw["links"] = raw["edges"]
+        return raw
+    except Exception:
+        return {"nodes": [], "links": []}
+
+
+def _union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Union raw graph.json node/link lists across multiple graphs.
+
+    Nodes are deduped by ``id`` (first occurrence wins). Links are unioned and
+    deduped on the ``(source, target, relation)`` triple, so distinct parallel
+    edges (e.g. ``queries`` + ``dml`` on the same pair) are ALL preserved — a
+    plain ``nx.Graph()`` union would collapse them before the multigraph build
+    ever runs. Mirrors the edge-safe pattern already used by ``_cmd_merge_driver``.
+    """
+    all_nodes: dict[str, dict] = {}
+    all_edges: list[dict] = []
+    seen_edges: set[tuple] = set()
+    for data in datas:
+        for node in data.get("nodes", []):
+            nid = node.get("id", "")
+            if nid and nid not in all_nodes:
+                all_nodes[nid] = node
+        links_key = "links" if "links" in data else "edges"
+        for edge in data.get(links_key, []):
+            key = (edge.get("source", ""), edge.get("target", ""), edge.get("relation", ""))
+            if key not in seen_edges:
+                seen_edges.add(key)
+                # Drop the exported per-graph "key" — each source graph numbers its
+                # own parallel edges from 0, so two distinct relations on the same
+                # pair both arrive as key=0 and would collapse on rebuild. Stripping
+                # it lets the MultiDiGraph assign fresh keys per parallel edge.
+                all_edges.append({k: v for k, v in edge.items() if k != "key"})
+    return list(all_nodes.values()), all_edges
+
+
 def _derive_community_labels(G, communities: dict) -> dict[int, str]:
     """Derive community label from the highest-degree non-method node."""
     labels: dict[int, str] = {}
@@ -184,6 +232,7 @@ def _run_pipeline(
     backend: str | None = None,
     token_budget: int = 40_000,
     respect_ignore: bool = True,
+    verbose: bool = False,
 ) -> None:
     """Full pipeline: detect → extract → [LLM] → build → cluster → report → export."""
     from graphify_sf.analyze import god_nodes, suggest_questions, surprising_connections
@@ -241,7 +290,9 @@ def _run_pipeline(
         _run_llm_extraction(target, detection, extraction, backend, token_budget, token_cost)
 
     # Dedup by label
+    n_extracted = len(extraction["nodes"])
     nodes, edges = deduplicate_by_label(extraction["nodes"], extraction["edges"])
+    n_deduped = len(nodes)
 
     new_extraction = {"nodes": nodes, "edges": edges}
 
@@ -253,6 +304,29 @@ def _run_pipeline(
         G = build_from_json(new_extraction, directed=directed)
 
     print(f"[graphify-sf] graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+
+    if verbose:
+        # Honest node-drop accounting (closes the unanswered BUGS_FOUND question:
+        # "N nodes dropped between extract and build — dedup or dangling pruning?").
+        # Real pipeline stages, verified against build.py:
+        #   * deduplicate_by_label MERGES same-(sf_type,label) nodes → removes nodes
+        #   * build_from_json ADDS stub nodes for prefix-matched missing edge
+        #     endpoints, and PRUNES dangling EDGES (edges to still-absent nodes) —
+        #     it removes edges, never nodes.
+        # "Build-added stubs" are counted as final node ids absent from the deduped
+        # set (NOT the `stub` attribute, which the extractors also set on stubs they
+        # inject before dedup). For a fresh build: final == deduped + build_stubs.
+        n_final = G.number_of_nodes()
+        deduped_ids = {n["id"] for n in nodes if isinstance(n, dict) and "id" in n}
+        n_build_stubs = sum(1 for nid in G.nodes() if nid not in deduped_ids)
+        n_pruned_edges = max(0, len(edges) - G.number_of_edges()) if not incremental else None
+        pruned_str = "n/a (incremental merge)" if n_pruned_edges is None else str(n_pruned_edges)
+        print(
+            f"[graphify-sf] node accounting: {n_extracted} extracted "
+            f"→ {n_deduped} deduped-by-label ({n_extracted - n_deduped} merged) "
+            f"→ +{n_build_stubs} stub → {n_final} final nodes "
+            f"({pruned_str} dangling edge(s) pruned)"
+        )
 
     if G.number_of_nodes() == 0:
         print("[graphify-sf] error: graph is empty after extraction", file=sys.stderr)
@@ -500,15 +574,20 @@ def _cmd_path(source_label: str, target_label: str, graph_path: Path) -> None:
         print(f"No path found between '{source_label}' and '{target_label}'.")
         sys.exit(0)
 
-    from graphify_sf.build import edge_data
+    from graphify_sf.build import edge_datas
 
     hops = len(path_nodes) - 1
     segments = []
     for i in range(len(path_nodes) - 1):
         u, v = path_nodes[i], path_nodes[i + 1]
-        edata = edge_data(G, u, v)
-        rel = edata.get("relation", "")
-        conf = edata.get("confidence", "")
+        # MultiDiGraph: a hop may carry several parallel edges (e.g. queries +
+        # dml). Show every relation on the hop, not an arbitrary first one.
+        edatas = edge_datas(G, u, v)
+        rels = [ed.get("relation", "") for ed in edatas] or [""]
+        confs = [ed.get("confidence", "") for ed in edatas] or [""]
+        rel = "/".join(r for r in rels if r) or (rels[0] if rels else "")
+        conf_parts = [c for c in confs if c]
+        conf = "/".join(dict.fromkeys(conf_parts)) if conf_parts else ""
         conf_str = f" [{conf}]" if conf else ""
         if i == 0:
             segments.append(G.nodes[u].get("label", u))
@@ -733,23 +812,23 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
             print(f"error: graph not found: {gp}", file=sys.stderr)
             sys.exit(1)
 
-    # Load all graphs
-    import networkx as nx
-
-    merged = nx.Graph()
+    # Load all graphs as raw JSON node/link lists and union them WITHOUT going
+    # through a plain nx.Graph(), which would collapse same-direction parallel
+    # edges before the multigraph-aware build ever runs. Mirrors the edge-safe
+    # union already used by _cmd_merge_driver.
+    raw_datas = []
     for gp in graph_paths:
         print(f"[graphify-sf] loading {gp}...")
-        G_i, raw_i = _load_graph_from_json(gp)
-        print(f"  {G_i.number_of_nodes()} nodes, {G_i.number_of_edges()} edges")
-        merged.update(G_i)
+        raw_i = _load_graph_json_raw(gp)
+        print(f"  {len(raw_i.get('nodes', []))} nodes, {len(raw_i.get('links', raw_i.get('edges', [])))} edges")
+        raw_datas.append(raw_i)
 
-    print(f"[graphify-sf] merged: {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges (before dedup)")
+    nodes_data, edges_data = _union_graph_json(raw_datas)
+    print(f"[graphify-sf] merged: {len(nodes_data)} nodes, {len(edges_data)} edges (before dedup)")
 
-    # Dedup by label
-    nodes_data = [{"id": nid, **data} for nid, data in merged.nodes(data=True)]
-    edges_data = [{"source": u, "target": v, **data} for u, v, data in merged.edges(data=True)]
+    # Dedup by label, then build the multigraph so parallel edges survive.
     nodes_dedup, edges_dedup = deduplicate_by_label(nodes_data, edges_data)
-    G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup})
+    G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup}, multigraph=True)
 
     print(f"[graphify-sf] after dedup: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
@@ -823,44 +902,13 @@ def _cmd_merge_driver(base: Path, ours: Path, theirs: Path) -> None:
     from graphify_sf.cluster import cluster
     from graphify_sf.export import to_json
 
-    def _load(p: Path):
-        if not p.exists():
-            return {"nodes": [], "links": []}
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-            if "links" not in raw and "edges" in raw:
-                raw["links"] = raw["edges"]
-            return raw
-        except Exception:
-            return {"nodes": [], "links": []}
-
-    base_data = _load(base)
-    our_data = _load(ours)
-    their_data = _load(theirs)
-
-    # Union all nodes and edges by id
-    all_nodes: dict[str, dict] = {}
-    all_edges: list[dict] = []
-    seen_edges: set[tuple] = set()
-
-    for data in (base_data, our_data, their_data):
-        for node in data.get("nodes", []):
-            nid = node.get("id", "")
-            if nid and nid not in all_nodes:
-                all_nodes[nid] = node
-        links_key = "links" if "links" in data else "edges"
-        for edge in data.get(links_key, []):
-            src = edge.get("source", "")
-            tgt = edge.get("target", "")
-            rel = edge.get("relation", "")
-            key = (src, tgt, rel)
-            if key not in seen_edges:
-                seen_edges.add(key)
-                all_edges.append(edge)
-
-    extraction = {"nodes": list(all_nodes.values()), "edges": all_edges}
-    nodes_dedup, edges_dedup = deduplicate_by_label(extraction["nodes"], extraction["edges"])
-    G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup})
+    # Union raw node/link lists (dedup nodes by id, links by (src,tgt,rel)) so
+    # parallel edges survive; see _union_graph_json.
+    all_nodes, all_edges = _union_graph_json(
+        [_load_graph_json_raw(base), _load_graph_json_raw(ours), _load_graph_json_raw(theirs)]
+    )
+    nodes_dedup, edges_dedup = deduplicate_by_label(all_nodes, all_edges)
+    G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup}, multigraph=True)
     communities = cluster(G)
     to_json(G, communities, str(ours), force=True)
     print(f"[graphify-sf] merge-driver: merged {G.number_of_nodes()} nodes, {G.number_of_edges()} edges → {ours}")
@@ -1578,6 +1626,7 @@ def main() -> None:
         print("    --update                         incremental update (re-extract changed files)")
         print("    --directed                       build directed graph")
         print("    --no-viz                         skip graph.html generation")
+        print("    --verbose, -v                    print node-drop accounting (extract→dedup→build)")
         print("    --force                          overwrite graph.json even if new graph is smaller")
         print("    --include-ignored                scan files matched by .gitignore/.forceignore")
         print("                                     (default: those files are skipped)")
@@ -1947,6 +1996,7 @@ def main() -> None:
         backend: str | None = None
         token_budget = 40_000
         respect_ignore = True
+        verbose = False
 
         i = 1
         while i < len(args):
@@ -1965,6 +2015,9 @@ def main() -> None:
                 i += 1
             elif a == "--no-viz":
                 no_viz = True
+                i += 1
+            elif a in ("--verbose", "-v"):
+                verbose = True
                 i += 1
             elif a == "--force":
                 force = True
@@ -2005,6 +2058,7 @@ def main() -> None:
             backend=backend,
             token_budget=token_budget,
             respect_ignore=respect_ignore,
+            verbose=verbose,
         )
         return
 
