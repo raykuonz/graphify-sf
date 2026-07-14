@@ -264,3 +264,297 @@ def test_self_lookup_opposite_direction_preserved(tmp_path):
     assert G.has_edge(field, obj), f"references edge {field}→{obj} missing"
     ref_rels = {ed.get("relation") for ed in edge_datas(G, field, obj)}
     assert "references" in ref_rels, f"references missing in {ref_rels}"
+
+
+# ---------------------------------------------------------------------------
+# A1 — serve.py MCP tool handlers must surface ALL parallel edges
+# (regression of the 0.4.0 MultiDiGraph fix — edge_data → edge_datas)
+# ---------------------------------------------------------------------------
+
+
+def _multi_serve_graph():
+    """A tiny MultiDiGraph: AccountProcessor both queries AND dml-writes Account."""
+    from graphify_sf.build import build_from_json
+
+    extraction = {
+        "nodes": [
+            {"id": "apex_accountprocessor", "label": "AccountProcessor", "sf_type": "ApexClass", "file_type": "apex"},
+            {"id": "object_account", "label": "Account", "sf_type": "CustomObject", "file_type": "object"},
+        ],
+        "edges": [
+            {
+                "source": "apex_accountprocessor",
+                "target": "object_account",
+                "relation": "queries",
+                "confidence": "EXTRACTED",
+            },
+            {
+                "source": "apex_accountprocessor",
+                "target": "object_account",
+                "relation": "dml",
+                "confidence": "EXTRACTED",
+            },
+        ],
+    }
+    return build_from_json(extraction, multigraph=True)
+
+
+def _install_serve_graph(monkeypatch, G):
+    import graphify_sf.serve as serve
+
+    monkeypatch.setattr(serve, "_G", G, raising=False)
+    monkeypatch.setattr(serve, "_communities", {}, raising=False)
+    monkeypatch.setattr(serve, "_community_labels", {}, raising=False)
+    return serve
+
+
+def test_serve_get_neighbors_surfaces_both_parallel_relations(monkeypatch):
+    """get_neighbors with no filter must emit BOTH queries and dml for the pair."""
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_get_neighbors({"label": "AccountProcessor"})
+    rels = {(n["id"], n["relation"]) for n in result["neighbors"]}
+    assert ("object_account", "queries") in rels, f"queries missing: {rels}"
+    assert ("object_account", "dml") in rels, f"dml missing: {rels}"
+
+
+def test_serve_get_neighbors_relation_filter_finds_pair_via_dml(monkeypatch):
+    """The identical bug 0.4.0 fixed for --explain: dml filter must find the pair."""
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_get_neighbors({"label": "AccountProcessor", "relation_filter": "dml"})
+    ids = {n["id"] for n in result["neighbors"]}
+    assert "object_account" in ids, f"object_account not found via dml filter: {result['neighbors']}"
+
+
+def test_serve_get_neighbors_relation_filter_finds_pair_via_queries(monkeypatch):
+    """queries filter must ALSO find the same pair."""
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_get_neighbors({"label": "AccountProcessor", "relation_filter": "queries"})
+    ids = {n["id"] for n in result["neighbors"]}
+    assert "object_account" in ids, f"object_account not found via queries filter: {result['neighbors']}"
+
+
+def test_serve_get_node_lists_every_relation_to_neighbor(monkeypatch):
+    """get_node's connection list must include every relation, not just the first."""
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_get_node({"label": "AccountProcessor"})
+    rels = {n["relation"] for n in result["neighbors"] if n["id"] == "object_account"}
+    assert rels == {"queries", "dml"}, f"expected both relations, got {rels}"
+
+
+def test_serve_shortest_path_reports_all_parallel_relations(monkeypatch):
+    """shortest_path hop label must reflect the full set of parallel edges."""
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_shortest_path({"source": "AccountProcessor", "target": "Account"})
+    assert result["found"], result
+    hop = result["path"][0]
+    rel = hop["relation"]
+    rels = set(rel) if isinstance(rel, list) else {rel}
+    assert "queries" in rels and "dml" in rels, f"hop lost a parallel relation: {rel}"
+
+
+# ---------------------------------------------------------------------------
+# A4 — bfs_impact MCP tool
+# ---------------------------------------------------------------------------
+
+
+def _bfs_chain_graph():
+    """A→B (calls) → C (references); plus INFERRED A→D that must not appear by default."""
+    from graphify_sf.build import build_from_json
+
+    extraction = {
+        "nodes": [
+            {"id": "a", "label": "A", "sf_type": "ApexClass", "file_type": "apex"},
+            {"id": "b", "label": "B", "sf_type": "CustomObject", "file_type": "object"},
+            {"id": "c", "label": "C", "sf_type": "Flow", "file_type": "flow"},
+            {"id": "d", "label": "D", "sf_type": "ApexClass", "file_type": "apex"},
+        ],
+        "edges": [
+            {"source": "a", "target": "b", "relation": "calls", "confidence": "EXTRACTED"},
+            {"source": "b", "target": "c", "relation": "references", "confidence": "EXTRACTED"},
+            {"source": "a", "target": "d", "relation": "calls", "confidence": "INFERRED"},
+        ],
+    }
+    return build_from_json(extraction, multigraph=True)
+
+
+def test_bfs_impact_forward_returns_chain_at_correct_depths(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": 3})
+    depths = {n["id"]: n["depth"] for n in result["nodes"]}
+    assert depths == {"b": 1, "c": 2}, f"expected b@1, c@2 (no INFERRED d), got {depths}"
+    assert result["total_impacted"] == 2
+
+
+def test_bfs_impact_reverse_walks_predecessors(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "C", "direction": "reverse", "max_depth": 3})
+    depths = {n["id"]: n["depth"] for n in result["nodes"]}
+    assert depths == {"b": 1, "a": 2}, f"reverse from C should reach b@1, a@2, got {depths}"
+
+
+def test_bfs_impact_both_unions_directions(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "B", "direction": "both", "max_depth": 1})
+    ids = {n["id"] for n in result["nodes"]}
+    assert ids == {"a", "c"}, f"both @depth1 from B should be a and c, got {ids}"
+
+
+def test_bfs_impact_excludes_inferred_by_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": 3})
+    ids = {n["id"] for n in result["nodes"]}
+    assert "d" not in ids, f"INFERRED edge A→D must not appear by default, got {ids}"
+
+
+def test_bfs_impact_include_inferred_toggles_visibility(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": 3, "include_inferred": True})
+    ids = {n["id"] for n in result["nodes"]}
+    assert "d" in ids, f"include_inferred must surface the INFERRED A→D edge, got {ids}"
+
+
+def test_bfs_impact_limit_truncates_but_preserves_total(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": 3, "limit": 1})
+    assert result["truncated"] is True
+    assert result["returned"] == 1
+    assert result["total_impacted"] == 2, "total_impacted must be the untruncated count"
+
+
+def test_bfs_impact_relation_filter_restricts_traversal(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    # Only 'calls' edges: A→B is calls, B→C is references, so C must not be reached.
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": 3, "relation_filter": "calls"})
+    ids = {n["id"] for n in result["nodes"]}
+    assert ids == {"b"}, f"relation_filter=calls should reach only b, got {ids}"
+
+
+def test_bfs_impact_unknown_node_returns_not_found(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "DoesNotExist"})
+    assert result["found"] is False
+
+
+def test_bfs_impact_surfaces_all_parallel_relations_to_neighbor(monkeypatch):
+    """A neighbour reached via several parallel edges must report ALL of them.
+
+    Regression for the MultiDiGraph collapse: AccountProcessor both queries AND
+    dml-writes Account, so bfs_impact must list both relations, not just the
+    first-encountered one.
+    """
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_bfs_impact({"node": "AccountProcessor", "direction": "forward", "max_depth": 1})
+    entry = next(n for n in result["nodes"] if n["id"] == "object_account")
+    rel = entry["relation"]
+    rels = set(rel) if isinstance(rel, list) else {rel}
+    assert rels == {"queries", "dml"}, f"bfs_impact lost a parallel relation: {rel}"
+
+
+def _multi_confidence_serve_graph():
+    """AccountProcessor writes Account via one EXTRACTED and one INFERRED edge."""
+    from graphify_sf.build import build_from_json
+
+    extraction = {
+        "nodes": [
+            {"id": "apex_accountprocessor", "label": "AccountProcessor", "sf_type": "ApexClass", "file_type": "apex"},
+            {"id": "object_account", "label": "Account", "sf_type": "CustomObject", "file_type": "object"},
+        ],
+        "edges": [
+            {
+                "source": "apex_accountprocessor",
+                "target": "object_account",
+                "relation": "dml",
+                "confidence": "EXTRACTED",
+            },
+            {
+                "source": "apex_accountprocessor",
+                "target": "object_account",
+                "relation": "reads_config",
+                "confidence": "INFERRED",
+            },
+        ],
+    }
+    return build_from_json(extraction, multigraph=True)
+
+
+def test_bfs_impact_surfaces_all_parallel_confidences_to_neighbor(monkeypatch):
+    """Confidence must not collapse either: an EXTRACTED + INFERRED pair to one
+    target reports both confidences when include_inferred is set."""
+    serve = _install_serve_graph(monkeypatch, _multi_confidence_serve_graph())
+    result = serve._tool_bfs_impact(
+        {"node": "AccountProcessor", "direction": "forward", "max_depth": 1, "include_inferred": True}
+    )
+    entry = next(n for n in result["nodes"] if n["id"] == "object_account")
+    conf = entry["confidence"]
+    confs = set(conf) if isinstance(conf, list) else {conf}
+    assert confs == {"EXTRACTED", "INFERRED"}, f"bfs_impact collapsed confidence: {conf}"
+
+
+# ---------------------------------------------------------------------------
+# _get_int hardening — non-numeric / oversized MCP args must not crash or
+# return unbounded results (serve.py's int(args.get(...)) call sites)
+# ---------------------------------------------------------------------------
+
+
+def test_bfs_impact_non_numeric_max_depth_falls_back_to_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": "abc"})
+    assert result["found"] is True
+    assert result["max_depth"] == 3
+
+
+def test_bfs_impact_non_numeric_limit_falls_back_to_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "limit": "not-a-number"})
+    assert result["found"] is True
+    assert result["truncated"] is False
+    assert result["returned"] == result["total_impacted"]
+
+
+def _bfs_long_chain_graph(length: int = 6):
+    """A linear chain n0→n1→…→n{length} of EXTRACTED 'calls' edges.
+
+    ``length`` nodes are reachable forward from n0, enough to set a limit below
+    the reachable count and actually observe truncation.
+    """
+    from graphify_sf.build import build_from_json
+
+    nodes = [{"id": f"n{i}", "label": f"N{i}", "sf_type": "ApexClass", "file_type": "apex"} for i in range(length + 1)]
+    edges = [
+        {"source": f"n{i}", "target": f"n{i + 1}", "relation": "calls", "confidence": "EXTRACTED"}
+        for i in range(length)
+    ]
+    return build_from_json({"nodes": nodes, "edges": edges}, multigraph=True)
+
+
+def test_bfs_impact_limit_caps_returned_on_long_chain(monkeypatch):
+    """A limit below the reachable count must truncate the returned list while
+    still reporting the true total — observable only when reachable > limit."""
+    serve = _install_serve_graph(monkeypatch, _bfs_long_chain_graph(6))
+    result = serve._tool_bfs_impact({"node": "N0", "direction": "forward", "max_depth": 10, "limit": 3})
+    assert result["found"] is True
+    assert result["total_impacted"] == 6, f"all 6 downstream nodes are impacted, got {result['total_impacted']}"
+    assert result["returned"] == 3, f"returned must be capped at the limit, got {result['returned']}"
+    assert result["truncated"] is True
+    assert len(result["nodes"]) == 3
+
+
+def test_get_neighbors_non_numeric_limit_falls_back_to_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_get_neighbors({"label": "AccountProcessor", "limit": "abc"})
+    assert result["found"] is True
+
+
+def test_get_int_helper_defaults_on_bad_input():
+    from graphify_sf.serve import _get_int
+
+    assert _get_int({"limit": "abc"}, "limit", 20) == 20
+    assert _get_int({"limit": None}, "limit", 20) == 20
+    assert _get_int({}, "limit", 20) == 20
+
+
+def test_get_int_helper_clamps_to_bounds():
+    from graphify_sf.serve import _get_int
+
+    assert _get_int({"limit": 1_000_000}, "limit", 20, min_val=1, max_val=10000) == 10000
+    assert _get_int({"max_depth": -5}, "max_depth", 3, min_val=0, max_val=10) == 0

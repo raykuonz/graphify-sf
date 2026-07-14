@@ -120,6 +120,109 @@ def test_resolve_cross_references_resolves_raw_calls_to_unknown_class_as_inferre
 
 
 # ---------------------------------------------------------------------------
+# Doc mention disambiguation (__mention__ placeholder resolution)
+# ---------------------------------------------------------------------------
+
+
+def _mention_edge(label: str, *, score: float = 0.6) -> dict:
+    """A doc-mention placeholder edge as emitted by doc._sf_mention_edges."""
+    return {
+        "source": "doc_readme",
+        "target": f"__mention__{label}",
+        "_mention_label": label,
+        "relation": "references",
+        "confidence": "INFERRED",
+        "confidence_score": score,
+        "source_file": "/docs/README.md",
+        "source_location": None,
+        "weight": 0.5,
+    }
+
+
+def test_resolve_cross_references_single_candidate_unchanged():
+    """A mention matching exactly one node resolves to it at the base score."""
+    from graphify_sf.extract import _resolve_cross_references
+
+    nodes = [
+        {"id": "doc_readme", "label": "README.md", "sf_type": "Document"},
+        {"id": "object_account", "label": "Account", "sf_type": "CustomObject"},
+    ]
+    edges = [_mention_edge("Account")]
+
+    _, resolved = _resolve_cross_references(nodes, edges)
+    mention = [e for e in resolved if e.get("relation") == "references" and e["source"] == "doc_readme"]
+    assert len(mention) == 1
+    assert mention[0]["target"] == "object_account"
+    assert mention[0]["confidence"] == "INFERRED"
+    assert mention[0]["confidence_score"] == 0.6
+
+
+def test_resolve_cross_references_prefers_non_document_candidate():
+    """When a mention label matches both a real CustomObject and a DocumentSection
+    heading, the edge resolves to the CustomObject, not the heading."""
+    from graphify_sf.extract import _resolve_cross_references
+
+    nodes = [
+        {"id": "doc_readme", "label": "README.md", "sf_type": "Document"},
+        {"id": "object_account", "label": "Account", "sf_type": "CustomObject"},
+        {"id": "doc_readme_h_account_1", "label": "Account", "sf_type": "DocumentSection"},
+    ]
+    edges = [_mention_edge("Account")]
+
+    _, resolved = _resolve_cross_references(nodes, edges)
+    mention = [e for e in resolved if e.get("relation") == "references" and e["source"] == "doc_readme"]
+    assert len(mention) == 1
+    assert mention[0]["target"] == "object_account"
+    assert mention[0]["confidence"] == "INFERRED"
+    # Preferring the non-document candidate keeps the base score, not a penalty.
+    assert mention[0]["confidence_score"] == 0.6
+
+
+def test_resolve_cross_references_ambiguous_multi_emit_lowers_confidence():
+    """A mention matching two distinct non-document nodes emits one edge to each,
+    both INFERRED and both at the reduced confidence score."""
+    from graphify_sf.extract import _resolve_cross_references
+
+    nodes = [
+        {"id": "doc_readme", "label": "README.md", "sf_type": "Document"},
+        {"id": "object_shared", "label": "Shared", "sf_type": "CustomObject"},
+        {"id": "apex_shared", "label": "Shared", "sf_type": "ApexClass"},
+    ]
+    edges = [_mention_edge("Shared")]
+
+    _, resolved = _resolve_cross_references(nodes, edges)
+    mention = [e for e in resolved if e.get("relation") == "references" and e["source"] == "doc_readme"]
+    assert len(mention) == 2
+    targets = {e["target"] for e in mention}
+    assert targets == {"object_shared", "apex_shared"}
+    for e in mention:
+        assert e["confidence"] == "INFERRED"
+        # 0.6 * 0.67 ≈ 0.4 — reduced below the base 0.6 so ambiguity is filterable.
+        assert e["confidence_score"] == 0.4
+        assert e["confidence_score"] < 0.6
+
+
+def test_resolve_cross_references_all_document_candidates_multi_emit():
+    """If every candidate is a document node, none can be preferred, so the
+    mention multi-emits to each at the reduced score (still INFERRED)."""
+    from graphify_sf.extract import _resolve_cross_references
+
+    nodes = [
+        {"id": "doc_readme", "label": "README.md", "sf_type": "Document"},
+        {"id": "doc_a_h_intro_1", "label": "Intro", "sf_type": "DocumentSection"},
+        {"id": "doc_b_h_intro_1", "label": "Intro", "sf_type": "DocumentSection"},
+    ]
+    edges = [_mention_edge("Intro")]
+
+    _, resolved = _resolve_cross_references(nodes, edges)
+    mention = [e for e in resolved if e.get("relation") == "references" and e["source"] == "doc_readme"]
+    assert len(mention) == 2
+    for e in mention:
+        assert e["confidence"] == "INFERRED"
+        assert e["confidence_score"] == 0.4
+
+
+# ---------------------------------------------------------------------------
 # Stub node ordering: stubs created BEFORE confidence downgrade
 # ---------------------------------------------------------------------------
 

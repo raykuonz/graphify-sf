@@ -637,6 +637,167 @@ public class MysteryUpdater {
     assert not any("mystery" in e.get("target", "").lower() for e in dml_edges)
 
 
+# ---------------------------------------------------------------------------
+# Group B — Apex extractor hardening (comment/string stripping, brace-balanced
+# call boundary, generic-aware implements split, per-method var-type scope)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_apex_dml_inside_comment_not_extracted(tmp_path):
+    """DML that only appears inside comments must not produce a dml edge.
+
+    A commented-out `insert fakeLead;` (line + block comment) plus one real
+    `insert realAcc;` → exactly one dml edge, to the real object only.
+    """
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "CommentedDml.cls"
+    cls.write_text(
+        """\
+public class CommentedDml {
+    public void run() {
+        // Lead fakeLead; insert fakeLead;
+        /* Contact ghost; insert ghost; */
+        Account realAcc = new Account();
+        insert realAcc;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 1
+    assert "account" in dml_edges[0]["target"].lower()
+    assert not any("lead" in e["target"].lower() for e in dml_edges)
+    assert not any("contact" in e["target"].lower() for e in dml_edges)
+
+
+def test_extract_apex_dml_inside_string_not_extracted(tmp_path):
+    """DML-looking text inside a string literal must not produce an edge."""
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "StringDml.cls"
+    cls.write_text(
+        """\
+public class StringDml {
+    public void run() {
+        String note = 'insert FakeLead; then update FakeThing;';
+        Account realAcc = new Account();
+        insert realAcc;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_edges = [e for e in result["edges"] if e.get("relation") == "dml"]
+    assert len(dml_edges) == 1
+    assert "account" in dml_edges[0]["target"].lower()
+    assert not any("lead" in e["target"].lower() for e in dml_edges)
+    assert not any("thing" in e["target"].lower() for e in dml_edges)
+
+
+def test_extract_apex_calls_scoped_to_own_method_body(tmp_path):
+    """Each method's raw calls contain only the calls in its own body.
+
+    Previously `_CALL_RE` scanned from a method's `{` to end-of-file, so the
+    first method accumulated every call below it. With a brace-balanced body
+    boundary, method a() sees only Helper.a(), b() only Helper.b(), c() only
+    Helper.c().
+    """
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "ThreeMethods.cls"
+    cls.write_text(
+        """\
+public class ThreeMethods {
+    public void a() {
+        Helper.a();
+    }
+    public void b() {
+        Helper.b();
+    }
+    public void c() {
+        Helper.c();
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    raw_calls = result["nodes"][0].get("_raw_calls", [])
+    by_caller: dict[str, set[str]] = {}
+    for call in raw_calls:
+        by_caller.setdefault(call["caller_id"], set()).add(call["callee_method"])
+
+    from graphify_sf.extract._ids import apex_method_id
+
+    a_id = apex_method_id("ThreeMethods", "a")
+    b_id = apex_method_id("ThreeMethods", "b")
+    c_id = apex_method_id("ThreeMethods", "c")
+    assert by_caller.get(a_id) == {"a"}
+    assert by_caller.get(b_id) == {"b"}
+    assert by_caller.get(c_id) == {"c"}
+
+
+def test_extract_apex_implements_generic_comma_not_split(tmp_path):
+    """`implements Comparator<Account, String>` → one edge, to Comparator only.
+
+    The comma is inside the generic bracket, so a depth-aware split must not
+    break on it and must not emit a bogus edge to `apex_string`.
+    """
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AccountSorter.cls"
+    cls.write_text(
+        """\
+public class AccountSorter implements Comparator<Account, String> {
+    public Integer compare(Account a, Account b) {
+        return 0;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    impl_edges = [e for e in result["edges"] if e.get("relation") == "implements"]
+    assert len(impl_edges) == 1
+    assert "comparator" in impl_edges[0]["target"].lower()
+    assert not any(e["target"].lower() == "apex_string" for e in impl_edges)
+
+
+def test_extract_apex_var_type_scoped_per_method(tmp_path):
+    """Two methods reusing a local var name with different types don't collide.
+
+    `methodA` declares `Account a; insert a;`, `methodB` declares
+    `Contact a; insert a;` → two dml edges, to object_account and
+    object_contact respectively (not both collapsed to the first-seen type).
+    """
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "PerMethodVars.cls"
+    cls.write_text(
+        """\
+public class PerMethodVars {
+    public void methodA() {
+        Account a = new Account();
+        insert a;
+    }
+    public void methodB() {
+        Contact a = new Contact();
+        insert a;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    dml_targets = {e["target"] for e in result["edges"] if e.get("relation") == "dml"}
+    assert "object_account" in dml_targets
+    assert "object_contact" in dml_targets
+
+
 def test_extract_apex_raw_calls_filters_lowercase_variables(tmp_path):
     """Local variable method calls (e.g. myObj.doSomething()) are not stored as raw_calls,
     but PascalCase static/utility calls (e.g. AccountService.getInstance()) are kept."""

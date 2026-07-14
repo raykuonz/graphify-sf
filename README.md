@@ -496,6 +496,7 @@ graphify-sf serve --graph path/to/graph.json
 | `god_nodes` | Highest-degree nodes — the most central metadata in the org |
 | `list_communities` | All communities with their labels and member counts |
 | `get_community` | All members of a specific community (by id or label) |
+| `bfs_impact` | Bounded, direction-aware impact traversal (`forward`/`reverse`/`both`, `max_depth`, `relation_filter`, EXTRACTED-only unless `include_inferred`) |
 
 **Available resources** (via `resources/list` and `resources/read`):
 
@@ -751,7 +752,7 @@ graphify_sf/
 ├── export.py       All export formats — HTML, SVG, Obsidian, GraphML, Cypher, wiki, ...
 ├── llm.py          LLM semantic extraction — 6 backends, SF-specific prompt, adaptive retry
 ├── watch.py        File-system watcher — fcntl rebuild lock, resource limits, callflow regen
-├── serve.py        MCP stdio server — 8 tools, 6 resources, blank-stdin filter
+├── serve.py        MCP stdio server — 9 tools, 6 resources, blank-stdin filter
 ├── cache.py        Per-file extraction cache — SHA-256 keyed, atomic writes
 ├── validate.py     Extraction schema validation — catches bad extractors before graph assembly
 ├── security.py     Input sanitization — sanitize_label, validate_graph_path
