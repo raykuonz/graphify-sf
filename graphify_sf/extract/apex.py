@@ -251,6 +251,34 @@ def _matching_brace_end(text: str, open_pos: int) -> int:
     return n
 
 
+def _split_implements(interfaces_raw: str) -> list[str]:
+    """Split an ``implements`` clause on commas outside generic angle brackets.
+
+    ``Comparator<Account, String>`` stays a single token instead of being split
+    on the comma nested inside ``<...>`` (which used to emit a bogus edge to
+    ``String``). Each returned token retains its generic suffix; callers strip
+    it when building the edge target.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in interfaces_raw:
+        if ch == "<":
+            depth += 1
+            current.append(ch)
+        elif ch == ">":
+            depth = max(0, depth - 1)
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append("".join(current))
+    return [p.strip() for p in parts if p.strip()]
+
+
 def _extract_var_types(text: str) -> dict[str, str]:
     """Return a varName → declared SObject type map from class source text.
 
@@ -392,10 +420,12 @@ def extract_apex_class(path: Path) -> dict:
                 )
             )
 
-        # Interface edges
+        # Interface edges. Split on top-level commas only so a generic interface
+        # like `Comparator<Account, String>` is not broken on its inner comma.
         if interfaces_raw:
-            for iface in re.split(r",\s*", interfaces_raw):
-                iface = iface.strip()
+            for iface in _split_implements(interfaces_raw):
+                # Drop any generic suffix: `Comparator<Account, String>` → `Comparator`.
+                iface = iface.split("<", 1)[0].strip()
                 if iface and iface.lower() not in _APEX_KEYWORDS:
                     edges.append(
                         _make_edge(

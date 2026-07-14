@@ -741,6 +741,32 @@ public class ThreeMethods {
     assert by_caller.get(c_id) == {"c"}
 
 
+def test_extract_apex_implements_generic_comma_not_split(tmp_path):
+    """`implements Comparator<Account, String>` → one edge, to Comparator only.
+
+    The comma is inside the generic bracket, so a depth-aware split must not
+    break on it and must not emit a bogus edge to `apex_string`.
+    """
+    from graphify_sf.extract.apex import extract_apex_class
+
+    cls = tmp_path / "AccountSorter.cls"
+    cls.write_text(
+        """\
+public class AccountSorter implements Comparator<Account, String> {
+    public Integer compare(Account a, Account b) {
+        return 0;
+    }
+}
+"""
+    )
+
+    result = extract_apex_class(cls)
+    impl_edges = [e for e in result["edges"] if e.get("relation") == "implements"]
+    assert len(impl_edges) == 1
+    assert "comparator" in impl_edges[0]["target"].lower()
+    assert not any(e["target"].lower() == "apex_string" for e in impl_edges)
+
+
 def test_extract_apex_var_type_scoped_per_method(tmp_path):
     """Two methods reusing a local var name with different types don't collide.
 
