@@ -9,6 +9,64 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **MCP tools and `merge-graphs` now read every parallel edge, not just the first.** `serve.py`'s
+  `get_node`, `get_neighbors`, and `shortest_path`, plus the CLI's `graphify-sf path`, previously called
+  the single-edge `edge_data()` helper on the default MultiDiGraph, so a node pair with two relations
+  (e.g. `queries` + `dml` to the same object) silently reported only one of them — the same class of bug
+  the 0.4.0 MultiDiGraph migration fixed elsewhere, unfixed in the MCP/CLI layer until now. All four now
+  use `edge_datas()` and surface every relation.
+- **`merge-graphs` no longer drops parallel edges.** It previously unioned inputs through a plain
+  `nx.Graph()`, collapsing same-direction parallel edges before the multigraph-aware rebuild ever ran.
+  It now unions raw node/link JSON directly (mirroring `merge-driver`'s existing correct approach) and
+  preserves every edge across 2- and 3-way merges.
+- **Apex extraction no longer treats commented-out or string-literal code as real.** `insert`/`update`/
+  etc. inside `//`, `/* */`, or a string literal previously produced real `dml` edges to a nonexistent
+  target; comments and string contents are now scrubbed before extraction.
+- **Apex `calls` edges no longer leak across method boundaries.** A method's call-edge scan previously
+  ran to end-of-file instead of to its own closing brace, so every method accumulated calls that
+  actually belonged to methods below it in the same class.
+- **Apex `implements` clauses with a generic argument list no longer split incorrectly.**
+  `implements Comparator<Account, String>` previously split on the comma inside the generic brackets and
+  emitted a bogus edge treating `String` as an interface.
+- **Apex DML operand→type resolution is now scoped per method, not per class.** Two methods reusing the
+  same local variable name with different declared types (e.g. `Account a` in one method, `Contact a` in
+  another) previously collided via `dict.setdefault`, silently misattributing the second method's DML.
+- **LLM backend config drift across the 6 supported backends resolved.** OpenAI previously had no
+  `max_tokens` entry and fell back to a hardcoded `8192` (half of every sibling backend's `16384`);
+  Gemini silently ignored the documented `GRAPHIFY_SF_MAX_OUTPUT_TOKENS` env override; `temperature` was
+  never passed to Claude's SDK call and was hardcoded (ignoring config) for Bedrock. All 6 backends now
+  resolve `max_tokens`/`temperature` through the same codepath. Kimi's thinking-disable and Ollama's
+  context-sizing quirks moved from inline branches to a data-driven per-backend hook with no behavior
+  change (proven by regression test).
+- **Doc/PDF cross-reference mentions no longer resolve to an arbitrary match when ambiguous.** When a
+  mention's label matched multiple graph nodes, the resolver previously picked the first one arbitrarily
+  (e.g. a `DocumentSection` heading could win over the real `CustomObject` it was named after). It now
+  prefers non-document candidates, and falls back to emitting all remaining candidates at a reduced
+  `INFERRED` confidence score when the ambiguity is real. A small denylist now filters common English
+  words that happen to be PascalCase-shaped (suffixed names like `Account__c` always bypass it), and a
+  mention inside a fenced or inline code span now gets a higher confidence score than one in bare prose.
+
+### Added
+- **`bfs_impact` MCP tool** — a depth-bounded, direction-aware (`forward`/`reverse`/`both`) blast-radius
+  traversal, EXTRACTED-edges-only by default (`include_inferred` opt-in), with `relation_filter`,
+  `limit`/`truncated` reporting, and a `by_type` breakdown. Closes the gap between graphify-sf's own
+  1-hop-only `get_neighbors`/`get_node` tools and the multi-hop impact analysis downstream consumers had
+  to reimplement on top of raw `graph.json`.
+- **`--verbose`/`-v` node-drop accounting** on build/update — prints
+  `N extracted → M deduped-by-label (K merged) → +S stub → F final nodes (P dangling edge(s) pruned)` so
+  the extract→dedup→build node-count pipeline is no longer opaque.
+
+### Changed — please read if you consume `serve.py`'s MCP tools or the `openai` LLM backend
+- **`get_node`/`get_neighbors` may now return one entry per relation instead of one per neighbor.** A
+  node pair connected by N parallel relations now yields up to N entries (each still shaped
+  `{id, label, sf_type, relation, confidence}`) instead of silently collapsing to one. `shortest_path`'s
+  per-hop `relation`/`confidence` becomes a list when a hop has more than one parallel edge (unchanged,
+  a scalar, for the common single-edge case). This is the direct, intended consequence of the edge-drop
+  fix above — any caller that assumed exactly one entry per neighbor should re-check.
+- **The `openai` LLM backend's effective `max_tokens` changes from 8192 to 16384** (matching every other
+  backend) — this changes output size/cost for existing `--backend openai` users; not a silent change.
+
 ---
 
 ## [0.4.0]
