@@ -342,13 +342,18 @@ def _run_pipeline(
         # inject before dedup). For a fresh build: final == deduped + build_stubs.
         n_final = G.number_of_nodes()
         deduped_ids = {n["id"] for n in nodes if isinstance(n, dict) and "id" in n}
-        n_build_stubs = sum(1 for nid in G.nodes() if nid not in deduped_ids)
+        # In incremental mode G is merged with the ENTIRE prior graph.json, so nodes
+        # retained unchanged from that prior run are absent from this run's own
+        # deduped_ids and would be miscounted as build-injected stubs. Gate stub
+        # reporting to the fresh-build path, same as n_pruned_edges below.
+        n_build_stubs = sum(1 for nid in G.nodes() if nid not in deduped_ids) if not incremental else None
+        stub_str = "n/a (incremental merge)" if n_build_stubs is None else f"+{n_build_stubs} stub"
         n_pruned_edges = max(0, len(edges) - G.number_of_edges()) if not incremental else None
         pruned_str = "n/a (incremental merge)" if n_pruned_edges is None else str(n_pruned_edges)
         print(
             f"[graphify-sf] node accounting: {n_extracted} extracted "
             f"→ {n_deduped} deduped-by-label ({n_extracted - n_deduped} merged) "
-            f"→ +{n_build_stubs} stub → {n_final} final nodes "
+            f"→ {stub_str} → {n_final} final nodes "
             f"({pruned_str} dangling edge(s) pruned)"
         )
 

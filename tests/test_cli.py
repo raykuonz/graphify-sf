@@ -765,3 +765,53 @@ def test_cli_verbose_accounting_reconciles_with_collision_and_dangling(tmp_path)
     assert extracted - merged == deduped, f"{extracted} - {merged} != {deduped}"
     assert deduped + stubs == final, f"{deduped} + {stubs} != {final}"
     assert merged >= 1, "the duplicate Dup class must produce at least one dedup merge"
+
+
+def test_cli_verbose_accounting_stub_count_not_misreported_on_incremental_update(tmp_path):
+    """--update merges with the ENTIRE prior graph.json, so a node retained
+    unchanged from a deleted-on-disk source file is not a build-injected stub —
+    the stub term must report n/a on the incremental path, not a misleading count
+    of real carried-over nodes."""
+    import io
+    from contextlib import redirect_stdout
+
+    from graphify_sf.__main__ import _run_pipeline
+
+    base = tmp_path / "proj" / "force-app" / "main" / "default" / "classes"
+    base.mkdir(parents=True)
+    (base / "First.cls").write_text("public class First { }", encoding="utf-8")
+    (base / "Second.cls").write_text("public class Second { }", encoding="utf-8")
+
+    out_dir = tmp_path / "out"
+    _run_pipeline(
+        tmp_path / "proj",
+        out_dir,
+        update=False,
+        directed=False,
+        no_viz=True,
+        max_workers=1,
+        force=True,
+        verbose=False,
+    )
+
+    # Remove a previously-extracted file's source; its node is retained by the
+    # incremental merge but was never (re-)extracted this run.
+    (base / "Second.cls").unlink()
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        _run_pipeline(
+            tmp_path / "proj",
+            out_dir,
+            update=True,
+            directed=False,
+            no_viz=True,
+            max_workers=1,
+            force=True,
+            verbose=True,
+        )
+    text = output.getvalue()
+    assert "→ n/a (incremental merge) → " in text, f"stub term must be n/a on --update:\n{text}"
+    assert "stub" not in text.split("node accounting:")[1].split("final nodes")[0], (
+        f"incremental accounting must not report a stub count:\n{text}"
+    )
