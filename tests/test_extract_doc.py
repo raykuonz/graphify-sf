@@ -6,6 +6,7 @@ from pathlib import Path
 from graphify_sf.extract.doc import (
     _doc_id,
     _extract_headings,
+    _sf_mention_edges,
     extract_doc_file,
     extract_document,
     extract_image,
@@ -143,6 +144,58 @@ def test_heading_node_sf_type():
     assert len(heading_nodes) > 0
     for node in heading_nodes:
         assert node["sf_type"] == "DocumentSection"
+
+
+def test_doc_mention_denylist_skips_common_words():
+    """Bare common English words are not emitted as mentions, but suffixed
+    SF names (e.g. Account__c) always bypass the denylist."""
+    text = "This document is a Note. See the Overview for Data. Account__c holds records."
+    edges = _sf_mention_edges(text, "doc_x", "x.md")
+    labels = {e["_mention_label"] for e in edges}
+    # Denylisted bare words must not appear.
+    assert "This" not in labels
+    assert "Note" not in labels
+    assert "Overview" not in labels
+    assert "Data" not in labels
+    # Suffixed name bypasses the denylist even though "Account" alone could collide.
+    assert "Account__c" in labels
+
+
+def test_doc_mention_suffixed_name_bypasses_denylist():
+    """A denylisted bare word carrying an SF suffix is still detected."""
+    # "Data" is denylisted, but "Data__c" carries a high-signal suffix.
+    text = "The Data__c object stores rows."
+    edges = _sf_mention_edges(text, "doc_x", "x.md")
+    labels = {e["_mention_label"] for e in edges}
+    assert "Data__c" in labels
+    assert "Data" not in labels
+
+
+def test_doc_mention_code_fence_higher_confidence():
+    """The same mention text scores higher inside a fenced code block than in
+    bare prose."""
+    text = "Prose mentions AccountService here.\n\n```\nAccountService svc = new AccountService();\n```\n"
+    edges = _sf_mention_edges(text, "doc_x", "x.md")
+    # First occurrence is prose; regex dedupes so only the first offset is kept.
+    acct = [e for e in edges if e["_mention_label"] == "AccountService"]
+    assert len(acct) == 1
+    assert acct[0]["confidence_score"] == 0.6
+
+    # When the only occurrence is inside a fence, the score is the code value.
+    text2 = "Intro paragraph.\n\n```\nCustomHandler runs.\n```\n"
+    edges2 = _sf_mention_edges(text2, "doc_y", "y.md")
+    handler = [e for e in edges2 if e["_mention_label"] == "CustomHandler"]
+    assert len(handler) == 1
+    assert handler[0]["confidence_score"] == 0.75
+
+
+def test_doc_mention_inline_code_higher_confidence():
+    """A mention inside an inline-code span scores higher than bare prose."""
+    text = "Call `OrderProcessor` to enqueue.\n"
+    edges = _sf_mention_edges(text, "doc_x", "x.md")
+    proc = [e for e in edges if e["_mention_label"] == "OrderProcessor"]
+    assert len(proc) == 1
+    assert proc[0]["confidence_score"] == 0.75
 
 
 def test_no_node_has_sf_type_none():

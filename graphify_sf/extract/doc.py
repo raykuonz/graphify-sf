@@ -96,6 +96,95 @@ def _extract_headings(text: str, doc_id: str, source_file: str) -> tuple[list[di
 # SF mention detection
 # ---------------------------------------------------------------------------
 
+# Common English capitalized words that happen to be PascalCase-shaped and would
+# otherwise pass the SF-mention regex as false positives. Best-effort noise
+# reduction only — deliberately small and not exhaustive. A candidate carrying an
+# SF suffix (__c / __mdt / etc.) always bypasses this list: the suffix is itself
+# high-signal, so a suffixed name is never treated as a common English word.
+_COMMON_WORD_DENYLIST: frozenset[str] = frozenset(
+    {
+        "The",
+        "This",
+        "That",
+        "These",
+        "Those",
+        "Note",
+        "Notes",
+        "Data",
+        "Example",
+        "Examples",
+        "Overview",
+        "Introduction",
+        "Summary",
+        "Description",
+        "Details",
+        "Detail",
+        "Section",
+        "Sections",
+        "Table",
+        "Tables",
+        "Figure",
+        "Step",
+        "Steps",
+        "Usage",
+        "Reference",
+        "References",
+        "Appendix",
+        "Contents",
+        "Chapter",
+        "Page",
+        "Pages",
+        "Warning",
+        "Important",
+        "Tip",
+        "Tips",
+        "Todo",
+        "See",
+        "Here",
+        "There",
+        "When",
+        "Where",
+        "What",
+        "Which",
+        "While",
+        "Then",
+        "Also",
+        "And",
+        "For",
+        "With",
+        "From",
+        "Use",
+        "New",
+    }
+)
+
+# Confidence scores for prose vs. code-proximity mentions. A mention appearing
+# inside a fenced code block or inline-code span is a stronger signal of a real
+# API reference than the same word in bare prose.
+_MENTION_CONFIDENCE_PROSE = 0.6
+_MENTION_CONFIDENCE_CODE = 0.75
+
+# Suffix stripped to obtain a candidate's bare name for the denylist check.
+_SF_SUFFIX_RE = re.compile(r"__[a-z]{1,6}$")
+
+
+def _code_spans(text: str) -> list[tuple[int, int]]:
+    """Return (start, end) character offsets of code regions in `text`.
+
+    Covers triple-backtick fenced blocks and single-backtick inline spans.
+    Inline matches that fall entirely within a fenced block are skipped so a
+    region is only reported once. Computed once per document.
+    """
+    spans: list[tuple[int, int]] = []
+    for m in re.finditer(r"```.*?```", text, re.DOTALL):
+        spans.append((m.start(), m.end()))
+    for m in re.finditer(r"`[^`\n]+`", text):
+        s, e = m.start(), m.end()
+        if any(fs <= s and e <= fe for fs, fe in spans):
+            continue
+        spans.append((s, e))
+    return spans
+
 
 def _sf_mention_edges(text: str, doc_id: str, source_file: str) -> list[dict]:
     """Scan text for SF API name patterns (e.g. AccountService, Account__c).
@@ -106,12 +195,21 @@ def _sf_mention_edges(text: str, doc_id: str, source_file: str) -> list[dict]:
     edges: list[dict] = []
     # SF API names: PascalCase identifiers or names ending in __c / __r / __mdt etc.
     sf_pattern = re.compile(r"\b([A-Z][A-Za-z0-9]*(?:__[a-z]{1,6})?)\b")
+    code_spans = _code_spans(text)
     seen: set[str] = set()
     for m in sf_pattern.finditer(text):
         name = m.group(1)
         if name in seen or len(name) < 3:
             continue
+        # Skip bare common English words (no SF suffix). Suffixed names bypass
+        # the denylist entirely — the suffix is high-signal.
+        bare = _SF_SUFFIX_RE.sub("", name)
+        if bare == name and bare in _COMMON_WORD_DENYLIST:
+            continue
         seen.add(name)
+        offset = m.start()
+        in_code = any(s <= offset < e for s, e in code_spans)
+        score = _MENTION_CONFIDENCE_CODE if in_code else _MENTION_CONFIDENCE_PROSE
         # Candidate SF node IDs to try at cross-reference time
         # We store the raw mention label in _mention_label for resolution
         edges.append(
@@ -121,7 +219,7 @@ def _sf_mention_edges(text: str, doc_id: str, source_file: str) -> list[dict]:
                 "_mention_label": name,
                 "relation": "references",
                 "confidence": "INFERRED",
-                "confidence_score": 0.6,
+                "confidence_score": score,
                 "source_file": source_file,
                 "source_location": None,
                 "weight": 0.5,
