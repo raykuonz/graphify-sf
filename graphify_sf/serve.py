@@ -320,6 +320,24 @@ def _find_node(label: str):
 # ── Tool handlers ─────────────────────────────────────────────────────────────
 
 
+def _get_int(args: dict, key: str, default: int, min_val: int | None = None, max_val: int | None = None) -> int:
+    """Coerce an MCP-caller-supplied arg to int, falling back to ``default`` on bad input.
+
+    MCP tool arguments arrive as untrusted JSON; a caller passing a non-numeric
+    string (or any other type ``int()`` rejects) must degrade to the default
+    rather than crash the tool call.
+    """
+    try:
+        v = int(args.get(key, default))
+    except (ValueError, TypeError):
+        return default
+    if min_val is not None:
+        v = max(v, min_val)
+    if max_val is not None:
+        v = min(v, max_val)
+    return v
+
+
 def _tool_graph_stats(args: dict) -> dict:
     from collections import Counter
 
@@ -338,7 +356,7 @@ def _tool_query(args: dict) -> dict:
 
     question = args["question"]
     use_dfs = args.get("mode", "bfs") == "dfs"
-    budget = int(args.get("budget", 2000))
+    budget = _get_int(args, "budget", 2000, min_val=1, max_val=100000)
 
     scores = _score_nodes(question)
     if not scores:
@@ -421,7 +439,7 @@ def _tool_get_node(args: dict) -> dict:
 
 def _tool_get_neighbors(args: dict) -> dict:
     label = args["label"]
-    limit = int(args.get("limit", 20))
+    limit = _get_int(args, "limit", 20, min_val=1, max_val=10000)
     relation_filter = args.get("relation_filter", "").strip().lower() or None
     nid = _find_node(label)
     if nid is None:
@@ -503,7 +521,7 @@ def _tool_shortest_path(args: dict) -> dict:
 def _tool_god_nodes(args: dict) -> dict:
     from graphify_sf.analyze import god_nodes as _god_nodes
 
-    limit = int(args.get("limit", 10))
+    limit = _get_int(args, "limit", 10, min_val=1, max_val=10000)
     gods = _god_nodes(_G)
     result = []
     for nid, deg in gods[:limit]:
@@ -534,13 +552,15 @@ def _tool_list_communities(args: dict) -> dict:
 
 
 def _tool_get_community(args: dict) -> dict:
-    limit = int(args.get("limit", 50))
+    limit = _get_int(args, "limit", 50, min_val=1, max_val=10000)
     cid_arg = args.get("community_id")
     label_arg = (args.get("label") or "").strip().lower()
 
-    # Resolve community id
+    # Resolve community id. -1 is not a valid community id, so a non-numeric
+    # community_id falls through to the "not found" branch below instead of
+    # raising.
     if cid_arg is not None:
-        cid = int(cid_arg)
+        cid = _get_int(args, "community_id", -1)
     elif label_arg:
         # Fuzzy match label
         best = None
@@ -599,9 +619,9 @@ def _tool_bfs_impact(args: dict) -> dict:
     direction = args.get("direction", "forward")
     if direction not in ("forward", "reverse", "both"):
         direction = "forward"
-    max_depth = max(0, min(int(args.get("max_depth", 3)), 10))
+    max_depth = _get_int(args, "max_depth", 3, min_val=0, max_val=10)
     relation_filter = (args.get("relation_filter") or "").strip().lower() or None
-    limit = int(args.get("limit", 200))
+    limit = _get_int(args, "limit", 200, min_val=1, max_val=10000)
     include_inferred = bool(args.get("include_inferred", False))
 
     nid = _find_node(node_arg)

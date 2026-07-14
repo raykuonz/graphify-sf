@@ -433,3 +433,52 @@ def test_bfs_impact_unknown_node_returns_not_found(monkeypatch):
     serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
     result = serve._tool_bfs_impact({"node": "DoesNotExist"})
     assert result["found"] is False
+
+
+# ---------------------------------------------------------------------------
+# _get_int hardening — non-numeric / oversized MCP args must not crash or
+# return unbounded results (serve.py's int(args.get(...)) call sites)
+# ---------------------------------------------------------------------------
+
+
+def test_bfs_impact_non_numeric_max_depth_falls_back_to_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "max_depth": "abc"})
+    assert result["found"] is True
+    assert result["max_depth"] == 3
+
+
+def test_bfs_impact_non_numeric_limit_falls_back_to_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "limit": "not-a-number"})
+    assert result["found"] is True
+    assert result["truncated"] is False
+    assert result["returned"] == result["total_impacted"]
+
+
+def test_bfs_impact_oversized_limit_is_capped(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _bfs_chain_graph())
+    result = serve._tool_bfs_impact({"node": "A", "direction": "forward", "limit": 1_000_000})
+    assert result["found"] is True
+    assert result["returned"] == result["total_impacted"]
+
+
+def test_get_neighbors_non_numeric_limit_falls_back_to_default(monkeypatch):
+    serve = _install_serve_graph(monkeypatch, _multi_serve_graph())
+    result = serve._tool_get_neighbors({"label": "AccountProcessor", "limit": "abc"})
+    assert result["found"] is True
+
+
+def test_get_int_helper_defaults_on_bad_input():
+    from graphify_sf.serve import _get_int
+
+    assert _get_int({"limit": "abc"}, "limit", 20) == 20
+    assert _get_int({"limit": None}, "limit", 20) == 20
+    assert _get_int({}, "limit", 20) == 20
+
+
+def test_get_int_helper_clamps_to_bounds():
+    from graphify_sf.serve import _get_int
+
+    assert _get_int({"limit": 1_000_000}, "limit", 20, min_val=1, max_val=10000) == 10000
+    assert _get_int({"max_depth": -5}, "max_depth", 3, min_val=0, max_val=10) == 0
