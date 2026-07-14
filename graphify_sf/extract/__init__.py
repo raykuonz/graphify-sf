@@ -68,6 +68,17 @@ from .visualforce import extract_vf_component, extract_vf_page
 # F2: detect managed-package namespace prefix (e.g. "npsp__Name" → namespace="npsp")
 _NS_PREFIX_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)__")
 
+# sf_types that represent document structure rather than real SF components. When
+# a doc mention's label collides with one of these, a genuine SF component is
+# preferred during cross-reference resolution.
+_DOC_SF_TYPES = frozenset({"Document", "DocumentSection"})
+
+# Multiplier applied to a mention's base confidence_score when its label remains
+# ambiguous after preferring non-document candidates (several real SF components
+# share the label). 0.6 * 0.67 ≈ 0.4, consistent with the codebase's 0.1-step
+# confidence scale, keeping the ambiguous edge visible but low-confidence.
+_AMBIGUOUS_MENTION_PENALTY = 0.67
+
 # ---------------------------------------------------------------------------
 # Compound-suffix dispatch table — longest suffix wins
 # ---------------------------------------------------------------------------
@@ -219,7 +230,9 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
 
     # Build a label→id lookup for SF mention resolution from doc nodes
     label_to_ids: dict[str, list[str]] = {}
+    id_to_sf_type: dict[str, str] = {}
     for n in nodes:
+        id_to_sf_type[n["id"]] = n.get("sf_type", "")
         lbl = n.get("label", "")
         if lbl:
             label_to_ids.setdefault(lbl, []).append(n["id"])
@@ -235,13 +248,37 @@ def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
         if tgt.startswith("__mention__"):
             mention_label = edge.get("_mention_label", tgt[len("__mention__") :])
             real_targets = label_to_ids.get(mention_label, [])
-            if real_targets:
-                for real_id in real_targets[:1]:  # take first match
+            if not real_targets:
+                # No match found — drop the placeholder edge (unknown SF component)
+                continue
+            if len(real_targets) > 1:
+                # Multiple label collisions. A doc heading (Document/DocumentSection)
+                # matching a doc mention is almost always noise, so prefer real SF
+                # components if any exist among the matches.
+                non_doc = [rid for rid in real_targets if id_to_sf_type.get(rid) not in _DOC_SF_TYPES]
+                if non_doc:
+                    real_targets = non_doc
+            if len(real_targets) == 1:
+                # Unambiguous (or disambiguated to a single non-doc candidate):
+                # emit as-is, preserving the mention's own confidence score.
+                new_edge = {k: v for k, v in edge.items() if k != "_mention_label"}
+                new_edge["target"] = real_targets[0]
+                new_edge["_tgt"] = real_targets[0]
+                resolved_mention_edges.append(new_edge)
+            else:
+                # Still ambiguous: several equally-plausible (non-document) SF
+                # components share this label. Emit an edge to each so the
+                # ambiguity is visible and filterable rather than silently
+                # resolved to an arbitrary first match, but discount the
+                # confidence score so downstream consumers can filter it out.
+                base_score = edge.get("confidence_score", 0.6)
+                reduced = round(base_score * _AMBIGUOUS_MENTION_PENALTY, 2)
+                for real_id in real_targets:
                     new_edge = {k: v for k, v in edge.items() if k != "_mention_label"}
                     new_edge["target"] = real_id
                     new_edge["_tgt"] = real_id
+                    new_edge["confidence_score"] = reduced
                     resolved_mention_edges.append(new_edge)
-            # If no match found, drop the placeholder edge (unknown SF component)
         else:
             resolved_mention_edges.append(edge)
     edges = resolved_mention_edges
