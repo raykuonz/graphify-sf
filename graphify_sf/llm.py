@@ -45,6 +45,43 @@ _LLM_JSON_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 # ---------------------------------------------------------------------------
+# Per-backend request-override hooks
+#
+# Data-driven replacement for what used to be inline `if "moonshot" in base_url`
+# / `if backend == "ollama"` branches inside _call_openai_compat. Each hook takes
+# the assembled OpenAI-compatible request kwargs, mutates them for its backend's
+# quirk, and returns them. A backend without a quirk omits the "request_overrides"
+# config key. A future 7th backend's quirk becomes a config entry plus a hook
+# function, not a new inline branch in the shared call path.
+# ---------------------------------------------------------------------------
+
+
+def _kimi_disable_thinking(kwargs: dict) -> dict:
+    """Kimi-k2 is a reasoning model — disable thinking so content isn't empty."""
+    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    return kwargs
+
+
+def _ollama_size_context(kwargs: dict) -> dict:
+    """Derive num_ctx from actual prompt size to avoid VRAM pressure."""
+    user_message = kwargs["messages"][-1]["content"]
+    max_completion_tokens = kwargs.get("max_completion_tokens", 8192)
+    num_ctx_raw = os.environ.get("GRAPHIFY_SF_OLLAMA_NUM_CTX", "").strip()
+    if num_ctx_raw:
+        try:
+            num_ctx = int(num_ctx_raw)
+        except ValueError:
+            num_ctx = 131072
+    else:
+        estimated_input = len(user_message) // _CHARS_PER_TOKEN + 400
+        num_ctx = min(estimated_input + max_completion_tokens + 2000, 131072)
+        num_ctx = max(num_ctx, 8192)
+    keep_alive = os.environ.get("GRAPHIFY_SF_OLLAMA_KEEP_ALIVE", "30m")
+    kwargs["extra_body"] = {"options": {"num_ctx": num_ctx}, "keep_alive": keep_alive}
+    return kwargs
+
+
+# ---------------------------------------------------------------------------
 # Backend registry
 # ---------------------------------------------------------------------------
 
@@ -64,6 +101,7 @@ BACKENDS: dict[str, dict] = {
         "pricing": {"input": 0.74, "output": 4.66},
         "temperature": None,  # kimi enforces its own fixed temperature
         "max_tokens": 16384,
+        "request_overrides": _kimi_disable_thinking,
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -72,7 +110,10 @@ BACKENDS: dict[str, dict] = {
         "model_env_key": "GRAPHIFY_SF_GEMINI_MODEL",
         "pricing": {"input": 0.10, "output": 0.40},
         "temperature": 0,
-        "max_completion_tokens": 16384,
+        # Canonical key across all backends so GRAPHIFY_SF_MAX_OUTPUT_TOKENS is
+        # honored uniformly via _resolve_max_tokens (was max_completion_tokens,
+        # which bypassed the env override).
+        "max_tokens": 16384,
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
@@ -81,6 +122,9 @@ BACKENDS: dict[str, dict] = {
         "model_env_key": "GRAPHIFY_SF_OPENAI_MODEL",
         "pricing": {"input": 0.40, "output": 1.60},
         "temperature": 0,
+        # gpt-4.1-mini supports up to 16384 output tokens; match every sibling
+        # backend instead of silently inheriting the old hardcoded 8192 fallback.
+        "max_tokens": 16384,
     },
     "bedrock": {
         "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -96,6 +140,7 @@ BACKENDS: dict[str, dict] = {
         "pricing": {"input": 0.0, "output": 0.0},
         "temperature": 0,
         "max_tokens": 16384,
+        "request_overrides": _ollama_size_context,
     },
 }
 
@@ -319,6 +364,7 @@ def _call_openai_compat(
     max_completion_tokens: int = 8192,
     *,
     backend: str = "",
+    request_overrides: Callable[[dict], dict] | None = None,
 ) -> dict:
     """Call any OpenAI-compatible API and return parsed JSON."""
     try:
@@ -352,23 +398,10 @@ def _call_openai_compat(
         kwargs["temperature"] = temperature
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
-    # Kimi-k2 is a reasoning model — disable thinking so content isn't empty
-    if "moonshot" in base_url:
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-    # Ollama: derive num_ctx from actual prompt size to avoid VRAM pressure
-    if backend == "ollama":
-        num_ctx_raw = os.environ.get("GRAPHIFY_SF_OLLAMA_NUM_CTX", "").strip()
-        if num_ctx_raw:
-            try:
-                num_ctx = int(num_ctx_raw)
-            except ValueError:
-                num_ctx = 131072
-        else:
-            estimated_input = len(user_message) // _CHARS_PER_TOKEN + 400
-            num_ctx = min(estimated_input + max_completion_tokens + 2000, 131072)
-            num_ctx = max(num_ctx, 8192)
-        keep_alive = os.environ.get("GRAPHIFY_SF_OLLAMA_KEEP_ALIVE", "30m")
-        kwargs["extra_body"] = {"options": {"num_ctx": num_ctx}, "keep_alive": keep_alive}
+    # Data-driven per-backend quirk (Kimi thinking-disable, Ollama num_ctx sizing,
+    # or any future backend's) instead of inline branches.
+    if request_overrides is not None:
+        kwargs = request_overrides(kwargs)
 
     resp = client.chat.completions.create(**kwargs)
     raw_content = resp.choices[0].message.content
@@ -395,7 +428,13 @@ def _call_openai_compat(
     return result
 
 
-def _call_claude(api_key: str, model: str, user_message: str, max_tokens: int = 8192) -> dict:
+def _call_claude(
+    api_key: str,
+    model: str,
+    user_message: str,
+    max_tokens: int = 8192,
+    temperature: float = 0,
+) -> dict:
     """Call Anthropic Claude directly (not via OpenAI compat layer)."""
     try:
         import anthropic
@@ -408,6 +447,7 @@ def _call_claude(api_key: str, model: str, user_message: str, max_tokens: int = 
     resp = client.messages.create(
         model=model,
         max_tokens=max_tokens,
+        temperature=temperature,
         system=_SF_EXTRACTION_SYSTEM,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -426,7 +466,7 @@ def _call_claude(api_key: str, model: str, user_message: str, max_tokens: int = 
     return result
 
 
-def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192) -> dict:
+def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192, temperature: float = 0) -> dict:
     """Call AWS Bedrock via boto3 Converse API."""
     try:
         import boto3
@@ -444,7 +484,7 @@ def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192) -> dict
             modelId=model,
             system=[{"text": _SF_EXTRACTION_SYSTEM}],
             messages=[{"role": "user", "content": [{"text": user_message}]}],
-            inferenceConfig={"maxTokens": max_tokens, "temperature": 0},
+            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
         )
     except botocore.exceptions.ClientError as exc:
         code = exc.response["Error"]["Code"]
@@ -507,21 +547,25 @@ def extract_files_direct(
 
     mdl = model or _default_model_for_backend(backend)
     user_msg = _read_files(files, root)
+    # Every backend uses the canonical "max_tokens" key and resolves through the
+    # same env-override codepath, so GRAPHIFY_SF_MAX_OUTPUT_TOKENS is honored for all.
     max_out = _resolve_max_tokens(cfg.get("max_tokens", 8192))
+    temp = cfg.get("temperature", 0)
 
     if backend == "claude":
-        return _call_claude(key, mdl, user_msg, max_tokens=max_out)
+        return _call_claude(key, mdl, user_msg, max_tokens=max_out, temperature=temp)
     if backend == "bedrock":
-        return _call_bedrock(mdl, user_msg, max_tokens=max_out)
+        return _call_bedrock(mdl, user_msg, max_tokens=max_out, temperature=temp)
     return _call_openai_compat(
         cfg["base_url"],
         key,
         mdl,
         user_msg,
-        temperature=cfg.get("temperature", 0),
+        temperature=temp,
         reasoning_effort=cfg.get("reasoning_effort"),
-        max_completion_tokens=cfg.get("max_completion_tokens", max_out),
+        max_completion_tokens=max_out,
         backend=backend,
+        request_overrides=cfg.get("request_overrides"),
     )
 
 

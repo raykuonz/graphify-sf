@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -356,3 +358,289 @@ def test_run_pipeline_backend_none_does_not_import_llm(simple_project_path, tmp_
     # Should complete normally without any LLM calls
     _run_pipeline(simple_project_path, out_dir, no_viz=True, backend=None)
     assert (out_dir / "graph.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Call-layer tests — fake SDK clients
+#
+# The openai / anthropic / boto3 SDKs are optional and not installed in CI, so
+# each helper injects a minimal fake module into sys.modules that records the
+# kwargs handed to the underlying create/converse call. This lets the tests
+# assert that the fixed temperature / max_tokens values actually reach the SDK,
+# rather than only inspecting the BACKENDS config dict in isolation.
+# ---------------------------------------------------------------------------
+
+_FAKE_JSON = '{"nodes":[{"id":"x"}],"edges":[]}'
+
+
+def _install_fake_openai(monkeypatch):
+    """Fake ``openai.OpenAI`` client; returns a dict populated on each call."""
+    captured: dict = {}
+
+    class _Resp:
+        def __init__(self):
+            self.choices = [
+                types.SimpleNamespace(
+                    message=types.SimpleNamespace(content=_FAKE_JSON),
+                    finish_reason="stop",
+                )
+            ]
+            self.usage = types.SimpleNamespace(prompt_tokens=5, completion_tokens=10)
+
+    class _Client:
+        def __init__(self, **init_kwargs):
+            captured["init_kwargs"] = init_kwargs
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            captured["create_kwargs"] = kwargs
+            return _Resp()
+
+    fake_mod = types.ModuleType("openai")
+    fake_mod.OpenAI = _Client
+    monkeypatch.setitem(sys.modules, "openai", fake_mod)
+    return captured
+
+
+def _install_fake_anthropic(monkeypatch):
+    """Fake ``anthropic.Anthropic`` client; returns a dict populated on each call."""
+    captured: dict = {}
+
+    class _Resp:
+        def __init__(self):
+            self.content = [types.SimpleNamespace(text=_FAKE_JSON)]
+            self.usage = types.SimpleNamespace(input_tokens=5, output_tokens=10)
+            self.stop_reason = "end_turn"
+
+    class _Messages:
+        def create(self, **kwargs):
+            captured["create_kwargs"] = kwargs
+            return _Resp()
+
+    class _Anthropic:
+        def __init__(self, **init_kwargs):
+            captured["init_kwargs"] = init_kwargs
+            self.messages = _Messages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = _Anthropic
+    monkeypatch.setitem(sys.modules, "anthropic", fake_mod)
+    return captured
+
+
+def _install_fake_boto3(monkeypatch):
+    """Fake ``boto3.client("bedrock-runtime")``; returns a dict populated on each call."""
+    captured: dict = {}
+
+    class _Client:
+        def converse(self, **kwargs):
+            captured["converse_kwargs"] = kwargs
+            return {
+                "output": {"message": {"content": [{"text": _FAKE_JSON}]}},
+                "usage": {"inputTokens": 5, "outputTokens": 10},
+                "stopReason": "end_turn",
+            }
+
+    class _Session:
+        def __init__(self, **init_kwargs):
+            captured["session_kwargs"] = init_kwargs
+
+        def client(self, name):
+            captured["client_name"] = name
+            return _Client()
+
+    fake_boto3 = types.ModuleType("boto3")
+    fake_boto3.Session = _Session
+
+    fake_botocore = types.ModuleType("botocore")
+    fake_botocore_exc = types.ModuleType("botocore.exceptions")
+
+    class ClientError(Exception):
+        pass
+
+    fake_botocore_exc.ClientError = ClientError
+    fake_botocore.exceptions = fake_botocore_exc
+
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    return captured
+
+
+# ---- temperature passthrough for the two bespoke paths --------------------
+
+
+def test_call_claude_passes_temperature_from_config(monkeypatch):
+    """_call_claude must forward the resolved config temperature to messages.create.
+
+    Mocks anthropic.Anthropic. Pre-fix, temperature was never passed at all.
+    """
+    from graphify_sf import llm
+
+    captured = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+    # A non-zero value proves it is read from config and passed through, not
+    # silently omitted (the pre-fix bug) or hardcoded.
+    monkeypatch.setitem(llm.BACKENDS["claude"], "temperature", 0.7)
+
+    llm.extract_files_direct([], backend="claude")
+
+    assert captured["create_kwargs"]["temperature"] == 0.7
+    assert captured["create_kwargs"]["max_tokens"] == 16384
+
+
+def test_call_bedrock_passes_temperature_from_config(monkeypatch):
+    """_call_bedrock must read cfg temperature into inferenceConfig, not hardcode 0.
+
+    Mocks boto3.client("bedrock-runtime"). Pre-fix, temperature was hardcoded 0.
+    """
+    from graphify_sf import llm
+
+    captured = _install_fake_boto3(monkeypatch)
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.setitem(llm.BACKENDS["bedrock"], "temperature", 0.3)
+
+    llm.extract_files_direct([], backend="bedrock")
+
+    inference = captured["converse_kwargs"]["inferenceConfig"]
+    assert inference["temperature"] == 0.3
+    assert inference["maxTokens"] == 16384
+    assert captured["client_name"] == "bedrock-runtime"
+
+
+# ---- OpenAI max_tokens normalization (behavior-change callout) ------------
+
+
+def test_openai_max_tokens_matches_siblings_not_old_8192(monkeypatch):
+    """OpenAI's resolved max_tokens now equals its siblings (16384), not the old 8192 fallback.
+
+    Mocks openai.OpenAI.
+    """
+    from graphify_sf import llm
+
+    # Config-level parity.
+    assert llm.BACKENDS["openai"]["max_tokens"] == llm.BACKENDS["claude"]["max_tokens"] == 16384
+
+    # And it actually reaches the SDK call as max_completion_tokens.
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+
+    llm.extract_files_direct([], backend="openai")
+
+    assert captured["create_kwargs"]["max_completion_tokens"] == 16384
+    assert captured["create_kwargs"]["max_completion_tokens"] != 8192
+
+
+# ---- Gemini env-var regression (the bug this fixes) -----------------------
+
+
+def test_gemini_honors_max_output_tokens_env_override(monkeypatch):
+    """Regression: GRAPHIFY_SF_MAX_OUTPUT_TOKENS now actually changes Gemini's resolved value.
+
+    Mocks openai.OpenAI (Gemini uses the OpenAI-compat path). Pre-fix, Gemini's
+    config used a ``max_completion_tokens`` key that shadowed ``_resolve_max_tokens``'s
+    env fallthrough, so this env var was silently ignored.
+    """
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+
+    # Default (no env override) resolves to the sibling value.
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+    llm.extract_files_direct([], backend="gemini")
+    default_val = captured["create_kwargs"]["max_completion_tokens"]
+
+    # With the env override, the resolved value changes.
+    monkeypatch.setenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", "9999")
+    llm.extract_files_direct([], backend="gemini")
+    override_val = captured["create_kwargs"]["max_completion_tokens"]
+
+    assert default_val == 16384
+    assert override_val == 9999
+    assert override_val != default_val
+
+
+# ---- refactor-safety: Kimi / Ollama quirks unchanged ----------------------
+
+
+def test_kimi_disable_thinking_unchanged_after_refactor(monkeypatch):
+    """Kimi thinking-disable extra_body is identical after the data-driven refactor.
+
+    Mocks openai.OpenAI. Refactor-safety test, not a new-behavior test.
+    """
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+
+    llm.extract_files_direct([], backend="kimi")
+
+    assert captured["create_kwargs"]["extra_body"] == {"thinking": {"type": "disabled"}}
+    # kimi enforces its own fixed temperature — temperature must NOT be sent.
+    assert "temperature" not in captured["create_kwargs"]
+
+
+def test_ollama_num_ctx_sizing_unchanged_after_refactor(monkeypatch):
+    """Ollama num_ctx sizing / keep_alive extra_body is identical after the refactor.
+
+    Mocks openai.OpenAI. Refactor-safety test, not a new-behavior test.
+    """
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    monkeypatch.delenv("GRAPHIFY_SF_OLLAMA_NUM_CTX", raising=False)
+    monkeypatch.delenv("GRAPHIFY_SF_OLLAMA_KEEP_ALIVE", raising=False)
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+
+    llm.extract_files_direct([], backend="ollama")
+
+    extra_body = captured["create_kwargs"]["extra_body"]
+    # Empty prompt: estimated_input = 0 // 4 + 400 = 400;
+    # num_ctx = min(400 + 16384 + 2000, 131072) = 18784; floor max(_, 8192) = 18784.
+    assert extra_body["options"]["num_ctx"] == 18784
+    assert extra_body["keep_alive"] == "30m"
+
+
+def test_ollama_size_context_hook_matches_old_formula():
+    """Direct unit test of the extracted hook against the pre-refactor inline formula."""
+    from graphify_sf.llm import _ollama_size_context
+
+    def _old_inline(user_message: str, max_completion_tokens: int) -> int:
+        # Verbatim copy of the removed inline branch's default-path arithmetic.
+        estimated_input = len(user_message) // 4 + 400
+        num_ctx = min(estimated_input + max_completion_tokens + 2000, 131072)
+        return max(num_ctx, 8192)
+
+    for message, max_ct in [("", 16384), ("a" * 5000, 16384), ("z" * 800_000, 16384), ("x" * 100, 8192)]:
+        kwargs = {
+            "messages": [{"role": "system", "content": "sys"}, {"role": "user", "content": message}],
+            "max_completion_tokens": max_ct,
+        }
+        result = _ollama_size_context(dict(kwargs))
+        assert result["extra_body"]["options"]["num_ctx"] == _old_inline(message, max_ct)
+
+
+def test_ollama_size_context_hook_honors_num_ctx_env(monkeypatch):
+    """The GRAPHIFY_SF_OLLAMA_NUM_CTX override path is preserved by the hook."""
+    from graphify_sf.llm import _ollama_size_context
+
+    monkeypatch.setenv("GRAPHIFY_SF_OLLAMA_NUM_CTX", "42000")
+    kwargs = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_completion_tokens": 16384,
+    }
+    result = _ollama_size_context(kwargs)
+    assert result["extra_body"]["options"]["num_ctx"] == 42000
+
+
+def test_kimi_disable_thinking_hook_shape():
+    """Direct unit test of the extracted Kimi hook's exact extra_body payload."""
+    from graphify_sf.llm import _kimi_disable_thinking
+
+    result = _kimi_disable_thinking({"model": "kimi"})
+    assert result["extra_body"] == {"thinking": {"type": "disabled"}}
