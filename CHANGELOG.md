@@ -9,25 +9,50 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-- **MCP tools and `merge-graphs` now read every parallel edge, not just the first.** `serve.py`'s
-  `get_node`, `get_neighbors`, and `shortest_path`, plus the CLI's `graphify-sf path`, previously called
-  the single-edge `edge_data()` helper on the default MultiDiGraph, so a node pair with two relations
-  (e.g. `queries` + `dml` to the same object) silently reported only one of them — the same class of bug
-  the 0.4.0 MultiDiGraph migration fixed elsewhere, unfixed in the MCP/CLI layer until now. All four now
-  use `edge_datas()` and surface every relation.
-- **`merge-graphs` no longer drops parallel edges.** It previously unioned inputs through a plain
-  `nx.Graph()`, collapsing same-direction parallel edges before the multigraph-aware rebuild ever ran.
-  It now unions raw node/link JSON directly (mirroring `merge-driver`'s existing correct approach) and
-  preserves every edge across 2- and 3-way merges.
+---
+
+## [0.4.1] — 2026-07-14
+
+A correctness- and honesty-focused release: closes several MultiDiGraph parallel-edge-drop gaps left
+over from the 0.4.0 migration (including two introduced by this release's own new code, caught and
+fixed during a multi-round adversarial review before shipping), hardens the Apex extractor against
+comment/string false positives, normalizes LLM backend config drift, and fixes ambiguous doc-mention
+resolution. Every fix below shipped with a regression test proven to fail on the pre-fix code.
+
+### Fixed — MultiDiGraph parallel-edge drops (serve.py, merge-graphs, and the new bfs_impact tool)
+- **MCP tools and the CLI's `path` command now read every parallel edge, not just the first.**
+  `serve.py`'s `get_node`, `get_neighbors`, and `shortest_path`, plus `graphify-sf path`, previously
+  called the single-edge `edge_data()` helper on the default MultiDiGraph, so a node pair with two
+  relations (e.g. `queries` + `dml` to the same object) silently reported only one of them — the same
+  class of bug the 0.4.0 MultiDiGraph migration fixed elsewhere, unfixed in the MCP/CLI layer until now.
+  All four now use `edge_datas()` and surface every relation. `get_node`/`get_neighbors` may now return
+  one entry per relation instead of one per neighbor (each entry still shaped
+  `{id, label, sf_type, relation, confidence}`); `shortest_path`'s per-hop `relation`/`confidence`
+  becomes a list when a hop has more than one parallel edge (a scalar for the common single-edge case).
+  **If you consume these MCP tools, re-check any caller that assumed exactly one entry per neighbor.**
+- **`merge-graphs`/`merge-driver` no longer drop parallel edges, on either axis.** The union previously
+  went through a plain `nx.Graph()`, collapsing same-direction parallel edges (e.g. `queries` + `dml` on
+  one pair) before the multigraph-aware rebuild ever ran; then, after being rewritten to preserve those,
+  it dropped edges that shared a relation but differed only in `operation` (e.g. two `dml` edges, one
+  `create` one `update`, on the same pair). The union now hashes the full edge identity (minus the
+  per-graph `key`/`source_file` fields that legitimately vary across inputs), so every distinct parallel
+  edge survives a 2- or 3-way merge while genuinely-identical duplicates (the base/ours/theirs case)
+  still coalesce to one.
+- **The new `bfs_impact` MCP tool (see Added) now reports every parallel relation to a neighbor.** Its
+  first implementation stored one `{relation, confidence}` pair per neighbor id in its BFS accumulator,
+  re-introducing — in code this same release added — the exact parallel-edge collapse fixed above for
+  the other MCP tools. `relation`/`confidence` are now lists when a neighbor has more than one parallel
+  edge (a scalar for the common single-edge case), mirroring `shortest_path`.
+
+### Fixed — Apex extraction honesty (comments, strings, method scoping, generics)
 - **Apex class extraction no longer treats commented-out or string-literal code as real.** `insert`/
   `update`/etc. inside `//`, `/* */`, or a string literal previously produced real edges to a nonexistent
   target; comments and string contents are now scrubbed before `extract_apex_class`'s DML, method-call,
   SOQL, `EventBus.publish`, and Custom Metadata/Setting-access extraction.
-- **Known gap:** Apex HTTP-callout detection (`extract_apex_class`'s endpoint scan) and
-  `extract_apex_trigger`'s call-scanning still read raw, unscrubbed source, so commented-out or
-  string-embedded code in those two paths can still produce a phantom edge. Pre-existing, not introduced
-  by the fix above; tracked for a future release.
+- **Known gap (disclosed, not fixed this release):** Apex HTTP-callout detection
+  (`extract_apex_class`'s endpoint scan) and `extract_apex_trigger`'s call-scanning still read raw,
+  unscrubbed source, so commented-out or string-embedded code in those two paths can still produce a
+  phantom edge. Pre-existing, not introduced by the fix above; tracked for a future release.
 - **Apex `calls` edges no longer leak across method boundaries.** A method's call-edge scan previously
   ran to end-of-file instead of to its own closing brace, so every method accumulated calls that
   actually belonged to methods below it in the same class.
@@ -37,13 +62,16 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Apex DML operand→type resolution is now scoped per method, not per class.** Two methods reusing the
   same local variable name with different declared types (e.g. `Account a` in one method, `Contact a` in
   another) previously collided via `dict.setdefault`, silently misattributing the second method's DML.
+
+### Fixed — LLM backends, doc mentions, MCP robustness, --verbose accounting
 - **LLM backend config drift across the 6 supported backends resolved.** OpenAI previously had no
   `max_tokens` entry and fell back to a hardcoded `8192` (half of every sibling backend's `16384`);
   Gemini silently ignored the documented `GRAPHIFY_SF_MAX_OUTPUT_TOKENS` env override; `temperature` was
   never passed to Claude's SDK call and was hardcoded (ignoring config) for Bedrock. All 6 backends now
   resolve `max_tokens`/`temperature` through the same codepath. Kimi's thinking-disable and Ollama's
   context-sizing quirks moved from inline branches to a data-driven per-backend hook with no behavior
-  change (proven by regression test).
+  change (proven by regression test). **The `openai` backend's effective `max_tokens` changes from 8192
+  to 16384** — this changes output size/cost for existing `--backend openai` users; not a silent change.
 - **Doc/PDF cross-reference mentions no longer resolve to an arbitrary match when ambiguous.** When a
   mention's label matched multiple graph nodes, the resolver previously picked the first one arbitrarily
   (e.g. a `DocumentSection` heading could win over the real `CustomObject` it was named after). It now
@@ -51,17 +79,6 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `INFERRED` confidence score when the ambiguity is real. A small denylist now filters common English
   words that happen to be PascalCase-shaped (suffixed names like `Account__c` always bypass it), and a
   mention inside a fenced or inline code span now gets a higher confidence score than one in bare prose.
-- **`merge-graphs`/`merge-driver` no longer drop edges that share a relation but differ in `operation`.**
-  The raw-JSON union introduced above originally deduped links on `(source, target, relation)`, which
-  silently collapsed e.g. two `dml` edges (one `create`, one `update`) on the same pair to one. It now
-  hashes the full edge identity (minus the per-graph `key`/`source_file` fields), so distinct parallel
-  edges of every kind survive while genuinely-identical duplicates (the base/ours/theirs 3-way case)
-  still coalesce.
-- **`bfs_impact` (see Added below) now reports every parallel relation to a neighbor, not just the
-  first.** Its BFS accumulation initially stored one `{relation, confidence}` pair per neighbor id,
-  re-introducing — in code this same release added — the exact parallel-edge collapse fixed above for
-  `get_node`/`get_neighbors`/`shortest_path`. `relation`/`confidence` are now lists when a neighbor has
-  more than one parallel edge (scalar for the common single-edge case), mirroring `shortest_path`.
 - **MCP tool int arguments (`bfs_impact`'s `max_depth`/`limit` and others) no longer raise on
   non-numeric input.** A caller-supplied non-numeric value previously raised an uncaught `ValueError`;
   a new `_get_int` helper now degrades to the tool's default and clamps out-of-range values.
@@ -80,15 +97,10 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `N extracted → M deduped-by-label (K merged) → +S stub → F final nodes (P dangling edge(s) pruned)` so
   the extract→dedup→build node-count pipeline is no longer opaque.
 
-### Changed — please read if you consume `serve.py`'s MCP tools or the `openai` LLM backend
-- **`get_node`/`get_neighbors` may now return one entry per relation instead of one per neighbor.** A
-  node pair connected by N parallel relations now yields up to N entries (each still shaped
-  `{id, label, sf_type, relation, confidence}`) instead of silently collapsing to one. `shortest_path`'s
-  per-hop `relation`/`confidence` becomes a list when a hop has more than one parallel edge (unchanged,
-  a scalar, for the common single-edge case). This is the direct, intended consequence of the edge-drop
-  fix above — any caller that assumed exactly one entry per neighbor should re-check.
-- **The `openai` LLM backend's effective `max_tokens` changes from 8192 to 16384** (matching every other
-  backend) — this changes output size/cost for existing `--backend openai` users; not a silent change.
+### Verification
+- 503 tests (up from 451 at 0.4.0), `ruff check`/`ruff format --check` clean, zero new runtime
+  dependencies. Every fix above was independently reproduced against a pre-fix checkout before and after
+  the change, not just asserted by a passing test suite.
 
 ---
 
