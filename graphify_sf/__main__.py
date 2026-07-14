@@ -55,18 +55,42 @@ def _load_graph_json_raw(path: Path) -> dict:
         return {"nodes": [], "links": []}
 
 
+_UNION_EDGE_IGNORED_FIELDS = frozenset({"key", "source_file"})
+
+
+def _union_edge_identity(edge: dict) -> str:
+    """Canonical dedup identity for a link during union.
+
+    Hashes the full edge dict minus the per-graph fields that legitimately vary
+    across inputs (``key`` — each source graph numbers its own parallel edges
+    from 0; ``source_file`` — an absolute path unique to the machine that built
+    that graph). Every other field participates, so edges that differ only in
+    ``operation`` (e.g. ``dml`` create vs. update on the same source→target
+    pair, which ``extract/apex.py`` and ``extract/flow.py`` deliberately emit as
+    distinct edges) are kept apart, while genuinely-identical duplicates (the
+    common base/ours/theirs 3-way case) still collapse to one.
+    """
+    identity = {k: v for k, v in edge.items() if k not in _UNION_EDGE_IGNORED_FIELDS}
+    return json.dumps(identity, sort_keys=True, default=str)
+
+
 def _union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
     """Union raw graph.json node/link lists across multiple graphs.
 
     Nodes are deduped by ``id`` (first occurrence wins). Links are unioned and
-    deduped on the ``(source, target, relation)`` triple, so distinct parallel
-    edges (e.g. ``queries`` + ``dml`` on the same pair) are ALL preserved — a
-    plain ``nx.Graph()`` union would collapse them before the multigraph build
-    ever runs. Mirrors the edge-safe pattern already used by ``_cmd_merge_driver``.
+    deduped on a canonical hash of the full edge dict (minus the per-graph
+    ``key``/``source_file`` fields), so distinct parallel edges are ALL
+    preserved — both those differing in ``relation`` (e.g. ``queries`` + ``dml``
+    on the same pair) and those differing only in ``operation`` (e.g. two
+    ``dml`` edges, one create + one update, on the same pair). A plain
+    ``nx.Graph()`` union would collapse the former, and a coarse
+    ``(source, target, relation)`` key would collapse the latter, before the
+    multigraph build ever runs. Genuinely-identical duplicate edges (the
+    base/ours/theirs 3-way merge case) still coalesce to one.
     """
     all_nodes: dict[str, dict] = {}
     all_edges: list[dict] = []
-    seen_edges: set[tuple] = set()
+    seen_edges: set[str] = set()
     for data in datas:
         for node in data.get("nodes", []):
             nid = node.get("id", "")
@@ -74,9 +98,9 @@ def _union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
                 all_nodes[nid] = node
         links_key = "links" if "links" in data else "edges"
         for edge in data.get(links_key, []):
-            key = (edge.get("source", ""), edge.get("target", ""), edge.get("relation", ""))
-            if key not in seen_edges:
-                seen_edges.add(key)
+            identity = _union_edge_identity(edge)
+            if identity not in seen_edges:
+                seen_edges.add(identity)
                 # Drop the exported per-graph "key" — each source graph numbers its
                 # own parallel edges from 0, so two distinct relations on the same
                 # pair both arrive as key=0 and would collapse on rebuild. Stripping

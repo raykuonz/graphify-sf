@@ -570,6 +570,114 @@ def test_cli_merge_graphs_three_way_preserves_parallel_edges(tmp_path):
     assert rels == {"queries", "dml", "references"}, f"3-way merge lost a relation; got {rels}"
 
 
+def _write_graph_json(path, edges):
+    """Build + serialize a two-node graph with the given apex_a→obj_b edges."""
+    from graphify_sf.build import build_from_json
+    from graphify_sf.export import to_json
+
+    G = build_from_json(
+        {
+            "nodes": [
+                {"id": "apex_a", "label": "SvcA", "sf_type": "ApexClass", "file_type": "apex"},
+                {"id": "obj_b", "label": "ObjB", "sf_type": "CustomObject", "file_type": "object"},
+            ],
+            "edges": edges,
+        },
+        multigraph=True,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    to_json(G, {}, str(path), force=True)
+
+
+def test_cli_merge_graphs_preserves_operation_distinct_edges_split_inputs(tmp_path):
+    """Two dml edges on the same (source, target, relation) triple but differing
+    only in ``operation`` (create vs. update), split across two merge inputs,
+    must BOTH survive the merge (coarse (src,tgt,rel) dedup would drop one)."""
+    from graphify_sf.__main__ import _cmd_merge_graphs
+
+    g1 = tmp_path / "g1" / "graph.json"
+    g2 = tmp_path / "g2" / "graph.json"
+    _write_graph_json(
+        g1,
+        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "create", "confidence": "INFERRED"}],
+    )
+    _write_graph_json(
+        g2,
+        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "update", "confidence": "INFERRED"}],
+    )
+
+    out_path = tmp_path / "merged" / "graph.json"
+    _cmd_merge_graphs([g1, g2], out_path, no_viz=True)
+
+    data = json.loads(out_path.read_text())
+    pair = _apex_obj_links(data)
+    ops = {lnk.get("operation") for lnk in pair}
+    assert ops == {"create", "update"}, f"merge dropped an operation-distinct edge; got {ops}"
+    assert len(pair) == 2, f"expected 2 dml links for the pair, got {len(pair)}: {pair}"
+
+
+def test_cli_merge_graphs_preserves_operation_distinct_edges_single_input(tmp_path):
+    """Two operation-distinct dml edges that already coexist inside ONE input
+    graph must both survive, while a genuinely-identical duplicate in the second
+    input collapses (not triplicates)."""
+    from graphify_sf.__main__ import _cmd_merge_graphs
+
+    g1 = tmp_path / "g1" / "graph.json"
+    g2 = tmp_path / "g2" / "graph.json"
+    _write_graph_json(
+        g1,
+        [
+            {"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "create", "confidence": "INFERRED"},
+            {"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "update", "confidence": "INFERRED"},
+        ],
+    )
+    # g2 repeats the create edge verbatim — it must coalesce, not add a third.
+    _write_graph_json(
+        g2,
+        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "create", "confidence": "INFERRED"}],
+    )
+
+    out_path = tmp_path / "merged" / "graph.json"
+    _cmd_merge_graphs([g1, g2], out_path, no_viz=True)
+
+    data = json.loads(out_path.read_text())
+    pair = _apex_obj_links(data)
+    ops = sorted(lnk.get("operation") for lnk in pair)
+    assert ops == ["create", "update"], f"expected exactly one create + one update, got {ops}"
+
+
+def test_cli_merge_driver_preserves_operation_distinct_edges(tmp_path):
+    """The 3-way git merge-driver path must also keep operation-distinct dml
+    edges: base has create, theirs adds update — both survive in the merged
+    result written back to ``ours``."""
+    from graphify_sf.__main__ import _cmd_merge_driver
+
+    base = tmp_path / "base" / "graph.json"
+    ours = tmp_path / "ours" / "graph.json"
+    theirs = tmp_path / "theirs" / "graph.json"
+    _write_graph_json(
+        base,
+        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "create", "confidence": "INFERRED"}],
+    )
+    # ours == base (no local change to this edge)
+    _write_graph_json(
+        ours,
+        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "create", "confidence": "INFERRED"}],
+    )
+    _write_graph_json(
+        theirs,
+        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "update", "confidence": "INFERRED"}],
+    )
+
+    _cmd_merge_driver(base, ours, theirs)
+
+    data = json.loads(ours.read_text())
+    pair = _apex_obj_links(data)
+    ops = {lnk.get("operation") for lnk in pair}
+    assert ops == {"create", "update"}, f"merge-driver dropped an operation-distinct edge; got {ops}"
+    assert len(pair) == 2, f"expected 2 dml links for the pair, got {len(pair)}: {pair}"
+
+
 # ---------------------------------------------------------------------------
 # A3 — --verbose node-drop accounting line
 # ---------------------------------------------------------------------------
