@@ -4,9 +4,10 @@ name: Release Binaries + npm
 # This workflow builds PyInstaller binaries for each platform, uploads them to
 # the GitHub Release, then publishes the npm wrapper package.
 #
-# It also supports manual re-runs against an existing tag via workflow_dispatch
-# (e.g. to re-build/re-publish after fixing a runner image) without cutting a
-# new version.
+# It also supports manual re-runs against an existing tag via workflow_dispatch,
+# e.g. to finish a partial publish. A re-run uploads only missing release
+# binaries and publishes only npm versions not yet on the registry; it never
+# replaces bytes that were already released.
 #
 # npm auth: Trusted Publishing (OIDC). Each of the 6 packages has a trusted
 # publisher for raykuonz/graphify-sf + release-binaries.yml with "npm publish"
@@ -29,6 +30,11 @@ on:
 # could publish.
 permissions:
   contents: read
+
+# A release event and a manual dispatch for the same tag must not interleave.
+concurrency:
+  group: release-binaries-${{ github.event.inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
 
 jobs:
   build-binaries:
@@ -75,6 +81,9 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          # Later steps interpolate the tag/version into scripts; accept only a
+          # plain semver tag so that is always safe.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing non-semver tag: $TAG"; exit 1; }
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "Resolved tag=${TAG} version=${TAG#v}"
@@ -135,7 +144,9 @@ jobs:
 
       # Never replace an existing asset: the published npm checksums.json pins
       # these exact bytes, and PyInstaller builds are not reproducible, so a
-      # re-run must reuse them. To force a rebuild, delete the asset first.
+      # re-run must reuse them. Deleting an asset to force a rebuild is only
+      # safe before graphify-sf@<version> is on npm; after that the npm
+      # checksums would no longer match and the fallback download is refused.
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,7 +154,10 @@ jobs:
           ASSET: ${{ matrix.asset-name }}
         shell: bash
         run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qxF "$ASSET"; then
+          # Capture first: a gh error fails the step instead of reading as
+          # "absent", and grep -q can't SIGPIPE gh under pipefail.
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
+          if grep -qxF "$ASSET" <<<"$assets"; then
             echo "$ASSET already on release $TAG; keeping the published bytes"
           else
             gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY"
@@ -167,6 +181,9 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          # Later steps interpolate the tag/version into scripts; accept only a
+          # plain semver tag so that is always safe.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing non-semver tag: $TAG"; exit 1; }
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -257,8 +274,8 @@ jobs:
         run: |
           set -e
           for dir in npm/platforms/*/; do
-            name="$(node -p 'require(require("path").resolve(process.argv[1])).name' "${dir}package.json")"
-            ver="$(node -p 'require(require("path").resolve(process.argv[1])).version' "${dir}package.json")"
+            name="$(node -p 'require(require("path").resolve(process.argv[1])).name || ""' "${dir}package.json")"
+            ver="$(node -p 'require(require("path").resolve(process.argv[1])).version || ""' "${dir}package.json")"
             [ -n "${name}" ] && [ -n "${ver}" ] || { echo "bad package.json in ${dir}"; exit 1; }
             spec="${name}@${ver}"
             # Exact-version match only: anything else (absent, registry error)

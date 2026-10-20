@@ -180,10 +180,12 @@ test(
     const srv = await serve(BAD);
     try {
       await assert.rejects(ensureBinary({ dest, checksumsPath, fetch: srv.fetch }), /sha256 mismatch/);
+      // Still refused on the next run: a stale file is never returned.
+      await assert.rejects(ensureBinary({ dest, checksumsPath, fetch: srv.fetch }), /sha256 mismatch/);
     } finally {
       await srv.close();
     }
-    assert.ok(!fs.existsSync(dest), "the tampered cached binary is removed, not executed");
+    assert.strictEqual(verifiedCachedBinary(dest, checksumsPath), false);
   })
 );
 
@@ -248,4 +250,18 @@ test("concurrent downloads to one dest never install a tampered binary", async (
   );
   assert.deepStrictEqual(fs.readFileSync(dest), GOOD);
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ["checksums.json", "graphify-sf-bin"], "no temp files left");
+});
+
+test("download refuses a response larger than the byte cap", async () => {
+  const dir = tmpDir();
+  const dest = path.join(dir, "graphify-sf-bin");
+  const big = Buffer.alloc(64 * 1024, 7);
+  const checksumsPath = writeChecksums(dir, { [assetName()]: sha256(big) });
+  const srv = await serve(big);
+  try {
+    await assert.rejects(download({ dest, checksumsPath, fetch: srv.fetch, maxBytes: 1024 }), /exceeded 1024 bytes/);
+  } finally {
+    await srv.close();
+  }
+  assert.deepStrictEqual(fs.readdirSync(dir), ["checksums.json"]);
 });

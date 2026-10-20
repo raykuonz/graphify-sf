@@ -35,7 +35,8 @@ An npm-supply-chain release. The Python package is unchanged apart from its vers
   workflow no longer uses a long-lived npm token. `npm view graphify-sf dist.attestations` is
   populated from this release on. Permissions are now set per job: only the publish job (in the `npm`
   environment) can request the OIDC token. The build jobs run third-party PyPI code and get only
-  `contents: write`, and checkouts no longer keep the GitHub token in `.git/config`.
+  `contents: write`, and checkouts no longer keep the GitHub token in `.git/config`. Release tags
+  must be plain semver before any script uses them, and runs for the same tag are serialized.
 - **The main npm package now ships only `bin/graphify-sf.js` from `bin/`.** Previously it shipped
   the whole directory, so a locally downloaded binary could have been included in a manual
   `npm publish`.
@@ -47,6 +48,9 @@ An npm-supply-chain release. The Python package is unchanged apart from its vers
   checksums. Before, a re-run after a partial publish failed on the first already-published platform
   package and never reached the main one, which is what happened with 0.4.2. A manual
   `workflow_dispatch` now also checks out the tag instead of `main`.
+- **Fallback-download progress messages go to stderr instead of stdout.** On a first run they no
+  longer mix into the CLI's output (e.g. `graphify-sf … | jq`) or into `runGraphify()`'s stdout when
+  `stdio: "pipe"`.
 - **The npm wrapper tests pass on macOS.** Two subpackage tests compared a `/var/...` temp path
   against its `/private/var/...` real path.
 

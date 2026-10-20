@@ -152,8 +152,9 @@ function byteLimit(max, url) {
 // against checksums.json before it is renamed into place. The hash is taken
 // from the bytes on disk, in a temp file private to this call, so concurrent
 // first runs cannot interleave writes into a file another one verified.
-// `opts` (dest, checksumsPath, fetch) exists for tests; production callers
-// pass nothing.
+// `opts` (dest, checksumsPath, fetch, maxBytes) exists for tests; production
+// callers pass nothing. Progress goes to stderr so it never mixes into the
+// CLI's stdout (e.g. `graphify-sf ... | jq`, or runGraphify with piped stdio).
 async function download(opts) {
   const o = opts || {};
   const asset = assetName();
@@ -164,7 +165,7 @@ async function download(opts) {
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
 
-  process.stdout.write(`graphify-sf: downloading ${asset} from ${url}\n`);
+  process.stderr.write(`graphify-sf: downloading ${asset} from ${url}\n`);
 
   const res = await fetch(url);
 
@@ -172,7 +173,7 @@ async function download(opts) {
   try {
     // pipeline destroys every stream on error or premature close; "wx" refuses
     // to reuse an existing path.
-    await pipeline(res, byteLimit(MAX_DOWNLOAD_BYTES, url), fs.createWriteStream(tmp, { flags: "wx" }));
+    await pipeline(res, byteLimit(o.maxBytes || MAX_DOWNLOAD_BYTES, url), fs.createWriteStream(tmp, { flags: "wx" }));
     const actual = sha256File(tmp);
     if (actual !== expected) {
       throw new Error(
@@ -191,7 +192,7 @@ async function download(opts) {
     throw e;
   }
 
-  process.stdout.write(`graphify-sf: installed to ${dest}\n`);
+  process.stderr.write(`graphify-sf: installed to ${dest}\n`);
 }
 
 // Resolve a user-supplied binary path from the GRAPHIFY_BIN environment
@@ -280,12 +281,13 @@ async function ensureBinary(opts) {
   }
 
   // 3. A binary an earlier run downloaded into bin/, but only while it still
-  //    matches the published sha256; anything else is discarded.
+  //    matches the published sha256. A stale or tampered file is left for
+  //    download() to replace atomically (rename); it is never returned, and
+  //    deleting it here could race another process's freshly verified rename.
   const dest = o.dest || binaryPath();
   if (verifiedCachedBinary(dest, o.checksumsPath)) {
     return dest;
   }
-  fs.rmSync(dest, { force: true });
 
   // 4. Last resort: lazily download (and verify) from GitHub Releases.
   await download(o);
