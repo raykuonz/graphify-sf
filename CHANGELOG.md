@@ -22,8 +22,8 @@ again, and Dependabot now maintains `uv.lock`.
   27 came from `pypdf`. The rest (pillow, urllib3, anyio, msgpack, pip) are lock-refreshed to patched
   versions.
 - **`pypdf` floor raised to `>=6.19`** in `[docs]`/`[all]`. graphify-sf parses PDFs found in the scanned
-  project, and 6.11 carried 27 advisories. The npm binaries bundle `[docs]` and are rebuilt by this
-  release.
+  project, and 6.11 carried 27 advisories. The npm binaries were never affected: they exclude pypdf,
+  python-docx and openpyxl from the bundle.
 
 ### Fixed
 - **`[claude]` extraction works on anthropic 1.x.** anthropic 1.0 (2026-08-20) removed `temperature`
@@ -44,8 +44,9 @@ again, and Dependabot now maintains `uv.lock`.
   engine silently keeps only the first weight it sees for a pair. Results are seeded (`seed=42`, like
   Louvain) and relabelled in sorted-id order, so **Leiden communities are now reproducible across runs
   and processes.** graspologic's wrapper ran unseeded. Existing graspologic installs keep Leiden, since
-  graspologic depends on graspologic-native. Louvain results still vary slightly between processes; that
-  behaviour predates this release and is unchanged.
+  graspologic depends on graspologic-native; verified against graspologic-native 1.2.5, the declared
+  floor, and 1.3.1. Louvain results still vary slightly between processes; that behaviour predates this
+  release and is unchanged.
 - **Three dead default LLM models replaced.** Each replacement was checked against the provider's own
   docs. Pass `--model` (or the backend's model env var) to keep a specific model.
   - **gemini:** `gemini-2.0-flash` (shut down 2026-06-01) → `gemini-3.6-flash`, Google's named replacement.
@@ -75,15 +76,18 @@ again, and Dependabot now maintains `uv.lock`.
 
 ### Removed
 - **`datasketch` and `rapidfuzz` core dependencies.** Neither was imported anywhere. A plain
-  `pip install graphify-sf` no longer pulls in numpy or scipy.
+  `pip install graphify-sf` no longer pulls in numpy or scipy; the full pipeline, including `--update`,
+  was verified in an environment without them. `[svg]` relied on scipy arriving through datasketch for
+  its layout of 201–500-node graphs, so it now declares `scipy` itself.
 
 ### CI and maintenance
 - Dependabot now uses the `uv` ecosystem, so it updates `uv.lock`. The old `pip` ecosystem ignored the
   lockfile, which is why the vulnerable pins went unfixed. Minor and patch updates are grouped.
 - New `test-all-extras` CI job (Python 3.10 and 3.14) installs every extra, so the new real-SDK contract
-  tests (`tests/test_llm_sdk_contract.py`) and the real-Leiden tests run instead of being skipped. These
-  tests drive the actual anthropic, openai and boto3 clients against a local HTTP server, so a breaking
-  SDK release now fails CI. The existing fakes couldn't catch one.
+  tests (`tests/test_llm_sdk_contract.py`), the real-Leiden tests and the new SVG export tests run instead
+  of being skipped. The job sets `GRAPHIFY_SF_FAIL_ON_SKIP=1`, so a skip there fails the build. The
+  contract tests drive the actual anthropic, openai and boto3 clients against a local HTTP server, so a
+  breaking SDK release now fails CI. The existing fakes couldn't catch one.
 - Python 3.14 added to the test matrix and classifiers.
 - Actions: checkout v7, setup-python v7, setup-node v7 (Node 20, which is EOL, replaced by Node 24), and
   setup-uv pinned to `v10.3.0` (setup-uv no longer publishes moving major tags).

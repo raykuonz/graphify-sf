@@ -121,7 +121,7 @@ def test_call_openai_compat_with_real_openai_sdk(fake_api):
     assert body["thinking"] == {"type": "disabled"}
 
 
-def test_call_bedrock_with_real_boto3(fake_api, monkeypatch):
+def test_call_bedrock_with_real_boto3(fake_api, monkeypatch, tmp_path):
     pytest.importorskip("boto3")
     from graphify_sf import llm
 
@@ -129,6 +129,11 @@ def test_call_bedrock_with_real_boto3(fake_api, monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    # Keep a developer's ~/.aws config (profiles, ignore_configured_endpoint_urls)
+    # from redirecting the call to real AWS.
+    monkeypatch.setenv("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", "false")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "aws-config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "aws-credentials"))
     for var in ("AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_DEFAULT_PROFILE"):
         monkeypatch.delenv(var, raising=False)
     fake_api.reply = {

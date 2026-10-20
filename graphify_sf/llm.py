@@ -464,8 +464,10 @@ def _call_claude(
         "system": _SF_EXTRACTION_SYSTEM,
         "messages": [{"role": "user", "content": user_message}],
     }
-    # anthropic>=1.0 removed sampling params from messages.create() (TypeError);
-    # extra_body is the SDK's documented replacement and also works on 0.x.
+    # anthropic>=1.0 removed sampling params from messages.create() (TypeError).
+    # Its migration guide routes them through extra_body for models that still
+    # accept them (the default claude-sonnet-4-6 does; Opus 4.7+ reject any
+    # temperature). extra_body works on 0.x too.
     if temperature is not None:
         kwargs["extra_body"] = {"temperature": temperature}
     resp = client.messages.create(**kwargs)

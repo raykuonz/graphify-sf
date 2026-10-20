@@ -496,7 +496,7 @@ def test_call_claude_passes_temperature_from_config(monkeypatch):
 
 
 def test_call_claude_omits_temperature_when_unset(monkeypatch):
-    """A None config temperature sends no temperature at all (models that reject it still work)."""
+    """A None config temperature sends no temperature at all, neither as a kwarg nor in extra_body."""
     from graphify_sf import llm
 
     captured = _install_fake_anthropic(monkeypatch)

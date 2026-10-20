@@ -62,8 +62,10 @@ jobs:
       - name: Install all extras (from lock file)
         run: uv sync --all-extras --frozen
 
-      - name: Run tests
-        run: uv run pytest tests/ -v --tb=short -rs
+      - name: Run tests (skips fail the job)
+        env:
+          GRAPHIFY_SF_FAIL_ON_SKIP: "1"
+        run: uv run pytest tests/ -v --tb=short
 
   lint:
     name: Lint

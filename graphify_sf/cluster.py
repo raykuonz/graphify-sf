@@ -3,8 +3,8 @@
 Uses Leiden (graspologic-native) if available, falls back to Louvain (networkx).
 Splits oversized communities. Returns cohesion scores.
 
-Adapted from Graphify's cluster.py — logic is identical; just updated
-module name in docstrings.
+Adapted from Graphify's cluster.py; the Leiden path has since diverged
+(graspologic-native engine, parallel-edge aggregation, deterministic labels).
 """
 
 from __future__ import annotations

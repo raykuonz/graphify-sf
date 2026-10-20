@@ -272,10 +272,17 @@ def test_partition_leiden_maps_non_string_node_ids_back(monkeypatch):
     assert set(partition) == set(G.nodes())
 
 
-def test_cluster_real_leiden_on_multidigraph():
+def test_cluster_real_leiden_on_multidigraph(monkeypatch):
     """cluster() must not crash on the MultiDiGraph the pipeline builds, and must be reproducible."""
     pytest.importorskip("graspologic_native")
     from graphify_sf.cluster import cluster
+
+    def _no_louvain(*args, **kwargs):
+        raise AssertionError("Louvain fallback ran; the real Leiden engine was expected")
+
+    # An ImportError inside _partition (renamed symbol, broken wheel) silently
+    # falls back to Louvain; make that a failure here.
+    monkeypatch.setattr(nx.community, "louvain_communities", _no_louvain)
 
     G = nx.MultiDiGraph()
     for u, v in nx.karate_club_graph().edges():

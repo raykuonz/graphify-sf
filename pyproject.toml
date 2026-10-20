@@ -33,7 +33,7 @@ classifiers = [
 dependencies = [
     "networkx>=3.0",
     "pathspec>=0.12",  # gitwildmatch parsing for .gitignore/.forceignore
-    "idna>=3.15",  # CVE-2026-45409 fix — transitive via httpx/anyio in the LLM extras
+    "idna>=3.15",  # CVE-2026-45409 fix — transitive via anyio/httpx2 in the LLM extras
 ]
 
 [project.urls]
@@ -45,7 +45,7 @@ Changelog = "https://github.com/raykuonz/graphify-sf/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 leiden = ["graspologic-native>=1.2.5"]
 neo4j = ["neo4j"]
-svg = ["matplotlib"]
+svg = ["matplotlib", "scipy"]  # scipy: kamada_kawai_layout for 201-500-node graphs
 watch = ["watchdog>=3.0"]
 # serve.py implements MCP's JSON-RPC stdio transport itself and needs no extra
 # packages; the empty extra keeps `pip install graphify-sf[mcp]` working.
@@ -61,7 +61,7 @@ llm = ["openai>=1.0", "anthropic>=0.30"]  # openai-compat + claude
 docs = ["pypdf>=6.19", "python-docx", "openpyxl"]
 all = [
     "graspologic-native>=1.2.5",
-    "neo4j", "matplotlib", "watchdog>=3.0",
+    "neo4j", "matplotlib", "scipy", "watchdog>=3.0",
     "openai>=1.0", "anthropic>=0.30", "boto3>=1.28",
     "pypdf>=6.19", "python-docx", "openpyxl",
 ]
