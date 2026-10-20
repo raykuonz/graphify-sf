@@ -1,8 +1,10 @@
 version: 2
 
 updates:
-  # Python dependency updates
-  - package-ecosystem: "pip"
+  # Python dependency updates. The "uv" ecosystem updates uv.lock as well as
+  # pyproject.toml; the previous "pip" ecosystem ignored the lockfile, so CI's
+  # pip-audit job went red without Dependabot ever opening a fix.
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -10,6 +12,11 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions version updates
   - package-ecosystem: "github-actions"
