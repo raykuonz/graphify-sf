@@ -225,17 +225,17 @@ The `--backend` flag adds an AI-powered extraction layer on top of the static XM
 
 ### Supported Backends
 
-| Backend | Flag | API Key env var | Estimated cost (1k files) |
-|---------|------|-----------------|--------------------------|
-| Claude | `--backend claude` | `ANTHROPIC_API_KEY` | ~$0.50 |
-| Gemini | `--backend gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ~$0.45 |
-| Kimi K3 | `--backend kimi` | `MOONSHOT_API_KEY` | ~$1.00 |
-| OpenAI | `--backend openai` | `OPENAI_API_KEY` | ~$0.20 |
-| AWS Bedrock | `--backend bedrock` | `AWS_PROFILE` / `AWS_REGION` | ~$0.55 |
-| Ollama (local) | `--backend ollama` | `OLLAMA_BASE_URL` | free |
-| Auto-detect | `--backend auto` | _(first found)_ | varies |
+| Backend | Flag | API Key env var | Default model | Price per 1M tokens (in / out) |
+|---------|------|-----------------|---------------|--------------------------------|
+| Claude | `--backend claude` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` | $3.00 / $15.00 |
+| Gemini | `--backend gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `gemini-3.6-flash` | $0.75 / $3.75 |
+| Kimi | `--backend kimi` | `MOONSHOT_API_KEY` | `kimi-k3` | $3.00 / $15.00 |
+| OpenAI | `--backend openai` | `OPENAI_API_KEY` | `gpt-4.1-mini` | $0.40 / $1.60 |
+| AWS Bedrock | `--backend bedrock` | `AWS_PROFILE` / `AWS_REGION` | `us.anthropic.claude-sonnet-4-6` | $3.30 / $16.50 |
+| Ollama (local) | `--backend ollama` | `OLLAMA_BASE_URL` | `qwen2.5-coder:7b` | free |
+| Auto-detect | `--backend auto` | _(first found)_ | — | varies |
 
-Estimates scale with each backend's default model price (`BACKENDS` in `graphify_sf/llm.py`). Default models: Claude `claude-sonnet-4-6`, Gemini `gemini-3.6-flash`, Kimi `kimi-k3`, OpenAI `gpt-4.1-mini`, Bedrock `us.anthropic.claude-sonnet-4-6` (US geo inference profile). Gemini 3.x and Kimi K3 always reason, and their thinking tokens are billed as output on top of these figures.
+Prices mirror `BACKENDS` in `graphify_sf/llm.py`, which the CLI also uses for its end-of-run cost estimate. Gemini 3.x and Kimi K3 always reason, and their thinking tokens are billed as output. The Bedrock default is a US geo inference profile: outside US regions, set `GRAPHIFY_SF_BEDROCK_MODEL` (e.g. `eu.anthropic.claude-sonnet-4-6` or `global.anthropic.claude-sonnet-4-6`). Override any default with the backend's model variable below.
 
 ### Install the SDK
 
@@ -265,6 +265,7 @@ pip install graphify-sf[llm]
 | `OLLAMA_BASE_URL` | Ollama server URL (default: `http://localhost:11434/v1`) |
 | `OLLAMA_MODEL` | Ollama model name (default: `qwen2.5-coder:7b`) |
 | `GRAPHIFY_SF_GEMINI_MODEL` | Override Gemini model |
+| `GRAPHIFY_SF_KIMI_MODEL` | Override Kimi model (e.g. `kimi-k2.6`; K2.x runs with thinking disabled) |
 | `GRAPHIFY_SF_OPENAI_MODEL` | Override OpenAI model |
 | `GRAPHIFY_SF_BEDROCK_MODEL` | Override Bedrock model |
 | `GRAPHIFY_SF_MAX_OUTPUT_TOKENS` | Override max output tokens per LLM call |

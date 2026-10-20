@@ -363,8 +363,8 @@ def test_run_pipeline_backend_none_does_not_import_llm(simple_project_path, tmp_
 # ---------------------------------------------------------------------------
 # Call-layer tests — fake SDK clients
 #
-# The openai / anthropic / boto3 SDKs are optional and not installed in CI, so
-# each helper injects a minimal fake module into sys.modules that records the
+# The openai / anthropic / boto3 SDKs are optional (only CI's all-extras job
+# installs them), so each helper injects a minimal fake module into sys.modules that records the
 # kwargs handed to the underlying create/converse call. This lets the tests
 # assert that the fixed temperature / max_tokens values actually reach the SDK,
 # rather than only inspecting the BACKENDS config dict in isolation.
@@ -586,7 +586,7 @@ def test_gemini_honors_max_output_tokens_env_override(monkeypatch):
     assert override_val != default_val
 
 
-# ---- refactor-safety: Kimi / Ollama quirks unchanged ----------------------
+# ---- Kimi reasoning controls / Ollama quirks ------------------------------
 
 
 def test_kimi_k2_models_still_disable_thinking(monkeypatch):
@@ -691,6 +691,71 @@ def test_ollama_size_context_hook_honors_num_ctx_env(monkeypatch):
     }
     result = _ollama_size_context(kwargs)
     assert result["extra_body"]["options"]["num_ctx"] == 42000
+
+
+def test_kimi_model_env_override_reaches_k2_branch(monkeypatch):
+    """GRAPHIFY_SF_KIMI_MODEL is the CLI's way back to a K2.x model (there is no --model flag)."""
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
+    monkeypatch.setenv("GRAPHIFY_SF_KIMI_MODEL", "kimi-k2.6")
+
+    llm.extract_files_direct([], backend="kimi")
+
+    assert captured["create_kwargs"]["model"] == "kimi-k2.6"
+    assert captured["create_kwargs"]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_kimi_request_overrides_leaves_other_models_alone():
+    """Only K3+ gets an effort; non-generation ids (moonshot-v1-*, kimi-latest) get neither knob."""
+    from graphify_sf.llm import _kimi_request_overrides
+
+    assert _kimi_request_overrides({"model": "kimi-k4"})["reasoning_effort"] == "low"
+    for model in ("moonshot-v1-8k", "kimi-latest"):
+        out = _kimi_request_overrides({"model": model})
+        assert "reasoning_effort" not in out
+        assert "extra_body" not in out
+
+
+def test_kimi_request_overrides_merges_existing_extra_body():
+    """The K2.x branch adds to an existing extra_body instead of replacing (or mutating) it."""
+    from graphify_sf.llm import _kimi_request_overrides
+
+    original = {"x": 1}
+    out = _kimi_request_overrides({"model": "kimi-k2.6", "extra_body": original})
+    assert out["extra_body"] == {"x": 1, "thinking": {"type": "disabled"}}
+    assert original == {"x": 1}
+
+
+def test_bedrock_warns_when_us_profile_used_outside_us(monkeypatch, capsys):
+    """The default us. inference profile fails outside US regions; say how to fix it, once."""
+    from graphify_sf import llm
+
+    _install_fake_boto3(monkeypatch)
+    monkeypatch.setattr(llm, "_bedrock_geo_warned", False)
+    monkeypatch.delenv("GRAPHIFY_SF_BEDROCK_MODEL", raising=False)
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+
+    llm.extract_files_direct([], backend="bedrock")
+    llm.extract_files_direct([], backend="bedrock")
+
+    err = capsys.readouterr().err
+    assert err.count("GRAPHIFY_SF_BEDROCK_MODEL") == 1
+    assert "eu-central-1" in err
+
+
+def test_bedrock_no_geo_warning_inside_us(monkeypatch, capsys):
+    from graphify_sf import llm
+
+    _install_fake_boto3(monkeypatch)
+    monkeypatch.setattr(llm, "_bedrock_geo_warned", False, raising=False)
+    monkeypatch.delenv("GRAPHIFY_SF_BEDROCK_MODEL", raising=False)
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+    llm.extract_files_direct([], backend="bedrock")
+
+    assert "GRAPHIFY_SF_BEDROCK_MODEL" not in capsys.readouterr().err
 
 
 def test_kimi_request_overrides_hook_shape():

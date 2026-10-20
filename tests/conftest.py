@@ -59,3 +59,12 @@ def pytest_runtest_makereport(item, call):
         reason = report.longrepr[-1] if isinstance(report.longrepr, tuple) else report.longrepr
         report.outcome = "failed"
         report.longrepr = f"skipped while GRAPHIFY_SF_FAIL_ON_SKIP=1: {reason}"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Also fail on skips the hook above never sees (module-level importorskip at collection)."""
+    if os.environ.get("GRAPHIFY_SF_FAIL_ON_SKIP") != "1":
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None and reporter.stats.get("skipped") and session.exitstatus == 0:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED

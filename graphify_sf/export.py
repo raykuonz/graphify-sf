@@ -1025,7 +1025,7 @@ def to_svg(
 ) -> None:
     """Export the graph as an SVG image using matplotlib + networkx layout.
 
-    Requires: pip install graphify-sf[svg]  (installs matplotlib)
+    Requires: pip install graphify-sf[svg]  (installs matplotlib + scipy)
 
     Args:
         G: NetworkX graph.

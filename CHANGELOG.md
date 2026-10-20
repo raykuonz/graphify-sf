@@ -47,29 +47,37 @@ again, and Dependabot now maintains `uv.lock`.
   graspologic depends on graspologic-native; verified against graspologic-native 1.2.5, the declared
   floor, and 1.3.1. Louvain results still vary slightly between processes; that behaviour predates this
   release and is unchanged.
-- **Three dead default LLM models replaced.** Each replacement was checked against the provider's own
-  docs. Pass `--model` (or the backend's model env var) to keep a specific model.
+- **Three dead or retiring default LLM models replaced.** Each replacement was checked against the
+  provider's own docs. To pin a different model, set the backend's model variable:
+  `GRAPHIFY_SF_GEMINI_MODEL`, `GRAPHIFY_SF_BEDROCK_MODEL`, or the new `GRAPHIFY_SF_KIMI_MODEL`. The CLI
+  has no `--model` flag.
   - **gemini:** `gemini-2.0-flash` (shut down 2026-06-01) → `gemini-3.6-flash`, Google's named replacement.
     Temperature is no longer sent, since Google advises keeping Gemini 3.x at its default and lower values
     can loop. Price $0.10/$0.40 → $0.75/$3.75 per 1M tokens. Google doubles it to $1.50/$7.50 on
     2027-01-01.
   - **kimi:** `kimi-k2-0711-preview` (discontinued 2026-05-25) → `kimi-k3`, Moonshot's replacement.
     K3 always reasons and does not take the K2.x-only `thinking` parameter, so the request hook is now
-    model-aware. K2.x models (e.g. `--model kimi-k2.6`) still get `thinking: disabled`. K3+ gets
-    `reasoning_effort="low"`, because its default (`max`) is slow and costly for extraction. Price
-    $0.74/$4.66 → $3.00/$15.00. The $15 output rate is read from Moonshot's pricing table by column
-    position.
+    model-aware. K2.x models (e.g. `GRAPHIFY_SF_KIMI_MODEL=kimi-k2.6`, the cheaper option at
+    $0.95/$4.00) still get `thinking: disabled`. K3+ gets `reasoning_effort="low"`, because its default
+    (`max`) is slow and costly for extraction. Other ids get neither setting. Price $0.74/$4.66 →
+    $3.00/$15.00.
   - **bedrock:** `anthropic.claude-3-5-sonnet-20241022-v2:0` (Legacy, EOL 2026-11-13) →
     `us.anthropic.claude-sonnet-4-6`, the US geo inference profile. On-demand Sonnet 4.6 has no in-region
     endpoint in us-east-1, the default region. Callers outside the US should set
-    `GRAPHIFY_SF_BEDROCK_MODEL` (e.g. `eu.` or `global.anthropic.claude-sonnet-4-6`). The price estimate
-    becomes $3.30/$16.50, from Anthropic's documented 10% regional-endpoint premium; AWS's own price page
-    could not be read.
+    `GRAPHIFY_SF_BEDROCK_MODEL` (e.g. `eu.` or `global.anthropic.claude-sonnet-4-6`). The CLI now warns
+    once when a `us.` profile is used from a non-US `AWS_REGION`. Cost-estimate price $3.30/$16.50, which
+    includes the 10% regional-endpoint premium.
   - **Upcoming:** `openai`'s default `gpt-4.1-mini` is deprecated, and OpenAI shuts it down on 2027-01-14.
     It is unchanged in this release.
 - **The `[mcp]` extra is now empty.** `graphify-sf serve` has always implemented MCP's JSON-RPC stdio
   transport itself and never imported the `mcp` package. The extra is kept as an alias so existing
   `pip install graphify-sf[mcp]` commands keep working, and `[all]` no longer installs it.
+- **SDK floors raised to the first releases with the APIs graphify-sf calls:** `openai>=1.58`
+  (`reasoning_effort`, now always sent for Kimi K3; `max_completion_tokens` needs 1.45) and
+  `boto3>=1.34.116` (bedrock-runtime `Converse`). Older versions satisfied the old floors but failed at
+  call time. The real-SDK contract tests pass at exactly these floors and at anthropic 0.30.0.
+- **The README backend table now lists each default model and its per-1M-token price** from `BACKENDS`.
+  It replaces the old per-1k-files cost guesses, which weren't derived consistently.
 - **openai 3.x / anthropic 1.x** (now the locked versions) use `httpx2`, which reads the operating
   system's certificate store instead of `certifi`. Behind a TLS-inspecting proxy you may need
   `SSL_CERT_FILE`.
@@ -84,15 +92,26 @@ again, and Dependabot now maintains `uv.lock`.
 - Dependabot now uses the `uv` ecosystem, so it updates `uv.lock`. The old `pip` ecosystem ignored the
   lockfile, which is why the vulnerable pins went unfixed. Minor and patch updates are grouped.
 - New `test-all-extras` CI job (Python 3.10 and 3.14) installs every extra, so the new real-SDK contract
-  tests (`tests/test_llm_sdk_contract.py`), the real-Leiden tests and the new SVG export tests run instead
-  of being skipped. The job sets `GRAPHIFY_SF_FAIL_ON_SKIP=1`, so a skip there fails the build. The
-  contract tests drive the actual anthropic, openai and boto3 clients against a local HTTP server, so a
-  breaking SDK release now fails CI. The existing fakes couldn't catch one.
+  tests (`tests/test_llm_sdk_contract.py`), the real-Leiden test and the new SVG export tests run instead
+  of being skipped. The job sets `GRAPHIFY_SF_FAIL_ON_SKIP=1`, so any skip there, including a
+  module-level one, fails the build. The contract tests drive the actual anthropic, openai and boto3
+  clients against a local HTTP server. A breaking SDK release therefore fails CI as soon as Dependabot
+  proposes it for `uv.lock`; the existing fakes couldn't catch one.
 - Python 3.14 added to the test matrix and classifiers.
 - Actions: checkout v7, setup-python v7, setup-node v7 (Node 20, which is EOL, replaced by Node 24), and
   setup-uv pinned to `v10.3.0` (setup-uv no longer publishes moving major tags).
 - Python 3.10 reached end of life this month. It is still supported in 0.4.x; dropping it is planned
   for 0.5.0.
+
+### Verification
+- 521 tests, up from 503 at 0.4.1. In the minimal (`dev`) environment on Python 3.10–3.14, 514 pass and
+  the 7 optional-dependency tests skip by design. All 521 pass with every extra installed on 3.10 and
+  3.14, with no skips allowed.
+  `ruff check`/`ruff format --check` are clean, and `pip-audit` over the all-extras lock reports nothing.
+- Each fix was reproduced before it was made: the anthropic 1.x `TypeError` against the real SDK, the
+  `[svg]` scipy `ModuleNotFoundError` in an svg-only environment, and the Leiden fallback on pre-fix code.
+  Each regression test fails on the pre-fix code. The end-to-end CLI build, `--update` and the
+  `serve` JSON-RPC handshake were run on the fixture projects with and without the extras.
 
 ---
 

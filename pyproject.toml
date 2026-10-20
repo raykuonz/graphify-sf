@@ -50,19 +50,21 @@ watch = ["watchdog>=3.0"]
 # serve.py implements MCP's JSON-RPC stdio transport itself and needs no extra
 # packages; the empty extra keeps `pip install graphify-sf[mcp]` working.
 mcp = []
-# LLM backend extras — install the one matching your chosen --backend
+# LLM backend extras — install the one matching your chosen --backend.
+# Floors are the first releases with the APIs we call: openai 1.58 (reasoning_effort;
+# max_completion_tokens arrived in 1.45), boto3 1.34.116 (bedrock-runtime Converse).
 claude = ["anthropic>=0.30"]
-kimi = ["openai>=1.0"]
-gemini = ["openai>=1.0"]
-openai = ["openai>=1.0"]
-bedrock = ["boto3>=1.28"]
-ollama = ["openai>=1.0"]
-llm = ["openai>=1.0", "anthropic>=0.30"]  # openai-compat + claude
+kimi = ["openai>=1.58"]
+gemini = ["openai>=1.58"]
+openai = ["openai>=1.58"]
+bedrock = ["boto3>=1.34.116"]
+ollama = ["openai>=1.58"]
+llm = ["openai>=1.58", "anthropic>=0.30"]  # openai-compat + claude
 docs = ["pypdf>=6.19", "python-docx", "openpyxl"]
 all = [
     "graspologic-native>=1.2.5",
     "neo4j", "matplotlib", "scipy", "watchdog>=3.0",
-    "openai>=1.0", "anthropic>=0.30", "boto3>=1.28",
+    "openai>=1.58", "anthropic>=0.30", "boto3>=1.34.116",
     "pypdf>=6.19", "python-docx", "openpyxl",
 ]
 dev = ["pytest>=7.0", "ruff>=0.4", "pip-audit>=2.7"]

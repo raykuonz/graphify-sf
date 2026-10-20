@@ -78,7 +78,11 @@ def test_call_claude_with_real_anthropic_sdk(fake_api, monkeypatch):
     assert req["body"]["temperature"] == 0.4
 
 
-def test_call_openai_compat_with_real_openai_sdk(fake_api):
+@pytest.mark.parametrize(
+    ("model", "expect_effort", "expect_thinking"),
+    [("kimi-k3", "low", None), ("kimi-k2.6", None, {"type": "disabled"})],
+)
+def test_call_openai_compat_with_real_openai_sdk(fake_api, model, expect_effort, expect_thinking):
     pytest.importorskip("openai")
     from graphify_sf import llm
 
@@ -101,12 +105,11 @@ def test_call_openai_compat_with_real_openai_sdk(fake_api):
     result = llm._call_openai_compat(
         f"{fake_api.url}/v1",
         "sk-test",
-        "gpt-4.1-mini",
+        model,
         "hello",
         temperature=0.2,
-        reasoning_effort="low",
         max_completion_tokens=321,
-        request_overrides=lambda kw: {**kw, "extra_body": {"thinking": {"type": "disabled"}}},
+        request_overrides=llm._kimi_request_overrides,
     )
 
     assert result["nodes"] == [{"id": "x"}]
@@ -117,8 +120,8 @@ def test_call_openai_compat_with_real_openai_sdk(fake_api):
     body = req["body"]
     assert body["max_completion_tokens"] == 321
     assert body["temperature"] == 0.2
-    assert body["reasoning_effort"] == "low"
-    assert body["thinking"] == {"type": "disabled"}
+    assert body.get("reasoning_effort") == expect_effort
+    assert body.get("thinking") == expect_thinking
 
 
 def test_call_bedrock_with_real_boto3(fake_api, monkeypatch, tmp_path):
