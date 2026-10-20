@@ -228,12 +228,14 @@ The `--backend` flag adds an AI-powered extraction layer on top of the static XM
 | Backend | Flag | API Key env var | Estimated cost (1k files) |
 |---------|------|-----------------|--------------------------|
 | Claude | `--backend claude` | `ANTHROPIC_API_KEY` | ~$0.50 |
-| Gemini | `--backend gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ~$0.05 |
-| Kimi K2 | `--backend kimi` | `MOONSHOT_API_KEY` | ~$0.30 |
+| Gemini | `--backend gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ~$0.45 |
+| Kimi K3 | `--backend kimi` | `MOONSHOT_API_KEY` | ~$1.00 |
 | OpenAI | `--backend openai` | `OPENAI_API_KEY` | ~$0.20 |
-| AWS Bedrock | `--backend bedrock` | `AWS_PROFILE` / `AWS_REGION` | ~$0.50 |
+| AWS Bedrock | `--backend bedrock` | `AWS_PROFILE` / `AWS_REGION` | ~$0.55 |
 | Ollama (local) | `--backend ollama` | `OLLAMA_BASE_URL` | free |
 | Auto-detect | `--backend auto` | _(first found)_ | varies |
+
+Estimates scale with each backend's default model price (`BACKENDS` in `graphify_sf/llm.py`). Default models: Claude `claude-sonnet-4-6`, Gemini `gemini-3.6-flash`, Kimi `kimi-k3`, OpenAI `gpt-4.1-mini`, Bedrock `us.anthropic.claude-sonnet-4-6` (US geo inference profile). Gemini 3.x and Kimi K3 always reason, and their thinking tokens are billed as output on top of these figures.
 
 ### Install the SDK
 
@@ -257,7 +259,7 @@ pip install graphify-sf[llm]
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Claude API key |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Gemini API key |
-| `MOONSHOT_API_KEY` | Kimi K2 API key |
+| `MOONSHOT_API_KEY` | Kimi API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `AWS_PROFILE` / `AWS_REGION` | AWS credentials for Bedrock |
 | `OLLAMA_BASE_URL` | Ollama server URL (default: `http://localhost:11434/v1`) |

@@ -185,8 +185,8 @@ def test_estimate_cost_gemini():
     from graphify_sf.llm import estimate_cost
 
     cost = estimate_cost("gemini", 1_000_000, 1_000_000)
-    # $0.10/M input + $0.40/M output = $0.50
-    assert abs(cost - 0.50) < 0.001
+    # gemini-3.6-flash: $0.75/M input + $3.75/M output = $4.50
+    assert abs(cost - 4.50) < 0.001
 
 
 def test_estimate_cost_ollama_is_free():
@@ -519,9 +519,13 @@ def test_call_bedrock_passes_temperature_from_config(monkeypatch):
     captured = _install_fake_boto3(monkeypatch)
     monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setitem(llm.BACKENDS["bedrock"], "temperature", 0.3)
+    monkeypatch.delenv("GRAPHIFY_SF_BEDROCK_MODEL", raising=False)
 
     llm.extract_files_direct([], backend="bedrock")
 
+    # us-east-1 (the default region) has no in-region on-demand Sonnet 4.6; the
+    # US geo inference profile is required.
+    assert captured["converse_kwargs"]["modelId"] == "us.anthropic.claude-sonnet-4-6"
     inference = captured["converse_kwargs"]["inferenceConfig"]
     assert inference["temperature"] == 0.3
     assert inference["maxTokens"] == 16384
@@ -585,11 +589,27 @@ def test_gemini_honors_max_output_tokens_env_override(monkeypatch):
 # ---- refactor-safety: Kimi / Ollama quirks unchanged ----------------------
 
 
-def test_kimi_disable_thinking_unchanged_after_refactor(monkeypatch):
-    """Kimi thinking-disable extra_body is identical after the data-driven refactor.
+def test_kimi_k2_models_still_disable_thinking(monkeypatch):
+    """An explicit K2.x model keeps the thinking-disable extra_body (K2.x-only parameter).
 
-    Mocks openai.OpenAI. Refactor-safety test, not a new-behavior test.
+    Mocks openai.OpenAI.
     """
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+
+    llm.extract_files_direct([], backend="kimi", model="kimi-k2.6")
+
+    assert captured["create_kwargs"]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "reasoning_effort" not in captured["create_kwargs"]
+    # kimi enforces its own fixed temperature — temperature must NOT be sent.
+    assert "temperature" not in captured["create_kwargs"]
+
+
+def test_kimi_default_k3_lowers_reasoning_effort(monkeypatch):
+    """kimi-k3 always reasons and rejects the K2.x thinking param; its default effort is max."""
     from graphify_sf import llm
 
     captured = _install_fake_openai(monkeypatch)
@@ -598,8 +618,24 @@ def test_kimi_disable_thinking_unchanged_after_refactor(monkeypatch):
 
     llm.extract_files_direct([], backend="kimi")
 
-    assert captured["create_kwargs"]["extra_body"] == {"thinking": {"type": "disabled"}}
-    # kimi enforces its own fixed temperature — temperature must NOT be sent.
+    kwargs = captured["create_kwargs"]
+    assert kwargs["model"] == "kimi-k3"
+    assert kwargs["reasoning_effort"] == "low"
+    assert "extra_body" not in kwargs
+    assert "temperature" not in kwargs
+
+
+def test_gemini_default_sends_no_temperature(monkeypatch):
+    """Google advises leaving Gemini 3.x temperature at its default; low values can loop."""
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    monkeypatch.delenv("GRAPHIFY_SF_GEMINI_MODEL", raising=False)
+
+    llm.extract_files_direct([], backend="gemini")
+
+    assert captured["create_kwargs"]["model"] == "gemini-3.6-flash"
     assert "temperature" not in captured["create_kwargs"]
 
 
@@ -657,9 +693,17 @@ def test_ollama_size_context_hook_honors_num_ctx_env(monkeypatch):
     assert result["extra_body"]["options"]["num_ctx"] == 42000
 
 
-def test_kimi_disable_thinking_hook_shape():
-    """Direct unit test of the extracted Kimi hook's exact extra_body payload."""
-    from graphify_sf.llm import _kimi_disable_thinking
+def test_kimi_request_overrides_hook_shape():
+    """Direct unit test of the Kimi hook's exact payload for K2.x and K3+ models."""
+    from graphify_sf.llm import _kimi_request_overrides
 
-    result = _kimi_disable_thinking({"model": "kimi"})
-    assert result["extra_body"] == {"thinking": {"type": "disabled"}}
+    k2 = _kimi_request_overrides({"model": "kimi-k2.6"})
+    assert k2["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "reasoning_effort" not in k2
+
+    k3 = _kimi_request_overrides({"model": "kimi-k3"})
+    assert k3["reasoning_effort"] == "low"
+    assert "extra_body" not in k3
+
+    # A caller-chosen effort is not overridden.
+    assert _kimi_request_overrides({"model": "kimi-k3", "reasoning_effort": "high"})["reasoning_effort"] == "high"

@@ -56,9 +56,17 @@ _LLM_JSON_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 # ---------------------------------------------------------------------------
 
 
-def _kimi_disable_thinking(kwargs: dict) -> dict:
-    """Kimi-k2 is a reasoning model — disable thinking so content isn't empty."""
-    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+def _kimi_request_overrides(kwargs: dict) -> dict:
+    """Kimi reasoning controls differ by model generation.
+
+    K2.x accepts ``thinking: disabled`` (a K2.x-only parameter), which keeps
+    content from coming back empty. K3+ always reasons, rejects that parameter,
+    and defaults to ``reasoning_effort="max"`` — slow and costly for extraction.
+    """
+    if str(kwargs.get("model", "")).startswith("kimi-k2"):
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    else:
+        kwargs.setdefault("reasoning_effort", "low")
     return kwargs
 
 
@@ -96,20 +104,23 @@ BACKENDS: dict[str, dict] = {
     },
     "kimi": {
         "base_url": "https://api.moonshot.ai/v1",
-        "default_model": "kimi-k2-0711-preview",
+        "default_model": "kimi-k3",
         "env_key": "MOONSHOT_API_KEY",
-        "pricing": {"input": 0.74, "output": 4.66},
+        "pricing": {"input": 3.00, "output": 15.00},
         "temperature": None,  # kimi enforces its own fixed temperature
         "max_tokens": 16384,
-        "request_overrides": _kimi_disable_thinking,
+        "request_overrides": _kimi_request_overrides,
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "default_model": "gemini-2.0-flash",
+        "default_model": "gemini-3.6-flash",
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "model_env_key": "GRAPHIFY_SF_GEMINI_MODEL",
-        "pricing": {"input": 0.10, "output": 0.40},
-        "temperature": 0,
+        # Google's published rate through 2026-12-31; it doubles to 1.50/7.50 on 2027-01-01.
+        "pricing": {"input": 0.75, "output": 3.75},
+        # Google advises keeping Gemini 3.x at its default temperature: lower
+        # values can cause looping or degraded output.
+        "temperature": None,
         # Canonical key across all backends so GRAPHIFY_SF_MAX_OUTPUT_TOKENS is
         # honored uniformly via _resolve_max_tokens (was max_completion_tokens,
         # which bypassed the env override).
@@ -127,9 +138,12 @@ BACKENDS: dict[str, dict] = {
         "max_tokens": 16384,
     },
     "bedrock": {
-        "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        # US geo inference profile: on-demand Sonnet 4.6 has no in-region
+        # endpoint in us-east-1 (the default region), so the bare model ID fails.
+        "default_model": "us.anthropic.claude-sonnet-4-6",
         "model_env_key": "GRAPHIFY_SF_BEDROCK_MODEL",
-        "pricing": {"input": 3.0, "output": 15.0},
+        # Regional (us.) Bedrock endpoints carry a 10% premium over the $3/$15 global rate.
+        "pricing": {"input": 3.30, "output": 16.50},
         "temperature": 0,
         "max_tokens": 16384,
     },
