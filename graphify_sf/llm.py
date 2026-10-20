@@ -433,7 +433,7 @@ def _call_claude(
     model: str,
     user_message: str,
     max_tokens: int = 8192,
-    temperature: float = 0,
+    temperature: float | None = 0,
 ) -> dict:
     """Call Anthropic Claude directly (not via OpenAI compat layer)."""
     try:
@@ -444,13 +444,17 @@ def _call_claude(
         ) from exc
 
     client = anthropic.Anthropic(api_key=api_key)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=_SF_EXTRACTION_SYSTEM,
-        messages=[{"role": "user", "content": user_message}],
-    )
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": _SF_EXTRACTION_SYSTEM,
+        "messages": [{"role": "user", "content": user_message}],
+    }
+    # anthropic>=1.0 removed sampling params from messages.create() (TypeError);
+    # extra_body is the SDK's documented replacement and also works on 0.x.
+    if temperature is not None:
+        kwargs["extra_body"] = {"temperature": temperature}
+    resp = client.messages.create(**kwargs)
     raw_content = resp.content[0].text if resp.content else None
     result = _parse_llm_json(raw_content or "{}")
     result["input_tokens"] = resp.usage.input_tokens if resp.usage else 0

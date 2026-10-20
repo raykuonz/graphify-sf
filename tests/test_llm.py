@@ -414,6 +414,9 @@ def _install_fake_anthropic(monkeypatch):
 
     class _Messages:
         def create(self, **kwargs):
+            # anthropic 1.x removed sampling params from messages.create().
+            if "temperature" in kwargs:
+                raise TypeError("Messages.create() got an unexpected keyword argument 'temperature'")
             captured["create_kwargs"] = kwargs
             return _Resp()
 
@@ -473,7 +476,8 @@ def _install_fake_boto3(monkeypatch):
 def test_call_claude_passes_temperature_from_config(monkeypatch):
     """_call_claude must forward the resolved config temperature to messages.create.
 
-    Mocks anthropic.Anthropic. Pre-fix, temperature was never passed at all.
+    Mocks anthropic.Anthropic. anthropic 1.x rejects a temperature kwarg with
+    TypeError, so it must travel in extra_body (accepted by 0.x and 1.x alike).
     """
     from graphify_sf import llm
 
@@ -486,8 +490,23 @@ def test_call_claude_passes_temperature_from_config(monkeypatch):
 
     llm.extract_files_direct([], backend="claude")
 
-    assert captured["create_kwargs"]["temperature"] == 0.7
+    assert "temperature" not in captured["create_kwargs"]
+    assert captured["create_kwargs"]["extra_body"] == {"temperature": 0.7}
     assert captured["create_kwargs"]["max_tokens"] == 16384
+
+
+def test_call_claude_omits_temperature_when_unset(monkeypatch):
+    """A None config temperature sends no temperature at all (models that reject it still work)."""
+    from graphify_sf import llm
+
+    captured = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setitem(llm.BACKENDS["claude"], "temperature", None)
+
+    llm.extract_files_direct([], backend="claude")
+
+    assert "temperature" not in captured["create_kwargs"]
+    assert "extra_body" not in captured["create_kwargs"]
 
 
 def test_call_bedrock_passes_temperature_from_config(monkeypatch):
