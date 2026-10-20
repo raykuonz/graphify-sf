@@ -9,15 +9,27 @@
 // tarball) before it is renamed into place or executed. A local HTTP server
 // stands in for GitHub.
 
-const { test } = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert");
 const http = require("node:http");
+const https = require("node:https");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 
-const { assetName, download, ensureBinary, verifiedCachedBinary } = require("../lib/download");
+const { assetName, binaryPath, download, ensureBinary, verifiedCachedBinary } = require("../lib/download");
+
+// Hermetic by construction: if a regression ever ignores the injected fetch or
+// dest, the test fails here instead of downloading the real release binary
+// into npm/bin (which the pre-fix code did).
+https.get = () => {
+  throw new Error("network disabled in tests");
+};
+const binExistedBefore = fs.existsSync(binaryPath());
+after(() => {
+  if (!binExistedBefore) assert.ok(!fs.existsSync(binaryPath()), "tests must not write into npm/bin");
+});
 
 const GOOD = Buffer.from("#!/bin/sh\necho genuine-binary\n");
 const BAD = Buffer.from("#!/bin/sh\necho tampered-binary\n");
@@ -33,14 +45,18 @@ function writeChecksums(dir, table) {
   return p;
 }
 
-// Serve `body` for every request. download() builds the real GitHub URL; the
-// injected fetch routes it to the local server by path.
-async function serve(body) {
+// Serve `body` (or run a custom handler) for every request. download() builds
+// the real GitHub URL; the injected fetch routes it to the local server by path.
+async function serve(bodyOrHandler) {
   const requests = [];
   const server = http.createServer((req, res) => {
     requests.push(req.url);
+    if (typeof bodyOrHandler === "function") {
+      bodyOrHandler(req, res);
+      return;
+    }
     res.writeHead(200, { "Content-Type": "application/octet-stream" });
-    res.end(body);
+    res.end(bodyOrHandler);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -170,3 +186,66 @@ test(
     assert.ok(!fs.existsSync(dest), "the tampered cached binary is removed, not executed");
   })
 );
+
+test("download rejects a truncated response and leaves nothing behind", async () => {
+  const dir = tmpDir();
+  const dest = path.join(dir, "graphify-sf-bin");
+  const checksumsPath = writeChecksums(dir, { [assetName()]: sha256(GOOD) });
+  const srv = await serve((req, res) => {
+    // Promise more bytes than are sent, then drop the connection.
+    res.writeHead(200, { "Content-Length": String(GOOD.length * 4) });
+    res.write(GOOD.subarray(0, 8));
+    setImmediate(() => res.socket.destroy());
+  });
+  try {
+    await assert.rejects(download({ dest, checksumsPath, fetch: srv.fetch }));
+  } finally {
+    await srv.close();
+  }
+  assert.ok(!fs.existsSync(dest));
+  assert.deepStrictEqual(fs.readdirSync(dir), ["checksums.json"], "no temp file left behind");
+});
+
+test("download rejects an uppercase or malformed checksums entry", async () => {
+  for (const content of [
+    JSON.stringify({ [assetName()]: sha256(GOOD).toUpperCase() }),
+    JSON.stringify({ [assetName()]: sha256(GOOD).slice(1) }),
+    "{ not json",
+    JSON.stringify([sha256(GOOD)]),
+  ]) {
+    const dir = tmpDir();
+    const checksumsPath = path.join(dir, "checksums.json");
+    fs.writeFileSync(checksumsPath, content);
+    await assert.rejects(
+      download({ dest: path.join(dir, "b"), checksumsPath, fetch: () => assert.fail("must not fetch") }),
+      /no published sha256/,
+      `checksums content: ${content}`
+    );
+  }
+});
+
+test("concurrent downloads to one dest never install a tampered binary", async () => {
+  const dir = tmpDir();
+  const dest = path.join(dir, "graphify-sf-bin");
+  const checksumsPath = writeChecksums(dir, { [assetName()]: sha256(GOOD) });
+  const good = await serve(GOOD);
+  const bad = await serve(BAD);
+  let results;
+  try {
+    results = await Promise.allSettled([
+      download({ dest, checksumsPath, fetch: good.fetch }),
+      download({ dest, checksumsPath, fetch: bad.fetch }),
+      download({ dest, checksumsPath, fetch: good.fetch }),
+      download({ dest, checksumsPath, fetch: bad.fetch }),
+    ]);
+  } finally {
+    await good.close();
+    await bad.close();
+  }
+  assert.deepStrictEqual(
+    results.map((r) => r.status),
+    ["fulfilled", "rejected", "fulfilled", "rejected"]
+  );
+  assert.deepStrictEqual(fs.readFileSync(dest), GOOD);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ["checksums.json", "graphify-sf-bin"], "no temp files left");
+});

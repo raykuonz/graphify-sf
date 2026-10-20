@@ -4,9 +4,16 @@ const crypto = require("crypto");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const { Transform } = require("stream");
+const { pipeline } = require("stream/promises");
 
 const PKG = require("../package.json");
 const VERSION = PKG.version;
+
+// Release binaries are ~16-30 MB; anything far larger is not ours.
+const MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+// Abort a connection that stalls for this long (no bytes in either direction).
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60 * 1000;
 
 const SUPPORTED = {
   linux: ["x64", "arm64"],
@@ -67,7 +74,7 @@ function expectedSha256(asset, file) {
   } catch {
     /* missing or unreadable: handled below */
   }
-  const digest = table && table[asset];
+  const digest = table && Object.hasOwn(table, asset) ? table[asset] : undefined;
   if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
     throw new Error(
       `graphify-sf: no published sha256 for ${asset} (checksums.json missing or incomplete); ` +
@@ -96,9 +103,10 @@ function verifiedCachedBinary(dest, file) {
 function fetchFollow(url, redirects) {
   if (redirects === undefined) redirects = 5;
   return new Promise((resolve, reject) => {
-    https
+    const req = https
       .get(url, { headers: { "User-Agent": "graphify-sf-npm-installer" } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume(); // discard the redirect body so the socket is released
           if (redirects === 0) {
             reject(new Error(`graphify-sf: too many redirects downloading ${url}`));
             return;
@@ -107,6 +115,7 @@ function fetchFollow(url, redirects) {
           return;
         }
         if (res.statusCode !== 200) {
+          res.resume();
           reject(
             new Error(
               `graphify-sf: download failed with HTTP ${res.statusCode} from ${url}. ` +
@@ -118,12 +127,33 @@ function fetchFollow(url, redirects) {
         resolve(res);
       })
       .on("error", reject);
+    req.setTimeout(DOWNLOAD_IDLE_TIMEOUT_MS, () =>
+      req.destroy(new Error(`graphify-sf: download stalled for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s at ${url}`))
+    );
+  });
+}
+
+// Pass-through that errors once more than `max` bytes have flowed.
+function byteLimit(max, url) {
+  let seen = 0;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      seen += chunk.length;
+      if (seen > max) {
+        callback(new Error(`graphify-sf: download from ${url} exceeded ${max} bytes; refusing it`));
+        return;
+      }
+      callback(null, chunk);
+    },
   });
 }
 
 // Download this platform's binary from GitHub Releases, verifying its sha256
-// against checksums.json before it is renamed into place. `opts` (dest,
-// checksumsPath, fetch) exists for tests; production callers pass nothing.
+// against checksums.json before it is renamed into place. The hash is taken
+// from the bytes on disk, in a temp file private to this call, so concurrent
+// first runs cannot interleave writes into a file another one verified.
+// `opts` (dest, checksumsPath, fetch) exists for tests; production callers
+// pass nothing.
 async function download(opts) {
   const o = opts || {};
   const asset = assetName();
@@ -138,43 +168,27 @@ async function download(opts) {
 
   const res = await fetch(url);
 
-  await new Promise((resolve, reject) => {
-    const tmp = dest + ".tmp";
-    const hash = crypto.createHash("sha256");
-    const out = fs.createWriteStream(tmp);
-    const fail = (e) => {
-      fs.rmSync(tmp, { force: true });
-      reject(e);
-    };
-    res.on("data", (chunk) => hash.update(chunk));
-    res.pipe(out);
-    out.on("finish", () => {
-      out.close(() => {
-        const actual = hash.digest("hex");
-        if (actual !== expected) {
-          fail(
-            new Error(
-              `graphify-sf: sha256 mismatch for ${asset} from ${url} ` +
-                `(expected ${expected}, got ${actual}); refusing to install it. ` +
-                `Remediation: install via pip/pipx instead: pipx install graphify-sf`
-            )
-          );
-          return;
-        }
-        try {
-          fs.renameSync(tmp, dest);
-          resolve();
-        } catch (e) {
-          fail(e);
-        }
-      });
-    });
-    out.on("error", fail);
-    res.on("error", fail);
-  });
-
-  if (process.platform !== "win32") {
-    fs.chmodSync(dest, 0o755);
+  const tmp = `${dest}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  try {
+    // pipeline destroys every stream on error or premature close; "wx" refuses
+    // to reuse an existing path.
+    await pipeline(res, byteLimit(MAX_DOWNLOAD_BYTES, url), fs.createWriteStream(tmp, { flags: "wx" }));
+    const actual = sha256File(tmp);
+    if (actual !== expected) {
+      throw new Error(
+        `graphify-sf: sha256 mismatch for ${asset} from ${url} ` +
+          `(expected ${expected}, got ${actual}); refusing to install it. ` +
+          `Remediation: install via pip/pipx instead: pipx install graphify-sf`
+      );
+    }
+    // Executable before it becomes visible at `dest`.
+    if (process.platform !== "win32") {
+      fs.chmodSync(tmp, 0o755);
+    }
+    fs.renameSync(tmp, dest);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
   }
 
   process.stdout.write(`graphify-sf: installed to ${dest}\n`);

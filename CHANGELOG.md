@@ -20,8 +20,10 @@ An npm-supply-chain release. The Python package is unchanged apart from its vers
   replaced under an existing tag, so nothing pinned that binary.
   - The release workflow now records each binary's sha256 in `checksums.json`, which ships inside
     the npm tarball that lockfiles pin by integrity.
-  - The download is hashed while it streams and refused on a mismatch or a missing entry; the
-    temp file is deleted.
+  - The download goes to a temp file private to that call, is hashed from the bytes on disk, and is
+    refused on a mismatch or a missing entry; the temp file is deleted. Concurrent first runs can no
+    longer interleave writes into a file another run already verified. Downloads are also capped at
+    256 MB and aborted after 60 s without data.
   - A cached binary is re-checked before every use, and replaced if it doesn't match.
   - Install still never fails (`postinstall` exits 0), but the first-run path now refuses to
     execute an unverified binary. `GRAPHIFY_BIN` and pip/pipx remain the escape hatches.
@@ -31,15 +33,20 @@ An npm-supply-chain release. The Python package is unchanged apart from its vers
   - Reported by the sf-cockpit maintainers.
 - **npm packages are now published with npm Trusted Publishing (OIDC) and provenance.** The release
   workflow no longer uses a long-lived npm token. `npm view graphify-sf dist.attestations` is
-  populated from this release on.
+  populated from this release on. Permissions are now set per job: only the publish job (in the `npm`
+  environment) can request the OIDC token. The build jobs run third-party PyPI code and get only
+  `contents: write`, and checkouts no longer keep the GitHub token in `.git/config`.
 - **The main npm package now ships only `bin/graphify-sf.js` from `bin/`.** Previously it shipped
   the whole directory, so a locally downloaded binary could have been included in a manual
   `npm publish`.
 
 ### Fixed
-- **Re-running the npm publish is now safe.** Packages already on the registry at that version are
-  skipped. Before, a re-run after a partial publish failed on the first already-published platform
-  package and never reached the main one, which is what happened with 0.4.2.
+- **Re-running the release workflow is now safe.** npm packages already on the registry at that
+  exact version are skipped, and release binaries that already exist are kept rather than rebuilt
+  over. PyInstaller builds aren't reproducible, so a rebuild would no longer match the published
+  checksums. Before, a re-run after a partial publish failed on the first already-published platform
+  package and never reached the main one, which is what happened with 0.4.2. A manual
+  `workflow_dispatch` now also checks out the tag instead of `main`.
 - **The npm wrapper tests pass on macOS.** Two subpackage tests compared a `/var/...` temp path
   against its `/private/var/...` real path.
 

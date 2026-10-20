@@ -23,14 +23,19 @@ on:
         required: true
         type: string
 
+# Least privilege per job. id-token (npm Trusted Publishing) goes ONLY to
+# publish-npm: the build legs run third-party PyPI code, and npm's trusted
+# publisher trusts this workflow file, so any job able to mint an OIDC token
+# could publish.
 permissions:
-  contents: write   # needed to upload assets to the release
-  id-token: write   # npm Trusted Publishing (OIDC) + provenance
+  contents: read
 
 jobs:
   build-binaries:
     name: Build binary (${{ matrix.target-os }}-${{ matrix.target-arch }})
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write   # upload the binary to the release; deliberately no id-token
     strategy:
       fail-fast: false
       matrix:
@@ -65,12 +70,11 @@ jobs:
       - name: Resolve release tag
         id: tag
         shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${{ github.event.release.tag_name }}"
-          fi
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "Resolved tag=${TAG} version=${TAG#v}"
@@ -79,6 +83,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
@@ -128,34 +133,49 @@ jobs:
           fi
           cp "${SRC}" "${{ matrix.asset-name }}"
 
+      # Never replace an existing asset: the published npm checksums.json pins
+      # these exact bytes, and PyInstaller builds are not reproducible, so a
+      # re-run must reuse them. To force a rebuild, delete the asset first.
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          ASSET: ${{ matrix.asset-name }}
         shell: bash
         run: |
-          gh release upload "${{ steps.tag.outputs.tag }}" \
-            "${{ matrix.asset-name }}" \
-            --clobber
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qxF "$ASSET"; then
+            echo "$ASSET already on release $TAG; keeping the published bytes"
+          else
+            gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY"
+          fi
 
   publish-npm:
     name: Publish to npm (platform subpackages + main)
     needs: build-binaries
     runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write   # upload checksums.json / SHA256SUMS to the release
+      id-token: write   # npm Trusted Publishing (OIDC) + provenance
 
     steps:
       - name: Resolve release tag
         id: tag
         shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${{ github.event.release.tag_name }}"
-          fi
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # The tag, not the dispatch ref: on workflow_dispatch github.ref is main,
+      # which would pack main's npm/ under the tag's version (and provenance).
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
 
       # No registry-url: it would write an _authToken=${NODE_AUTH_TOKEN} line
       # into .npmrc, and trusted publishing uses OIDC instead of a token.
@@ -237,8 +257,13 @@ jobs:
         run: |
           set -e
           for dir in npm/platforms/*/; do
-            spec="$(node -p 'const p = require(require("path").resolve(process.argv[1])); p.name + "@" + p.version' "${dir}package.json")"
-            if npm view "${spec}" version >/dev/null 2>&1; then
+            name="$(node -p 'require(require("path").resolve(process.argv[1])).name' "${dir}package.json")"
+            ver="$(node -p 'require(require("path").resolve(process.argv[1])).version' "${dir}package.json")"
+            [ -n "${name}" ] && [ -n "${ver}" ] || { echo "bad package.json in ${dir}"; exit 1; }
+            spec="${name}@${ver}"
+            # Exact-version match only: anything else (absent, registry error)
+            # falls through to npm publish, which fails loudly if it must.
+            if [ "$(npm view "${spec}" version 2>/dev/null || true)" = "${ver}" ]; then
               echo "${spec} is already published; skipping"
               continue
             fi
@@ -272,9 +297,20 @@ jobs:
         shell: bash
         run: |
           set -e
-          test -s npm/checksums.json || { echo "npm/checksums.json missing"; exit 1; }
-          spec="graphify-sf@${{ steps.tag.outputs.version }}"
-          if npm view "${spec}" version >/dev/null 2>&1; then
+          ver="${{ steps.tag.outputs.version }}"
+          [ -n "${ver}" ] || { echo "empty release version"; exit 1; }
+          # The tarball must carry checksums.json and no stray binary in bin/.
+          npm pack ./npm --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const files = require(process.argv[1])[0].files.map((f) => f.path);
+            const bad = [];
+            for (const need of ["checksums.json", "bin/graphify-sf.js"]) if (!files.includes(need)) bad.push("missing " + need);
+            for (const f of files) if (f.startsWith("bin/") && f !== "bin/graphify-sf.js") bad.push("unexpected " + f);
+            if (bad.length) { console.error("npm tarball check failed:", bad.join(", ")); process.exit(1); }
+            console.log("tarball files:", files.join(" "));
+          ' "$RUNNER_TEMP/pack.json"
+          spec="graphify-sf@${ver}"
+          if [ "$(npm view "${spec}" version 2>/dev/null || true)" = "${ver}" ]; then
             echo "${spec} is already published; skipping"
           else
             npm publish ./npm --access public
