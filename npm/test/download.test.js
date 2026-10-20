@@ -4,11 +4,12 @@
 //
 // ensureBinary() resolution order (highest priority first):
 //   1. GRAPHIFY_BIN env var pointing at an existing file
-//   2. an already-downloaded binary in the package bin/ dir
-//   3. lazy download (network)
+//   2. the installed @graphify-sf/cli-<plat>-<arch> subpackage
+//   3. a previously downloaded bin/ binary that still matches checksums.json
+//   4. lazy, sha256-verified download (network)
 //
 // These tests cover (1) — the offline escape hatch — without touching the
-// network. We do not exercise (3) here to keep the suite hermetic.
+// network. (2) is in subpackage.test.js; (3) and (4) are in verify.test.js.
 
 const { test } = require("node:test");
 const assert = require("node:assert");
