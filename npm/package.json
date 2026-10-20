@@ -18,10 +18,11 @@
     "@graphify-sf/cli-win32-x64": "0.4.2"
   },
   "files": [
-    "bin/",
+    "bin/graphify-sf.js",
     "lib/",
     "index.js",
     "install.js",
+    "checksums.json",
     "README.md"
   ],
   "engines": {

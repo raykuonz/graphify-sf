@@ -1,2 +1,6 @@
 # Generated at release time by scripts/build-subpackages.js — never committed.
 platforms/
+
+# sha256 of the release binaries, written by release-binaries.yml just before
+# the main package is published (see lib/download.js expectedSha256).
+checksums.json

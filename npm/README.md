@@ -3,7 +3,12 @@
 Install and run [graphify-sf](https://github.com/raykuonz/graphify-sf) — the Salesforce SFDX
 knowledge-graph tool — from npm, without needing Python.
 
-On install, a pre-built binary matching your OS/arch is downloaded from the GitHub Release.
+The pre-built binary for your OS/arch arrives with the install, inside a platform package
+(`@graphify-sf/cli-<os>-<arch>`, an optional dependency); no download is needed. If that package
+is missing (`--omit=optional`, or a registry mirror without the `@graphify-sf` scope), the binary
+is downloaded from the GitHub Release instead. That download is checked against the sha256 shipped
+in this package (`checksums.json`) and is refused if it doesn't match. Packages are published
+from CI with npm provenance.
 
 ## Install
 
@@ -14,8 +19,8 @@ pnpm add graphify-sf
 ```
 
 > **pnpm note:** pnpm sets `ignore-scripts=true` by default, so the `postinstall` step may not
-> run automatically. The binary is downloaded lazily on first use instead, so everything still
-> works — you may just see a one-time download message the first time you invoke the CLI.
+> run automatically. That only matters on the fallback path above: the binary is then downloaded
+> (and verified) lazily on first use, so you may see a one-time download message.
 
 ## CLI usage
 
@@ -37,8 +42,9 @@ console.log("Graph written to:", graphJsonPath);
 `runGraphify` returns a Promise that resolves with `{ code, graphJsonPath }` on success and
 rejects on non-zero exit.
 
-Additional exports: `ensureBinary()` (downloads if missing, returns path), `binaryPath()`
-(returns expected path without triggering a download).
+Additional exports: `ensureBinary()` (resolves the binary, downloading and verifying it if
+needed, and returns its path), `binaryPath()` (returns the fallback download path without
+triggering a download).
 
 ## What's bundled
 

@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
@@ -50,6 +51,48 @@ function downloadUrl(asset) {
   return `https://github.com/raykuonz/graphify-sf/releases/download/v${VERSION}/${asset}`;
 }
 
+function checksumsPath() {
+  return path.join(__dirname, "..", "checksums.json");
+}
+
+// sha256 the release workflow recorded for `asset`. checksums.json is written
+// at publish time and ships inside the npm tarball, which lockfiles pin by
+// integrity; GitHub release assets can be replaced under an existing tag, so a
+// downloaded binary is trusted only if it matches. Throws when there is no
+// usable entry (e.g. a source checkout), so callers fail closed.
+function expectedSha256(asset, file) {
+  let table = null;
+  try {
+    table = JSON.parse(fs.readFileSync(file || checksumsPath(), "utf8"));
+  } catch {
+    /* missing or unreadable: handled below */
+  }
+  const digest = table && table[asset];
+  if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error(
+      `graphify-sf: no published sha256 for ${asset} (checksums.json missing or incomplete); ` +
+        `refusing to download an unverifiable binary. ` +
+        `Remediation: install via pip/pipx instead: pipx install graphify-sf, ` +
+        `or point GRAPHIFY_BIN at an existing binary`
+    );
+  }
+  return digest;
+}
+
+function sha256File(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+// True only if `dest` exists and matches the published sha256 for this platform.
+function verifiedCachedBinary(dest, file) {
+  if (!fs.existsSync(dest)) return false;
+  try {
+    return sha256File(dest) === expectedSha256(assetName(), file);
+  } catch {
+    return false;
+  }
+}
+
 function fetchFollow(url, redirects) {
   if (redirects === undefined) redirects = 5;
   return new Promise((resolve, reject) => {
@@ -78,39 +121,56 @@ function fetchFollow(url, redirects) {
   });
 }
 
-async function download() {
+// Download this platform's binary from GitHub Releases, verifying its sha256
+// against checksums.json before it is renamed into place. `opts` (dest,
+// checksumsPath, fetch) exists for tests; production callers pass nothing.
+async function download(opts) {
+  const o = opts || {};
   const asset = assetName();
+  const expected = expectedSha256(asset, o.checksumsPath); // fails before any network request
   const url = downloadUrl(asset);
-  const dest = binaryPath();
+  const dest = o.dest || binaryPath();
+  const fetch = o.fetch || fetchFollow;
 
-  fs.mkdirSync(binDir(), { recursive: true });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
 
   process.stdout.write(`graphify-sf: downloading ${asset} from ${url}\n`);
 
-  const res = await fetchFollow(url);
+  const res = await fetch(url);
 
   await new Promise((resolve, reject) => {
     const tmp = dest + ".tmp";
+    const hash = crypto.createHash("sha256");
     const out = fs.createWriteStream(tmp);
+    const fail = (e) => {
+      fs.rmSync(tmp, { force: true });
+      reject(e);
+    };
+    res.on("data", (chunk) => hash.update(chunk));
     res.pipe(out);
     out.on("finish", () => {
       out.close(() => {
+        const actual = hash.digest("hex");
+        if (actual !== expected) {
+          fail(
+            new Error(
+              `graphify-sf: sha256 mismatch for ${asset} from ${url} ` +
+                `(expected ${expected}, got ${actual}); refusing to install it. ` +
+                `Remediation: install via pip/pipx instead: pipx install graphify-sf`
+            )
+          );
+          return;
+        }
         try {
           fs.renameSync(tmp, dest);
           resolve();
         } catch (e) {
-          reject(e);
+          fail(e);
         }
       });
     });
-    out.on("error", (e) => {
-      fs.unlink(tmp, () => {});
-      reject(e);
-    });
-    res.on("error", (e) => {
-      fs.unlink(tmp, () => {});
-      reject(e);
-    });
+    out.on("error", fail);
+    res.on("error", fail);
   });
 
   if (process.platform !== "win32") {
@@ -189,7 +249,9 @@ function subpackageBinary() {
   return null;
 }
 
-async function ensureBinary() {
+async function ensureBinary(opts) {
+  const o = opts || {};
+
   // 1. Explicit override always wins.
   const fromEnv = envBinary();
   if (fromEnv) {
@@ -203,14 +265,16 @@ async function ensureBinary() {
     return fromSubpkg;
   }
 
-  // 3. Already-downloaded binary in the package's bin/ dir (legacy cache).
-  const dest = binaryPath();
-  if (fs.existsSync(dest)) {
+  // 3. A binary an earlier run downloaded into bin/, but only while it still
+  //    matches the published sha256; anything else is discarded.
+  const dest = o.dest || binaryPath();
+  if (verifiedCachedBinary(dest, o.checksumsPath)) {
     return dest;
   }
+  fs.rmSync(dest, { force: true });
 
-  // 4. Last resort: lazily download from GitHub Releases on first use.
-  await download();
+  // 4. Last resort: lazily download (and verify) from GitHub Releases.
+  await download(o);
   return dest;
 }
 
@@ -221,6 +285,8 @@ module.exports = {
   download,
   ensureBinary,
   envBinary,
+  expectedSha256,
   subpackageName,
   subpackageBinary,
+  verifiedCachedBinary,
 };
