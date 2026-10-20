@@ -667,7 +667,7 @@ force-app/archived/**
 ## Optional Extras
 
 ```bash
-# Better community detection (Leiden algorithm, Python < 3.13 only)
+# Better community detection (Leiden algorithm via graspologic-native)
 pip install graphify-sf[leiden]
 
 # Neo4j direct push support
@@ -679,7 +679,8 @@ pip install graphify-sf[svg]
 # Watchdog for efficient file-system events in watch mode
 pip install graphify-sf[watch]
 
-# MCP SDK (reserved for future native MCP SDK adoption)
+# MCP server — no extra needed (`graphify-sf serve` is self-contained);
+# kept as an empty alias so existing install commands still work
 pip install graphify-sf[mcp]
 
 # LLM semantic extraction — Claude
@@ -707,7 +708,7 @@ pip install graphify-sf[all]
 
 - Python 3.10+
 - No Salesforce CLI, no org connection, no API keys
-- Core dependencies: `networkx`, `datasketch`, `rapidfuzz`
+- Core dependencies: `networkx`, `pathspec`, `idna`
 
 ---
 
