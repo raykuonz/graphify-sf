@@ -66,7 +66,7 @@ def _kimi_request_overrides(kwargs: dict) -> dict:
     """
     m = re.match(r"kimi-k(\d+)", str(kwargs.get("model", "")))
     if m and int(m.group(1)) == 2:
-        kwargs["extra_body"] = {**kwargs.get("extra_body", {}), "thinking": {"type": "disabled"}}
+        kwargs["extra_body"] = {**(kwargs.get("extra_body") or {}), "thinking": {"type": "disabled"}}
     elif m and int(m.group(1)) >= 3:
         kwargs.setdefault("reasoning_effort", "low")
     return kwargs

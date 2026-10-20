@@ -615,6 +615,7 @@ def test_kimi_default_k3_lowers_reasoning_effort(monkeypatch):
     captured = _install_fake_openai(monkeypatch)
     monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
     monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("GRAPHIFY_SF_KIMI_MODEL", raising=False)
 
     llm.extract_files_direct([], backend="kimi")
 

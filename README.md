@@ -235,7 +235,7 @@ The `--backend` flag adds an AI-powered extraction layer on top of the static XM
 | Ollama (local) | `--backend ollama` | `OLLAMA_BASE_URL` | `qwen2.5-coder:7b` | free |
 | Auto-detect | `--backend auto` | _(first found)_ | — | varies |
 
-Prices mirror `BACKENDS` in `graphify_sf/llm.py`, which the CLI also uses for its end-of-run cost estimate. Gemini 3.x and Kimi K3 always reason, and their thinking tokens are billed as output. The Bedrock default is a US geo inference profile: outside US regions, set `GRAPHIFY_SF_BEDROCK_MODEL` (e.g. `eu.anthropic.claude-sonnet-4-6` or `global.anthropic.claude-sonnet-4-6`). Override any default with the backend's model variable below.
+Prices mirror `BACKENDS` in `graphify_sf/llm.py`, which the CLI also uses for its cost estimates. The estimates assume the default model, even if you override it. Gemini 3.x and Kimi K3 always reason, and their thinking tokens are billed as output. The Bedrock default is a US geo inference profile: outside US regions, set `GRAPHIFY_SF_BEDROCK_MODEL` (e.g. `eu.anthropic.claude-sonnet-4-6` or `global.anthropic.claude-sonnet-4-6`). Gemini, Kimi, OpenAI and Bedrock defaults can be overridden with the model variables below (Ollama via `OLLAMA_MODEL`). The Claude model is fixed, and the CLI has no `--model` flag.
 
 ### Install the SDK
 

@@ -67,4 +67,7 @@ def pytest_sessionfinish(session, exitstatus):
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None and reporter.stats.get("skipped") and session.exitstatus == 0:
+        reporter.write_line(
+            f"GRAPHIFY_SF_FAIL_ON_SKIP=1: {len(reporter.stats['skipped'])} skip(s) → failing the session", red=True
+        )
         session.exitstatus = pytest.ExitCode.TESTS_FAILED

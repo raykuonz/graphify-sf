@@ -65,7 +65,7 @@ jobs:
       - name: Run tests (skips fail the job)
         env:
           GRAPHIFY_SF_FAIL_ON_SKIP: "1"
-        run: uv run pytest tests/ -v --tb=short
+        run: uv run pytest tests/ -v --tb=short -rs
 
   lint:
     name: Lint

@@ -20,7 +20,7 @@ Turn any Salesforce SFDX project into a navigable knowledge graph with community
 /graphify-sf <path> --force                           # overwrite graph.json even if new graph is smaller
 /graphify-sf <path> --max-workers N                   # parallel extraction worker count
 /graphify-sf <path> --backend claude                  # add AI semantic layer (business rules, dead metadata)
-/graphify-sf <path> --backend gemini                  # Gemini backend (lowest-priced hosted default)
+/graphify-sf <path> --backend gemini                  # Gemini backend
 /graphify-sf <path> --backend auto                    # auto-detect backend from available API keys
 /graphify-sf <path> --backend claude --token-budget 20000  # smaller chunks for large orgs
 /graphify-sf cluster-only <path>                      # rerun clustering on existing graph
