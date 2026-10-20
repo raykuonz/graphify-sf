@@ -9,6 +9,10 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.4.3] — 2026-10-20
+
 An npm-supply-chain release. The Python package is unchanged apart from its version.
 
 ### Security
