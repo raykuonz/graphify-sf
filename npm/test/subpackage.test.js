@@ -24,7 +24,9 @@ function makeSubpackageFixture() {
   const plat = process.platform;
   const arch = process.arch;
   const binName = plat === "win32" ? "graphify-sf.exe" : "graphify-sf";
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gsf-subpkg-"));
+  // realpath: on macOS os.tmpdir() is under the /var -> /private/var symlink,
+  // while require.resolve returns the resolved path.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gsf-subpkg-")));
   const pkgDir = path.join(root, "node_modules", "@graphify-sf", `cli-${plat}-${arch}`);
   fs.mkdirSync(pkgDir, { recursive: true });
   fs.writeFileSync(
