@@ -7,7 +7,7 @@ Adds AI-discovered edges that static XML/source parsing misses:
   - Implicit data couplings not visible in metadata XML
   - Dead metadata: components referenced nowhere in the static graph
 
-Supports 6 backends: Claude, Kimi K2, Gemini, OpenAI, AWS Bedrock, Ollama.
+Supports 6 backends: Claude, Kimi, Gemini, OpenAI, AWS Bedrock, Ollama.
 
 Usage:
     graphify-sf /path/to/sfdx --backend claude
@@ -56,9 +56,19 @@ _LLM_JSON_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 # ---------------------------------------------------------------------------
 
 
-def _kimi_disable_thinking(kwargs: dict) -> dict:
-    """Kimi-k2 is a reasoning model — disable thinking so content isn't empty."""
-    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+def _kimi_request_overrides(kwargs: dict) -> dict:
+    """Kimi reasoning controls differ by model generation.
+
+    K2.x accepts ``thinking: disabled`` (a K2.x-only parameter), which keeps
+    content from coming back empty. K3+ always reasons, rejects that parameter,
+    and defaults to ``reasoning_effort="max"`` — slow and costly for extraction.
+    Other ids (``moonshot-v1-*``, aliases) get neither knob.
+    """
+    m = re.match(r"kimi-k(\d+)", str(kwargs.get("model", "")))
+    if m and int(m.group(1)) == 2:
+        kwargs["extra_body"] = {**(kwargs.get("extra_body") or {}), "thinking": {"type": "disabled"}}
+    elif m and int(m.group(1)) >= 3:
+        kwargs.setdefault("reasoning_effort", "low")
     return kwargs
 
 
@@ -96,20 +106,24 @@ BACKENDS: dict[str, dict] = {
     },
     "kimi": {
         "base_url": "https://api.moonshot.ai/v1",
-        "default_model": "kimi-k2-0711-preview",
+        "default_model": "kimi-k3",
         "env_key": "MOONSHOT_API_KEY",
-        "pricing": {"input": 0.74, "output": 4.66},
+        "model_env_key": "GRAPHIFY_SF_KIMI_MODEL",
+        "pricing": {"input": 3.00, "output": 15.00},
         "temperature": None,  # kimi enforces its own fixed temperature
         "max_tokens": 16384,
-        "request_overrides": _kimi_disable_thinking,
+        "request_overrides": _kimi_request_overrides,
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "default_model": "gemini-2.0-flash",
+        "default_model": "gemini-3.6-flash",
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "model_env_key": "GRAPHIFY_SF_GEMINI_MODEL",
-        "pricing": {"input": 0.10, "output": 0.40},
-        "temperature": 0,
+        # Google's published rate through 2026-12-31; it doubles to 1.50/7.50 on 2027-01-01.
+        "pricing": {"input": 0.75, "output": 3.75},
+        # Google advises keeping Gemini 3.x at its default temperature: lower
+        # values can cause looping or degraded output.
+        "temperature": None,
         # Canonical key across all backends so GRAPHIFY_SF_MAX_OUTPUT_TOKENS is
         # honored uniformly via _resolve_max_tokens (was max_completion_tokens,
         # which bypassed the env override).
@@ -127,9 +141,12 @@ BACKENDS: dict[str, dict] = {
         "max_tokens": 16384,
     },
     "bedrock": {
-        "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        # US geo inference profile: on-demand Sonnet 4.6 has no in-region
+        # endpoint in us-east-1 (the default region), so the bare model ID fails.
+        "default_model": "us.anthropic.claude-sonnet-4-6",
         "model_env_key": "GRAPHIFY_SF_BEDROCK_MODEL",
-        "pricing": {"input": 3.0, "output": 15.0},
+        # Regional (us.) Bedrock endpoints carry a 10% premium over the $3/$15 global rate.
+        "pricing": {"input": 3.30, "output": 16.50},
         "temperature": 0,
         "max_tokens": 16384,
     },
@@ -398,7 +415,7 @@ def _call_openai_compat(
         kwargs["temperature"] = temperature
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
-    # Data-driven per-backend quirk (Kimi thinking-disable, Ollama num_ctx sizing,
+    # Data-driven per-backend quirk (Kimi reasoning controls, Ollama num_ctx sizing,
     # or any future backend's) instead of inline branches.
     if request_overrides is not None:
         kwargs = request_overrides(kwargs)
@@ -433,7 +450,7 @@ def _call_claude(
     model: str,
     user_message: str,
     max_tokens: int = 8192,
-    temperature: float = 0,
+    temperature: float | None = 0,
 ) -> dict:
     """Call Anthropic Claude directly (not via OpenAI compat layer)."""
     try:
@@ -444,13 +461,19 @@ def _call_claude(
         ) from exc
 
     client = anthropic.Anthropic(api_key=api_key)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=_SF_EXTRACTION_SYSTEM,
-        messages=[{"role": "user", "content": user_message}],
-    )
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": _SF_EXTRACTION_SYSTEM,
+        "messages": [{"role": "user", "content": user_message}],
+    }
+    # anthropic>=1.0 removed sampling params from messages.create() (TypeError).
+    # Its migration guide routes them through extra_body for models that still
+    # accept them (the default claude-sonnet-4-6 does; Opus 4.7+ reject any
+    # temperature). extra_body works on 0.x too.
+    if temperature is not None:
+        kwargs["extra_body"] = {"temperature": temperature}
+    resp = client.messages.create(**kwargs)
     raw_content = resp.content[0].text if resp.content else None
     result = _parse_llm_json(raw_content or "{}")
     result["input_tokens"] = resp.usage.input_tokens if resp.usage else 0
@@ -466,6 +489,23 @@ def _call_claude(
     return result
 
 
+_bedrock_geo_warned = False
+
+
+def _warn_bedrock_geo_mismatch(model: str, region: str) -> None:
+    """Warn once when a US geo inference profile (the default) is used from a non-US region."""
+    global _bedrock_geo_warned
+    if _bedrock_geo_warned or not model.startswith("us.") or region.startswith("us-"):
+        return
+    _bedrock_geo_warned = True
+    print(
+        f"[graphify-sf] WARNING: Bedrock model {model!r} is a US inference profile, but AWS region is "
+        f"{region!r}; calls will likely fail. Set GRAPHIFY_SF_BEDROCK_MODEL to a profile for your region "
+        "(e.g. eu.anthropic.claude-sonnet-4-6) or global.anthropic.claude-sonnet-4-6.",
+        file=sys.stderr,
+    )
+
+
 def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192, temperature: float = 0) -> dict:
     """Call AWS Bedrock via boto3 Converse API."""
     try:
@@ -475,6 +515,7 @@ def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192, tempera
         raise ImportError("AWS Bedrock extraction requires boto3. Run: pip install graphify-sf[bedrock]") from exc
 
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+    _warn_bedrock_geo_mismatch(model, region)
     profile = os.environ.get("AWS_PROFILE")
     session = boto3.Session(profile_name=profile, region_name=region)
     client = session.client("bedrock-runtime")

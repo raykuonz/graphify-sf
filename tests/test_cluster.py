@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import sys
+import types
+
 import networkx as nx
+import pytest
 
 
 def test_cluster_returns_communities(simple_graph):
@@ -189,3 +193,105 @@ def test_cluster_stability():
     sizes2 = sorted([len(nodes) for nodes in communities2.values()], reverse=True)
 
     assert sizes1 == sizes2
+
+
+# ---------------------------------------------------------------------------
+# Leiden via graspologic-native ([leiden] extra)
+#
+# graspologic-native is optional, so these tests inject a fake module that
+# records the edge list it is handed. The real engine keeps only the first
+# weight it sees for a node pair (later duplicates, including the reversed
+# (b, a), are silently dropped), so _partition must aggregate parallel edges
+# itself. graspologic's old wrapper rejected multigraphs with ValueError,
+# which crashed cluster() on the 0.4.0+ MultiDiGraph default.
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_graspologic_native(monkeypatch):
+    """Fake ``graspologic_native.leiden``; puts every node in community 0."""
+    captured: dict = {}
+
+    def leiden(edges, **kwargs):
+        captured["edges"] = list(edges)
+        captured["kwargs"] = kwargs
+        nodes = {n for s, t, _ in edges for n in (s, t)}
+        return 0.5, {n: 0 for n in nodes}
+
+    fake_mod = types.ModuleType("graspologic_native")
+    fake_mod.leiden = leiden
+    monkeypatch.setitem(sys.modules, "graspologic_native", fake_mod)
+    return captured
+
+
+def test_partition_leiden_sums_parallel_edges_once_per_pair(monkeypatch):
+    from graphify_sf.cluster import _partition
+
+    captured = _install_fake_graspologic_native(monkeypatch)
+    G = nx.MultiGraph()
+    G.add_edge("A", "B")
+    G.add_edge("A", "B")
+    G.add_edge("B", "A")  # third parallel edge, added in reverse order
+    G.add_edge("B", "C", weight=2.5)
+
+    partition = _partition(G)
+
+    pairs = {frozenset((s, t)): w for s, t, w in captured["edges"]}
+    assert len(captured["edges"]) == len(pairs) == 2
+    assert pairs[frozenset(("A", "B"))] == 3.0
+    assert pairs[frozenset(("B", "C"))] == 2.5
+    assert captured["kwargs"]["seed"] == 42
+    assert partition == {"A": 0, "B": 0, "C": 0}
+
+
+def test_partition_leiden_keeps_self_loop_only_nodes(monkeypatch):
+    """Self-loops are not sent to the engine, but their node must stay in the partition."""
+    from graphify_sf.cluster import _partition
+
+    captured = _install_fake_graspologic_native(monkeypatch)
+    G = nx.MultiGraph()
+    G.add_edge("A", "B")
+    G.add_edge("D", "D")
+
+    partition = _partition(G)
+
+    assert all(s != t for s, t, _ in captured["edges"])
+    assert set(partition) == {"A", "B", "D"}
+    assert partition["D"] != partition["A"]
+
+
+def test_partition_leiden_maps_non_string_node_ids_back(monkeypatch):
+    """The engine takes string ids; results must map back to the graph's own ids."""
+    from graphify_sf.cluster import _partition
+
+    captured = _install_fake_graspologic_native(monkeypatch)
+    G = nx.karate_club_graph()  # integer node ids
+
+    partition = _partition(G)
+
+    assert all(isinstance(s, str) and isinstance(t, str) for s, t, _ in captured["edges"])
+    assert set(partition) == set(G.nodes())
+
+
+def test_cluster_real_leiden_on_multidigraph(monkeypatch):
+    """cluster() must not crash on the MultiDiGraph the pipeline builds, and must be reproducible."""
+    pytest.importorskip("graspologic_native")
+    from graphify_sf.cluster import cluster
+
+    def _no_louvain(*args, **kwargs):
+        raise AssertionError("Louvain fallback ran; the real Leiden engine was expected")
+
+    # An ImportError inside _partition (renamed symbol, broken wheel) silently
+    # falls back to Louvain; make that a failure here.
+    monkeypatch.setattr(nx.community, "louvain_communities", _no_louvain)
+
+    G = nx.MultiDiGraph()
+    for u, v in nx.karate_club_graph().edges():
+        G.add_edge(f"n{u}", f"n{v}", relation="calls")
+        G.add_edge(f"n{u}", f"n{v}", relation="queries")
+
+    communities = cluster(G)
+
+    assigned = sorted(n for nodes in communities.values() for n in nodes)
+    assert assigned == sorted(G.nodes())
+    assert len(communities) > 1
+    assert cluster(G) == communities

@@ -21,8 +21,8 @@ Resources exposed:
   - graphify-sf://audit        — edge confidence summary
   - graphify-sf://questions    — suggested exploration questions
 
-Install with: pip install graphify-sf[mcp]
-(Uses the `mcp` package when available; falls back to raw JSON-RPC otherwise.)
+Self-contained: no extra packages are required. The `[mcp]` extra is an empty
+alias kept so `pip install graphify-sf[mcp]` keeps working.
 """
 
 from __future__ import annotations

@@ -185,8 +185,8 @@ def test_estimate_cost_gemini():
     from graphify_sf.llm import estimate_cost
 
     cost = estimate_cost("gemini", 1_000_000, 1_000_000)
-    # $0.10/M input + $0.40/M output = $0.50
-    assert abs(cost - 0.50) < 0.001
+    # gemini-3.6-flash: $0.75/M input + $3.75/M output = $4.50
+    assert abs(cost - 4.50) < 0.001
 
 
 def test_estimate_cost_ollama_is_free():
@@ -363,8 +363,8 @@ def test_run_pipeline_backend_none_does_not_import_llm(simple_project_path, tmp_
 # ---------------------------------------------------------------------------
 # Call-layer tests — fake SDK clients
 #
-# The openai / anthropic / boto3 SDKs are optional and not installed in CI, so
-# each helper injects a minimal fake module into sys.modules that records the
+# The openai / anthropic / boto3 SDKs are optional (only CI's all-extras job
+# installs them), so each helper injects a minimal fake module into sys.modules that records the
 # kwargs handed to the underlying create/converse call. This lets the tests
 # assert that the fixed temperature / max_tokens values actually reach the SDK,
 # rather than only inspecting the BACKENDS config dict in isolation.
@@ -414,6 +414,9 @@ def _install_fake_anthropic(monkeypatch):
 
     class _Messages:
         def create(self, **kwargs):
+            # anthropic 1.x removed sampling params from messages.create().
+            if "temperature" in kwargs:
+                raise TypeError("Messages.create() got an unexpected keyword argument 'temperature'")
             captured["create_kwargs"] = kwargs
             return _Resp()
 
@@ -473,7 +476,8 @@ def _install_fake_boto3(monkeypatch):
 def test_call_claude_passes_temperature_from_config(monkeypatch):
     """_call_claude must forward the resolved config temperature to messages.create.
 
-    Mocks anthropic.Anthropic. Pre-fix, temperature was never passed at all.
+    Mocks anthropic.Anthropic. anthropic 1.x rejects a temperature kwarg with
+    TypeError, so it must travel in extra_body (accepted by 0.x and 1.x alike).
     """
     from graphify_sf import llm
 
@@ -486,8 +490,23 @@ def test_call_claude_passes_temperature_from_config(monkeypatch):
 
     llm.extract_files_direct([], backend="claude")
 
-    assert captured["create_kwargs"]["temperature"] == 0.7
+    assert "temperature" not in captured["create_kwargs"]
+    assert captured["create_kwargs"]["extra_body"] == {"temperature": 0.7}
     assert captured["create_kwargs"]["max_tokens"] == 16384
+
+
+def test_call_claude_omits_temperature_when_unset(monkeypatch):
+    """A None config temperature sends no temperature at all, neither as a kwarg nor in extra_body."""
+    from graphify_sf import llm
+
+    captured = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setitem(llm.BACKENDS["claude"], "temperature", None)
+
+    llm.extract_files_direct([], backend="claude")
+
+    assert "temperature" not in captured["create_kwargs"]
+    assert "extra_body" not in captured["create_kwargs"]
 
 
 def test_call_bedrock_passes_temperature_from_config(monkeypatch):
@@ -500,9 +519,13 @@ def test_call_bedrock_passes_temperature_from_config(monkeypatch):
     captured = _install_fake_boto3(monkeypatch)
     monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setitem(llm.BACKENDS["bedrock"], "temperature", 0.3)
+    monkeypatch.delenv("GRAPHIFY_SF_BEDROCK_MODEL", raising=False)
 
     llm.extract_files_direct([], backend="bedrock")
 
+    # us-east-1 (the default region) has no in-region on-demand Sonnet 4.6; the
+    # US geo inference profile is required.
+    assert captured["converse_kwargs"]["modelId"] == "us.anthropic.claude-sonnet-4-6"
     inference = captured["converse_kwargs"]["inferenceConfig"]
     assert inference["temperature"] == 0.3
     assert inference["maxTokens"] == 16384
@@ -563,13 +586,13 @@ def test_gemini_honors_max_output_tokens_env_override(monkeypatch):
     assert override_val != default_val
 
 
-# ---- refactor-safety: Kimi / Ollama quirks unchanged ----------------------
+# ---- Kimi reasoning controls / Ollama quirks ------------------------------
 
 
-def test_kimi_disable_thinking_unchanged_after_refactor(monkeypatch):
-    """Kimi thinking-disable extra_body is identical after the data-driven refactor.
+def test_kimi_k2_models_still_disable_thinking(monkeypatch):
+    """An explicit K2.x model keeps the thinking-disable extra_body (K2.x-only parameter).
 
-    Mocks openai.OpenAI. Refactor-safety test, not a new-behavior test.
+    Mocks openai.OpenAI.
     """
     from graphify_sf import llm
 
@@ -577,10 +600,43 @@ def test_kimi_disable_thinking_unchanged_after_refactor(monkeypatch):
     monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
     monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
 
-    llm.extract_files_direct([], backend="kimi")
+    llm.extract_files_direct([], backend="kimi", model="kimi-k2.6")
 
     assert captured["create_kwargs"]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "reasoning_effort" not in captured["create_kwargs"]
     # kimi enforces its own fixed temperature — temperature must NOT be sent.
+    assert "temperature" not in captured["create_kwargs"]
+
+
+def test_kimi_default_k3_lowers_reasoning_effort(monkeypatch):
+    """kimi-k3 always reasons and rejects the K2.x thinking param; its default effort is max."""
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
+    monkeypatch.delenv("GRAPHIFY_SF_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("GRAPHIFY_SF_KIMI_MODEL", raising=False)
+
+    llm.extract_files_direct([], backend="kimi")
+
+    kwargs = captured["create_kwargs"]
+    assert kwargs["model"] == "kimi-k3"
+    assert kwargs["reasoning_effort"] == "low"
+    assert "extra_body" not in kwargs
+    assert "temperature" not in kwargs
+
+
+def test_gemini_default_sends_no_temperature(monkeypatch):
+    """Google advises leaving Gemini 3.x temperature at its default; low values can loop."""
+    from graphify_sf import llm
+
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    monkeypatch.delenv("GRAPHIFY_SF_GEMINI_MODEL", raising=False)
+
+    llm.extract_files_direct([], backend="gemini")
+
+    assert captured["create_kwargs"]["model"] == "gemini-3.6-flash"
     assert "temperature" not in captured["create_kwargs"]
 
 
@@ -638,9 +694,82 @@ def test_ollama_size_context_hook_honors_num_ctx_env(monkeypatch):
     assert result["extra_body"]["options"]["num_ctx"] == 42000
 
 
-def test_kimi_disable_thinking_hook_shape():
-    """Direct unit test of the extracted Kimi hook's exact extra_body payload."""
-    from graphify_sf.llm import _kimi_disable_thinking
+def test_kimi_model_env_override_reaches_k2_branch(monkeypatch):
+    """GRAPHIFY_SF_KIMI_MODEL is the CLI's way back to a K2.x model (there is no --model flag)."""
+    from graphify_sf import llm
 
-    result = _kimi_disable_thinking({"model": "kimi"})
-    assert result["extra_body"] == {"thinking": {"type": "disabled"}}
+    captured = _install_fake_openai(monkeypatch)
+    monkeypatch.setenv("MOONSHOT_API_KEY", "m-key")
+    monkeypatch.setenv("GRAPHIFY_SF_KIMI_MODEL", "kimi-k2.6")
+
+    llm.extract_files_direct([], backend="kimi")
+
+    assert captured["create_kwargs"]["model"] == "kimi-k2.6"
+    assert captured["create_kwargs"]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_kimi_request_overrides_leaves_other_models_alone():
+    """Only K3+ gets an effort; non-generation ids (moonshot-v1-*, kimi-latest) get neither knob."""
+    from graphify_sf.llm import _kimi_request_overrides
+
+    assert _kimi_request_overrides({"model": "kimi-k4"})["reasoning_effort"] == "low"
+    for model in ("moonshot-v1-8k", "kimi-latest"):
+        out = _kimi_request_overrides({"model": model})
+        assert "reasoning_effort" not in out
+        assert "extra_body" not in out
+
+
+def test_kimi_request_overrides_merges_existing_extra_body():
+    """The K2.x branch adds to an existing extra_body instead of replacing (or mutating) it."""
+    from graphify_sf.llm import _kimi_request_overrides
+
+    original = {"x": 1}
+    out = _kimi_request_overrides({"model": "kimi-k2.6", "extra_body": original})
+    assert out["extra_body"] == {"x": 1, "thinking": {"type": "disabled"}}
+    assert original == {"x": 1}
+
+
+def test_bedrock_warns_when_us_profile_used_outside_us(monkeypatch, capsys):
+    """The default us. inference profile fails outside US regions; say how to fix it, once."""
+    from graphify_sf import llm
+
+    _install_fake_boto3(monkeypatch)
+    monkeypatch.setattr(llm, "_bedrock_geo_warned", False)
+    monkeypatch.delenv("GRAPHIFY_SF_BEDROCK_MODEL", raising=False)
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+
+    llm.extract_files_direct([], backend="bedrock")
+    llm.extract_files_direct([], backend="bedrock")
+
+    err = capsys.readouterr().err
+    assert err.count("GRAPHIFY_SF_BEDROCK_MODEL") == 1
+    assert "eu-central-1" in err
+
+
+def test_bedrock_no_geo_warning_inside_us(monkeypatch, capsys):
+    from graphify_sf import llm
+
+    _install_fake_boto3(monkeypatch)
+    monkeypatch.setattr(llm, "_bedrock_geo_warned", False, raising=False)
+    monkeypatch.delenv("GRAPHIFY_SF_BEDROCK_MODEL", raising=False)
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+    llm.extract_files_direct([], backend="bedrock")
+
+    assert "GRAPHIFY_SF_BEDROCK_MODEL" not in capsys.readouterr().err
+
+
+def test_kimi_request_overrides_hook_shape():
+    """Direct unit test of the Kimi hook's exact payload for K2.x and K3+ models."""
+    from graphify_sf.llm import _kimi_request_overrides
+
+    k2 = _kimi_request_overrides({"model": "kimi-k2.6"})
+    assert k2["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "reasoning_effort" not in k2
+
+    k3 = _kimi_request_overrides({"model": "kimi-k3"})
+    assert k3["reasoning_effort"] == "low"
+    assert "extra_body" not in k3
+
+    # A caller-chosen effort is not overridden.
+    assert _kimi_request_overrides({"model": "kimi-k3", "reasoning_effort": "high"})["reasoning_effort"] == "high"

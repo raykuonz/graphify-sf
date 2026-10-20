@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graphify-sf"
-version = "0.4.1"
+version = "0.4.2"
 description = "Turn any Salesforce SFDX project into a queryable knowledge graph — fully offline, no org connection required."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,15 +26,14 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
     "networkx>=3.0",
-    "datasketch>=1.6",
-    "rapidfuzz>=3.0",
     "pathspec>=0.12",  # gitwildmatch parsing for .gitignore/.forceignore
-    "idna>=3.15",  # CVE-2026-45409 fix — transitive via requests
+    "idna>=3.15",  # CVE-2026-45409 fix — transitive via anyio/httpx2 in the LLM extras
 ]
 
 [project.urls]
@@ -44,25 +43,29 @@ Repository = "https://github.com/raykuonz/graphify-sf"
 Changelog = "https://github.com/raykuonz/graphify-sf/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-leiden = ["graspologic; python_version < '3.13'"]
+leiden = ["graspologic-native>=1.2.5"]
 neo4j = ["neo4j"]
-svg = ["matplotlib"]
+svg = ["matplotlib", "scipy"]  # scipy: kamada_kawai_layout for 201-500-node graphs
 watch = ["watchdog>=3.0"]
-mcp = ["mcp>=1.0"]
-# LLM backend extras — install the one matching your chosen --backend
+# serve.py implements MCP's JSON-RPC stdio transport itself and needs no extra
+# packages; the empty extra keeps `pip install graphify-sf[mcp]` working.
+mcp = []
+# LLM backend extras — install the one matching your chosen --backend.
+# Floors are the first releases with the APIs we call: openai 1.58 (reasoning_effort;
+# max_completion_tokens arrived in 1.45), boto3 1.34.116 (bedrock-runtime Converse).
 claude = ["anthropic>=0.30"]
-kimi = ["openai>=1.0"]
-gemini = ["openai>=1.0"]
-openai = ["openai>=1.0"]
-bedrock = ["boto3>=1.28"]
-ollama = ["openai>=1.0"]
-llm = ["openai>=1.0", "anthropic>=0.30"]  # openai-compat + claude
-docs = ["pypdf", "python-docx", "openpyxl"]
+kimi = ["openai>=1.58"]
+gemini = ["openai>=1.58"]
+openai = ["openai>=1.58"]
+bedrock = ["boto3>=1.34.116"]
+ollama = ["openai>=1.58"]
+llm = ["openai>=1.58", "anthropic>=0.30"]  # openai-compat + claude
+docs = ["pypdf>=6.19", "python-docx", "openpyxl"]
 all = [
-    "graspologic; python_version < '3.13'",
-    "neo4j", "matplotlib", "watchdog>=3.0", "mcp>=1.0",
-    "openai>=1.0", "anthropic>=0.30", "boto3>=1.28",
-    "pypdf", "python-docx", "openpyxl",
+    "graspologic-native>=1.2.5",
+    "neo4j", "matplotlib", "scipy", "watchdog>=3.0",
+    "openai>=1.58", "anthropic>=0.30", "boto3>=1.34.116",
+    "pypdf>=6.19", "python-docx", "openpyxl",
 ]
 dev = ["pytest>=7.0", "ruff>=0.4", "pip-audit>=2.7"]
 
