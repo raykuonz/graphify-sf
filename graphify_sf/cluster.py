@@ -1,6 +1,6 @@
 """Community detection on NetworkX graphs.
 
-Uses Leiden (graspologic) if available, falls back to Louvain (networkx).
+Uses Leiden (graspologic-native) if available, falls back to Louvain (networkx).
 Splits oversized communities. Returns cohesion scores.
 
 Adapted from Graphify's cluster.py — logic is identical; just updated
@@ -22,23 +22,60 @@ def _suppress_output():
     return contextlib.redirect_stdout(io.StringIO())
 
 
+def _leiden_edge_list(G: nx.Graph) -> list[tuple[str, str, float]]:
+    """Collapse G into one weighted edge per unordered node pair, keyed by str ids.
+
+    graspologic-native keeps only the first weight it sees for a pair (later
+    duplicates, including the reversed pair, are dropped), so parallel edges are
+    summed here — the same treatment Louvain gives multigraphs. Self-loops are
+    skipped. Sorted, so the result never depends on G's iteration order (which,
+    for small networkx subgraph views, follows Python's randomized str hashing).
+    """
+    weights: dict[tuple[str, str], float] = {}
+    for u, v, w in G.edges(data="weight", default=1.0):
+        su, sv = str(u), str(v)
+        if su == sv:
+            continue
+        pair = (su, sv) if su < sv else (sv, su)
+        weights[pair] = weights.get(pair, 0.0) + float(w)
+    return sorted((a, b, w) for (a, b), w in weights.items())
+
+
 def _partition(G: nx.Graph) -> dict[str, int]:
     """Run community detection. Returns {node_id: community_id}.
 
-    Tries Leiden (graspologic) first — best quality.
-    Falls back to Louvain (built into networkx) if graspologic is not installed.
+    Tries Leiden (graspologic-native) first — best quality.
+    Falls back to Louvain (built into networkx) if graspologic-native is not installed.
     """
     try:
-        from graspologic.partition import leiden
+        from graspologic_native import leiden
 
-        old_stderr = sys.stderr
-        try:
-            sys.stderr = io.StringIO()
-            with _suppress_output():
-                result = leiden(G)
-        finally:
-            sys.stderr = old_stderr
-        return result
+        edges = _leiden_edge_list(G)
+        native: dict[str, int] = {}
+        if edges:
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = io.StringIO()
+                with _suppress_output():
+                    _, native = leiden(
+                        edges=edges,
+                        resolution=1.0,
+                        randomness=0.001,
+                        iterations=1,
+                        use_modularity=True,
+                        seed=42,
+                        trials=1,
+                    )
+            finally:
+                sys.stderr = old_stderr
+        # Relabel in sorted-id order: the engine's own labels (and dict order) vary
+        # between runs even with a fixed seed, which would reshuffle cluster()'s
+        # size-tie ordering. Nodes whose only edges are self-loops never reach the
+        # engine and get a community of their own.
+        labels: dict[object, int] = {}
+        return {
+            n: labels.setdefault(native.get(str(n), ("self-loop", n)), len(labels)) for n in sorted(G.nodes(), key=str)
+        }
     except ImportError:
         pass
 
