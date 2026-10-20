@@ -9,6 +9,10 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.4.2] — 2026-10-20
+
 A dependency-health release. It clears every known vulnerability in the locked dependency tree,
 removes three dependencies that were never used, replaces the stale `graspologic` Leiden backend,
 and fixes two optional-extra paths that were broken for fresh installs: `[claude]` on anthropic 1.x
