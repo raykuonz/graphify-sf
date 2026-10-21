@@ -10,11 +10,6 @@ is downloaded from the GitHub Release instead. That download is checked against 
 in this package (`checksums.json`) and is refused if it doesn't match. Packages are published
 from CI with npm provenance.
 
-**Supported platforms:** macOS (x64, arm64), Windows x64, and Linux x64/arm64 with **glibc 2.28 or
-newer**: RHEL/AlmaLinux/Rocky 8+, Debian 11+ (including `node:*-bookworm` images), Ubuntu 20.04+,
-Amazon Linux 2023. musl-based distros (Alpine) aren't supported by the binary; use
-`pipx install graphify-sf` there.
-
 ## Install
 
 ```bash
@@ -70,9 +65,13 @@ pipx install "graphify-sf[all]"
 
 | Platform  | x64 | arm64 |
 |-----------|-----|-------|
-| linux     | ✓   | ✓     |
+| Linux (glibc ≥ 2.28) | ✓ | ✓ |
 | macOS     | ✓   | ✓     |
 | Windows   | ✓   | —     |
+
+On Linux, glibc 2.28 or newer covers RHEL/AlmaLinux/Rocky 8+, Debian 11+ (including
+`node:*-bookworm` images), Ubuntu 20.04+ and Amazon Linux 2023. Older glibc (Amazon Linux 2,
+CentOS/RHEL 7) and musl-based distros (Alpine) aren't supported by the binary.
 
 For unsupported platforms, install via PyPI: `pipx install graphify-sf`.
 

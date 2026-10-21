@@ -24,3 +24,19 @@ for image in almalinux:8 almalinux:9 ubuntu:22.04 debian:bookworm-slim; do
       echo "graph.json OK"
     '
 done
+
+# FIPS hosts (FedRAMP/GovCloud RHEL, Ubuntu Pro FIPS): the bundled OpenSSL
+# switches to FIPS mode when the kernel says so; OPENSSL_FORCE_FIPS_MODE
+# simulates that. Hashing (sha256 in the cache/manifest) must keep working.
+echo "=== almalinux:9 with OPENSSL_FORCE_FIPS_MODE=1"
+docker run --rm \
+  -e OPENSSL_FORCE_FIPS_MODE=1 \
+  -v "${bin}:/usr/local/bin/graphify-sf:ro" \
+  -v "${fixture}:/proj:ro" \
+  almalinux:9 \
+  sh -ec '
+    graphify-sf --version
+    graphify-sf /proj --out /tmp/out --no-viz > /dev/null
+    test -s /tmp/out/graph.json
+    echo "graph.json OK (FIPS mode)"
+  '

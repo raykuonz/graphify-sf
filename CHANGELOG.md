@@ -13,17 +13,23 @@ A Linux-compatibility release for the npm binaries. The Python package is unchan
 version.
 
 ### Fixed
-- **The Linux binaries run on glibc 2.28 and newer again.** Until now they needed glibc 2.38, so they
-  failed with `GLIBC_2.38 not found` on Debian 12 (bookworm, including `node:*-bookworm` Docker
-  images), Ubuntu 22.04, and RHEL/AlmaLinux 9. Affected: every 0.4.x Linux binary, on both x64 and
-  arm64. Reported by the sf-cockpit maintainers (sf-cockpit #38).
+- **The Linux binaries now run on glibc 2.28 and newer.** Every Linux binary to date (0.3.2–0.4.3,
+  x64 and arm64) needed glibc 2.38, so it failed with `GLIBC_2.38 not found` on Debian 12 (bookworm,
+  including `node:*-bookworm` Docker images), Ubuntu 22.04, and RHEL/AlmaLinux 9. Reported by the
+  sf-cockpit maintainers (sf-cockpit #38).
   - The cause: the launcher only needs GLIBC_2.14/2.17, but PyInstaller bundles `libpython`,
     `libcrypto`, `libreadline` and Python's extension modules from the build machine. That machine was
     the Ubuntu 24.04 runner (glibc 2.39).
   - The Linux binaries are now built inside `manylinux_2_28` (AlmaLinux 8, glibc 2.28), using AlmaLinux's
     security-maintained Python 3.12.
-  - Supported: RHEL/AlmaLinux/Rocky 8+, Debian 11+, Ubuntu 20.04+, Amazon Linux 2023. musl-based
-    distros (Alpine) remain unsupported for the binary; `pipx install graphify-sf` works there.
+  - Supported: RHEL/AlmaLinux/Rocky 8+, Debian 11+, Ubuntu 20.04+, Amazon Linux 2023. Older glibc
+    (Amazon Linux 2, CentOS/RHEL 7) and musl-based distros (Alpine) aren't supported by the binary;
+    `pipx install graphify-sf` works there.
+  - The binary's bundled runtime libraries now come from EL8, maintained by Red Hat (OpenSSL 1.1.1k
+    and expat 2.2.5 with backported fixes; the build upgrades them to the latest errata and logs the
+    versions). The binary does no TLS: the LLM SDKs aren't bundled, and OpenSSL is used only for
+    hashing.
+  - FIPS-mode hosts are covered by a smoke test (`OPENSSL_FORCE_FIPS_MODE=1`).
 
 ### CI and maintenance
 - **A glibc gate.** It extracts every library bundled into the Linux binary and fails the build if
@@ -32,7 +38,13 @@ version.
   AlmaLinux 9, Ubuntu 22.04 and Debian 12, natively on x64 and arm64. These run both in the release
   workflow and in a new `linux-binary` CI job on every PR.
 - **One shared PyInstaller build script** (`.github/scripts/pyinstaller-build.sh`) now serves every
-  platform, so the bundle contents are defined once.
+  platform, so the bundle contents are defined once. A new `desktop-binary` CI job builds with it on
+  macOS and Windows, and runs the result, on every PR. `.gitattributes` forces LF endings on shell
+  scripts so Windows checkouts can run them.
+- **The Linux build mounts the checkout read-only** and copies out only the finished binary.
+- **A manual `workflow_dispatch` re-run now needs a tag at v0.4.4 or later.** Older tags lack the
+  shared build scripts.
+- `certifi` lock refresh (2026.10.18 → 2026.10.19, PYSEC-2026-4320). It isn't bundled in the binary.
 
 ---
 

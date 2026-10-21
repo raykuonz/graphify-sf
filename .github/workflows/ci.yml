@@ -152,6 +152,7 @@ jobs:
   linux-binary:
     name: Linux binary / ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -171,3 +172,42 @@ jobs:
 
       - name: Smoke-test on supported Linux distros
         run: bash .github/scripts/smoke-linux-binary.sh dist/graphify-sf
+
+  # The macOS / Windows release legs run the same shared PyInstaller script;
+  # build with it on every PR so a break (e.g. CRLF on Windows checkouts)
+  # can't first surface at release time.
+  desktop-binary:
+    name: Binary / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install package + PyInstaller
+        run: pip install ".[docs]" pyinstaller
+
+      - name: Build with the shared PyInstaller script
+        shell: bash
+        run: bash .github/scripts/pyinstaller-build.sh python
+
+      - name: Run the binary on a fixture project
+        shell: bash
+        run: |
+          bin=dist/graphify-sf
+          [ -f "${bin}.exe" ] && bin="${bin}.exe"
+          "$bin" --version
+          "$bin" tests/fixtures/simple_project --out "$RUNNER_TEMP/out" --no-viz > /dev/null
+          test -s "$RUNNER_TEMP/out/graph.json"
+          echo "graph.json OK"

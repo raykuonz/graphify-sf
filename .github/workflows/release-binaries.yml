@@ -7,7 +7,8 @@ name: Release Binaries + npm
 # It also supports manual re-runs against an existing tag via workflow_dispatch,
 # e.g. to finish a partial publish. A re-run uploads only missing release
 # binaries and publishes only npm versions not yet on the registry; it never
-# replaces bytes that were already released.
+# replaces bytes that were already released. Dispatch checks out the tag's tree,
+# so it needs a tag at v0.4.4 or later (older tags lack .github/scripts/).
 #
 # npm auth: Trusted Publishing (OIDC). Each of the 6 packages has a trusted
 # publisher for raykuonz/graphify-sf + release-binaries.yml with "npm publish"
@@ -40,6 +41,7 @@ jobs:
   build-binaries:
     name: Build binary (${{ matrix.target-os }}-${{ matrix.target-arch }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: write   # upload the binary to the release; deliberately no id-token
     strategy:
@@ -96,6 +98,13 @@ jobs:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
+      - name: Inject version into graphify_sf/_version.py
+        shell: bash
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          echo "__version__ = \"${VERSION}\"" > graphify_sf/_version.py
+          echo "Injected version: ${VERSION}"
+
       - name: Set up Python 3.12
         if: matrix.target-os != 'linux'
         uses: actions/setup-python@v7
@@ -107,13 +116,6 @@ jobs:
         run: pip install ".[docs]" pyinstaller
         # .[docs] pulls in optional doc extras so they're available if present,
         # but pyinstaller-build.sh's --exclude-module flags keep them out of the bundle.
-
-      - name: Inject version into graphify_sf/_version.py
-        shell: bash
-        run: |
-          VERSION="${{ steps.tag.outputs.version }}"
-          echo "__version__ = \"${VERSION}\"" > graphify_sf/_version.py
-          echo "Injected version: ${VERSION}"
 
       - name: Build with PyInstaller (macOS / Windows)
         if: matrix.target-os != 'linux'

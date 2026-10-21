@@ -1,0 +1,4 @@
+# Shell scripts run under bash on every CI OS, including Git Bash on Windows,
+# where core.autocrlf=true would otherwise check them out with CRLF endings
+# (bash then fails on "pipefail\r" and broken line continuations).
+*.sh text eol=lf
