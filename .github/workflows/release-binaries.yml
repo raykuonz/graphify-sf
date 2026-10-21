@@ -46,7 +46,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          # Linux legs build inside manylinux_2_28 (glibc 2.28 floor); the
+          # runner only hosts docker. See .github/scripts/build-linux-binary.sh.
+          - runner: ubuntu-24.04
             target-os: linux
             target-arch: x64
             asset-name: graphify-sf-linux-x64
@@ -95,14 +97,16 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python 3.12
+        if: matrix.target-os != 'linux'
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install package + PyInstaller
+        if: matrix.target-os != 'linux'
         run: pip install ".[docs]" pyinstaller
         # .[docs] pulls in optional doc extras so they're available if present,
-        # but the --exclude-module flags below prevent them entering the bundle.
+        # but pyinstaller-build.sh's --exclude-module flags keep them out of the bundle.
 
       - name: Inject version into graphify_sf/_version.py
         shell: bash
@@ -111,27 +115,22 @@ jobs:
           echo "__version__ = \"${VERSION}\"" > graphify_sf/_version.py
           echo "Injected version: ${VERSION}"
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (macOS / Windows)
+        if: matrix.target-os != 'linux'
         shell: bash
-        run: |
-          pyinstaller \
-            --onefile \
-            --name graphify-sf \
-            --collect-submodules graphify_sf \
-            --hidden-import graphify_sf.__main__ \
-            --exclude-module matplotlib \
-            --exclude-module neo4j \
-            --exclude-module anthropic \
-            --exclude-module openai \
-            --exclude-module boto3 \
-            --exclude-module mcp \
-            --exclude-module watchdog \
-            --exclude-module graspologic \
-            --exclude-module pypdf \
-            --exclude-module docx \
-            --exclude-module openpyxl \
-            -c \
-            graphify_sf/__main__.py
+        run: bash .github/scripts/pyinstaller-build.sh python
+
+      # Builds inside manylinux_2_28 and fails if any bundled library needs a
+      # glibc newer than 2.28.
+      - name: Build with PyInstaller (Linux, manylinux_2_28)
+        if: matrix.target-os == 'linux'
+        shell: bash
+        run: bash .github/scripts/build-linux-binary.sh
+
+      - name: Smoke-test on supported Linux distros
+        if: matrix.target-os == 'linux'
+        shell: bash
+        run: bash .github/scripts/smoke-linux-binary.sh dist/graphify-sf
 
       - name: Rename artifact to release asset name
         shell: bash

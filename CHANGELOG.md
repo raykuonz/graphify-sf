@@ -9,6 +9,31 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+A Linux-compatibility release for the npm binaries. The Python package is unchanged apart from its
+version.
+
+### Fixed
+- **The Linux binaries run on glibc 2.28 and newer again.** Until now they needed glibc 2.38, so they
+  failed with `GLIBC_2.38 not found` on Debian 12 (bookworm, including `node:*-bookworm` Docker
+  images), Ubuntu 22.04, and RHEL/AlmaLinux 9. Affected: every 0.4.x Linux binary, on both x64 and
+  arm64. Reported by the sf-cockpit maintainers (sf-cockpit #38).
+  - The cause: the launcher only needs GLIBC_2.14/2.17, but PyInstaller bundles `libpython`,
+    `libcrypto`, `libreadline` and Python's extension modules from the build machine. That machine was
+    the Ubuntu 24.04 runner (glibc 2.39).
+  - The Linux binaries are now built inside `manylinux_2_28` (AlmaLinux 8, glibc 2.28), using AlmaLinux's
+    security-maintained Python 3.12.
+  - Supported: RHEL/AlmaLinux/Rocky 8+, Debian 11+, Ubuntu 20.04+, Amazon Linux 2023. musl-based
+    distros (Alpine) remain unsupported for the binary; `pipx install graphify-sf` works there.
+
+### CI and maintenance
+- **A glibc gate.** It extracts every library bundled into the Linux binary and fails the build if
+  any needs a glibc newer than 2.28.
+- **Smoke tests.** The built binary runs `--version` and builds a real graph on AlmaLinux 8,
+  AlmaLinux 9, Ubuntu 22.04 and Debian 12, natively on x64 and arm64. These run both in the release
+  workflow and in a new `linux-binary` CI job on every PR.
+- **One shared PyInstaller build script** (`.github/scripts/pyinstaller-build.sh`) now serves every
+  platform, so the bundle contents are defined once.
+
 ---
 
 ## [0.4.3] — 2026-10-20
