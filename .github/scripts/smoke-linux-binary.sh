@@ -17,7 +17,7 @@ for image in almalinux:8 almalinux:9 ubuntu:22.04 debian:bookworm-slim; do
     -v "${fixture}:/proj:ro" \
     "${image}" \
     sh -ec '
-      ldd --version 2>&1 | head -1
+      ldd --version 2>&1 | sed -n 1p
       graphify-sf --version
       graphify-sf /proj --out /tmp/out --no-viz > /dev/null
       test -s /tmp/out/graph.json

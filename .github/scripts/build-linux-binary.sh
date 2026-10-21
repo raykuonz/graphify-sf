@@ -25,7 +25,7 @@ docker run --rm \
   "$image" \
   bash -euo pipefail -c '
     trap "chown -R \"\$HOST_UID:\$HOST_GID\" /src" EXIT
-    ldd --version | head -1
+    ldd --version 2>&1 | sed -n 1p   # sed reads all input: no SIGPIPE under pipefail
     dnf install -y -q python3.12 python3.12-devel python3.12-pip >/dev/null
     python3.12 -m venv /tmp/venv
     /tmp/venv/bin/python -m pip install -q --upgrade pip
