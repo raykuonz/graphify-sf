@@ -9,6 +9,10 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.4.4] — 2026-10-21
+
 A Linux-compatibility release for the npm binaries. The Python package is unchanged apart from its
 version.
 
@@ -25,11 +29,11 @@ version.
   - Supported: RHEL/AlmaLinux/Rocky 8+, Debian 11+, Ubuntu 20.04+, Amazon Linux 2023. Older glibc
     (Amazon Linux 2, CentOS/RHEL 7) and musl-based distros (Alpine) aren't supported by the binary;
     `pipx install graphify-sf` works there.
-  - The binary's bundled runtime libraries now come from EL8, maintained by Red Hat (OpenSSL 1.1.1k
-    and expat 2.2.5 with backported fixes; the build upgrades them to the latest errata and logs the
-    versions). The binary does no TLS: the LLM SDKs aren't bundled, and OpenSSL is used only for
+  - The binary's bundled runtime libraries now come from EL8 and are maintained by Red Hat: Python
+    3.12.15, OpenSSL 1.1.1k (with backported fixes) and expat 2.5.0. The build upgrades them to the
+    latest errata and logs the versions. The binary does no TLS: the LLM SDKs aren't bundled, and OpenSSL is used only for
     hashing.
-  - FIPS-mode hosts are covered by a smoke test (`OPENSSL_FORCE_FIPS_MODE=1`).
+  - A smoke run with `OPENSSL_FORCE_FIPS_MODE=1` (as on FIPS-mode hosts) builds a graph successfully.
 
 ### CI and maintenance
 - **A glibc gate.** It extracts every library bundled into the Linux binary and fails the build if
