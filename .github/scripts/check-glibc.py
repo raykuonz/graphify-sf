@@ -27,7 +27,10 @@ from elftools.elf.gnuversions import GNUVerNeedSection
 from PyInstaller.archive.readers import CArchiveReader
 
 # glibc's own components; PyInstaller must never bundle these.
-GLIBC_COMPONENT = re.compile(r"^(ld-linux.*|ld64\.so.*|lib(c|m|dl|rt|pthread|util|mvec|anl)\.so(\..*)?)$")
+GLIBC_COMPONENT = re.compile(
+    r"^(ld-linux.*|ld64\.so.*"
+    r"|lib(c|m|dl|rt|pthread|util|mvec|anl|resolv|nsl|thread_db|BrokenLocale|nss_\w+)\.so(\..*)?)$"
+)
 
 
 def glibc_versions(stream) -> tuple[set[tuple[int, int]], bool]:

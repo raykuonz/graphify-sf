@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to (re)build binaries + publish npm for (e.g. v0.3.2)"
+        description: "Existing release tag (v0.4.4 or later) to finish building/publishing (e.g. v0.4.4)"
         required: true
         type: string
 
