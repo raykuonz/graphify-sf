@@ -24,23 +24,26 @@ version.
   - The cause: the launcher only needs GLIBC_2.14/2.17, but PyInstaller bundles `libpython`,
     `libcrypto`, `libreadline` and Python's extension modules from the build machine. That machine was
     the Ubuntu 24.04 runner (glibc 2.39).
-  - The Linux binaries are now built inside `manylinux_2_28` (AlmaLinux 8, glibc 2.28), using AlmaLinux's
-    security-maintained Python 3.12.
+  - The Linux binaries are now built inside `manylinux_2_28` (AlmaLinux 8, glibc 2.28), using
+    AlmaLinux's security-maintained Python 3.12.
   - Supported: RHEL/AlmaLinux/Rocky 8+, Debian 11+, Ubuntu 20.04+, Amazon Linux 2023. Older glibc
     (Amazon Linux 2, CentOS/RHEL 7) and musl-based distros (Alpine) aren't supported by the binary;
     `pipx install graphify-sf` works there.
   - The binary's bundled runtime libraries now come from EL8 and are maintained by Red Hat: Python
-    3.12.15, OpenSSL 1.1.1k (with backported fixes) and expat 2.5.0. The build upgrades them to the
-    latest errata and logs the versions. The binary does no TLS: the LLM SDKs aren't bundled, and OpenSSL is used only for
-    hashing.
-  - A smoke run with `OPENSSL_FORCE_FIPS_MODE=1` (as on FIPS-mode hosts) builds a graph successfully.
+    3.12.15, OpenSSL 1.1.1k (with backported fixes) and expat 2.5.0. The build applies all EL8
+    errata first and logs the bundled package versions. The binary does no TLS: the LLM SDKs aren't
+    bundled, and OpenSSL is used only for hashing.
+  - A smoke run with `OPENSSL_FORCE_FIPS_MODE=1` (as on FIPS-mode hosts) builds a graph
+    successfully. This shows the binary works there; it isn't a FIPS-compliance claim.
 
 ### CI and maintenance
 - **A glibc gate.** It extracts every library bundled into the Linux binary and fails the build if
   any needs a glibc newer than 2.28.
-- **Smoke tests.** The built binary runs `--version` and builds a real graph on AlmaLinux 8,
-  AlmaLinux 9, Ubuntu 22.04 and Debian 12, natively on x64 and arm64. These run both in the release
-  workflow and in a new `linux-binary` CI job on every PR.
+- **Smoke tests.** The built binary runs `--version` and builds a real graph on every supported
+  family, natively on x64 and arm64: AlmaLinux 8 (glibc 2.28), Debian 11 (2.31), Ubuntu 20.04 (2.31),
+  AlmaLinux 9 (2.34), Amazon Linux 2023 (2.34), Ubuntu 22.04 (2.35) and Debian 12 (2.36). There is
+  also a forced-FIPS run. These run in the release workflow and in a new `linux-binary` CI job on
+  every PR.
 - **One shared PyInstaller build script** (`.github/scripts/pyinstaller-build.sh`) now serves every
   platform, so the bundle contents are defined once. A new `desktop-binary` CI job builds with it on
   macOS and Windows, and runs the result, on every PR. `.gitattributes` forces LF endings on shell
