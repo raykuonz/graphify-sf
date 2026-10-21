@@ -144,3 +144,70 @@ jobs:
       - name: Run npm wrapper tests
         working-directory: npm
         run: node --test
+
+  # Builds the Linux release binary exactly as release-binaries.yml does
+  # (manylinux_2_28, glibc 2.28 floor), fails if anything bundled needs a newer
+  # glibc, and runs it on AlmaLinux 8/9, Ubuntu 22.04 and Debian 12. Nothing is
+  # uploaded; this keeps a glibc regression (sf-cockpit #38) out of releases.
+  linux-binary:
+    name: Linux binary / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build in manylinux_2_28 + glibc gate
+        run: bash .github/scripts/build-linux-binary.sh
+
+      - name: Smoke-test on supported Linux distros
+        run: bash .github/scripts/smoke-linux-binary.sh dist/graphify-sf
+
+  # The macOS / Windows release legs run the same shared PyInstaller script;
+  # build with it on every PR so a break (e.g. CRLF on Windows checkouts)
+  # can't first surface at release time.
+  desktop-binary:
+    name: Binary / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install package + PyInstaller
+        run: pip install ".[docs]" pyinstaller
+
+      - name: Build with the shared PyInstaller script
+        shell: bash
+        run: bash .github/scripts/pyinstaller-build.sh python
+
+      - name: Run the binary on a fixture project
+        shell: bash
+        run: |
+          bin=dist/graphify-sf
+          [ -f "${bin}.exe" ] && bin="${bin}.exe"
+          "$bin" --version
+          "$bin" tests/fixtures/simple_project --out "$RUNNER_TEMP/out" --no-viz > /dev/null
+          test -s "$RUNNER_TEMP/out/graph.json"
+          echo "graph.json OK"

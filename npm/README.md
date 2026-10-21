@@ -65,9 +65,13 @@ pipx install "graphify-sf[all]"
 
 | Platform  | x64 | arm64 |
 |-----------|-----|-------|
-| linux     | ✓   | ✓     |
+| Linux (glibc ≥ 2.28) | ✓ | ✓ |
 | macOS     | ✓   | ✓     |
 | Windows   | ✓   | —     |
+
+On Linux, glibc 2.28 or newer covers RHEL/AlmaLinux/Rocky 8+, Debian 11+ (including
+`node:*-bookworm` images), Ubuntu 20.04+ and Amazon Linux 2023. Older glibc (Amazon Linux 2,
+CentOS/RHEL 7) and musl-based distros (Alpine) aren't supported by the binary.
 
 For unsupported platforms, install via PyPI: `pipx install graphify-sf`.
 
