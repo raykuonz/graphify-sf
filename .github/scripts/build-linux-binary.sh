@@ -27,7 +27,12 @@ docker run --rm \
     trap "chown -R \"\$HOST_UID:\$HOST_GID\" /src" EXIT
     ldd --version 2>&1 | sed -n 1p   # sed reads all input: no SIGPIPE under pipefail
     dnf install -y -q python3.12 python3.12-devel python3.12-pip >/dev/null
-    python3.12 -m venv /tmp/venv
+    # Absolute path: a bare python3.12 resolves to manylinux'"'"'s own static
+    # /opt/python build, which PyInstaller rejects (no shared libpython).
+    py=/usr/bin/python3.12
+    "$py" -c "import sys, sysconfig; sys.exit(0 if sysconfig.get_config_var(\"Py_ENABLE_SHARED\") else \"python lacks a shared libpython\")"
+    "$py" --version
+    "$py" -m venv /tmp/venv
     /tmp/venv/bin/python -m pip install -q --upgrade pip
     /tmp/venv/bin/python -m pip install -q ".[docs]" pyinstaller pyelftools
     bash .github/scripts/pyinstaller-build.sh /tmp/venv/bin/python
