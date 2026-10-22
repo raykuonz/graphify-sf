@@ -407,7 +407,6 @@ def test_update_allows_nodes_a_reextracted_file_no_longer_produces(tmp_path):
         ("closed_no_write", "/p/force-app/main/default/classes/A.cls", "", False, False),
         ("modified", "/p/graphify-sf-out/graph.json", "", False, False),
         ("modified", "/p/docs/notes.md", "", False, False),
-        ("deleted", "C:/p/force-app/main/default/lwc/myCmp", "", False, True),  # Windows folder delete
         ("modified", "/p/.sf/config.json", "", False, False),
         ("deleted", "/p/.sf/orgs", "", True, False),
     ],
@@ -416,6 +415,25 @@ def test_watcher_event_filter(event_type, src, dest, is_dir, expected):
     from graphify_sf.watch import _event_triggers_rebuild
 
     assert _event_triggers_rebuild(event_type, src, dest, is_dir, Path("/p")) is expected
+
+
+def test_watcher_treats_suffixless_deletes_as_folders_only_on_windows():
+    from graphify_sf.watch import _event_triggers_rebuild
+
+    folder = "/p/force-app/main/default/lwc/myCmp"  # Windows reports a deleted folder as a file event
+    probe = "/p/force-app/main/default/classes/4913"  # vim's write probe, deleted on every save
+
+    assert _event_triggers_rebuild("deleted", folder, "", False, Path("/p"), windows=True) is True
+    assert _event_triggers_rebuild("deleted", probe, "", False, Path("/p"), windows=False) is False
+
+
+def test_update_treats_a_malformed_graph_json_as_absent(tmp_path):
+    _two_class_project(tmp_path / "proj")
+    out = tmp_path / "out"
+    _run(tmp_path / "proj", out, update=False)
+    for bad in ("[]", '{"nodes": null, "links": null}', "not json"):
+        (out / "graph.json").write_text(bad, encoding="utf-8")
+        assert {n["label"] for n in _run(tmp_path / "proj", out, update=True)["nodes"]} >= {"First", "Second"}
 
 
 def test_watcher_still_fires_for_a_project_under_a_skip_named_directory():

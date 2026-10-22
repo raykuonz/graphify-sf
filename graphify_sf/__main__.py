@@ -257,9 +257,13 @@ def _load_prior_graph(graph_json_path: Path) -> tuple[list[dict], list[dict]]:
         old = json.loads(graph_json_path.read_text(encoding="utf-8"))
     except Exception:
         return [], []
-    nodes = [n for n in old.get("nodes", []) if isinstance(n, dict)]
-    links = [e for e in old.get("links", old.get("edges", [])) if isinstance(e, dict)]
-    return nodes, links
+    if not isinstance(old, dict):
+        return [], []
+    nodes = old.get("nodes") or []
+    links = old.get("links") or old.get("edges") or []
+    if not isinstance(nodes, list) or not isinstance(links, list):
+        return [], []
+    return [n for n in nodes if isinstance(n, dict)], [e for e in links if isinstance(e, dict)]
 
 
 def _is_abs_any_os(path: str) -> bool:

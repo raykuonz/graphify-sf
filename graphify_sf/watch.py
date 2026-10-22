@@ -41,14 +41,14 @@ def _is_sf_file(path: str) -> bool:
     return len(parts) >= 3 and parts[-3] in _BUNDLE_PARENTS
 
 
-def _in_skipped_dir(path: str, root: Path) -> bool:
+def _in_skipped_dir(path: str, root: Path, resolved_root: Path | None = None) -> bool:
     """Whether *path* lies in a skipped directory below the watched *root*.
 
     Only components below *root* count, like detect.py's pruning: a project that itself
     lives under ``build/`` or ``.claude/worktrees/`` must still be watched.
     """
     p = Path(path)
-    for base in (root, root.resolve()):
+    for base in (root, resolved_root or root.resolve()):
         try:
             parts = p.relative_to(base).parts
             break
@@ -59,18 +59,31 @@ def _in_skipped_dir(path: str, root: Path) -> bool:
     return any(part in _SKIP_DIRS for part in parts[:-1])
 
 
-def _event_triggers_rebuild(event_type: str, src: str, dest: str, is_directory: bool, root: Path) -> bool:
+def _event_triggers_rebuild(
+    event_type: str,
+    src: str,
+    dest: str,
+    is_directory: bool,
+    root: Path,
+    resolved_root: Path | None = None,
+    *,
+    windows: bool = os.name == "nt",
+) -> bool:
     """Whether a file-system event below *root* can change the graph."""
     if event_type not in _CHANGE_EVENTS:
         return False
+    resolved_root = resolved_root or root.resolve()
     # Judge each end of a move on its own: moving classes/A.cls into dist/ removes it.
-    ends = [p for p in (src, dest) if p and not _in_skipped_dir(p, root) and Path(p).name not in _SKIP_DIRS]
+    ends = [
+        p for p in (src, dest) if p and not _in_skipped_dir(p, root, resolved_root) and Path(p).name not in _SKIP_DIRS
+    ]
     if not ends:
         return False
-    if event_type in ("deleted", "moved") and (is_directory or not Path(src).suffix):
+    if event_type in ("deleted", "moved") and (is_directory or (windows and not Path(src).suffix)):
         # Removing or moving a folder (an object, an LWC bundle) removes the files in it, and
         # watchdog may report only that one event. On Windows it reports a deleted folder as a
-        # file event, so treat a suffix-less path as a folder too (a spare rebuild is harmless).
+        # file event, so treat a suffix-less path as a folder there. (Not elsewhere: editors
+        # create and delete suffix-less probe files on every save.)
         return True
     if is_directory:
         return False
@@ -232,12 +245,13 @@ def _watch_watchdog(
 
     debouncer = _DebounceTimer(debounce, do_rebuild)
     root = Path(target)
+    resolved_root = root.resolve()
 
     class Handler(FileSystemEventHandler):
         def on_any_event(self, event):
             src = getattr(event, "src_path", "") or ""
             dest = getattr(event, "dest_path", "") or ""
-            if _event_triggers_rebuild(event.event_type, src, dest, event.is_directory, root):
+            if _event_triggers_rebuild(event.event_type, src, dest, event.is_directory, root, resolved_root):
                 debouncer.trigger()
 
     observer = Observer()
