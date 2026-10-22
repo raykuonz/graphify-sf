@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html as _html
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -325,11 +326,20 @@ LEGEND.forEach(c => {{
 _CONFIDENCE_SCORE_DEFAULTS = {"EXTRACTED": 1.0, "INFERRED": 0.5, "AMBIGUOUS": 0.2}
 
 
-def _git_head() -> str | None:
+_GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+
+
+def _git_head(project: str | Path) -> str | None:
+    """HEAD commit of the git repository containing *project* (not the process cwd)."""
     import subprocess as _sp
 
+    p = Path(project)
+    cwd = p if p.is_dir() else p.parent
+    # An inherited GIT_DIR/GIT_WORK_TREE (e.g. when run from another repo's git hook) would
+    # override -C and report that repo's HEAD again.
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_ENV}
     try:
-        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
+        r = _sp.run(["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3, env=env)
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None
@@ -381,9 +391,8 @@ def to_json(
             link["source"] = true_src
             link["target"] = true_tgt
     data["hyperedges"] = getattr(G, "graph", {}).get("hyperedges", [])
-    commit = built_at_commit if built_at_commit is not None else _git_head()
-    if commit:
-        data["built_at_commit"] = commit
+    if built_at_commit:
+        data["built_at_commit"] = built_at_commit
     with open(output_path, "w", encoding="utf-8") as f:  # nosec
         json.dump(data, f, indent=2)
     return True
@@ -546,7 +555,7 @@ def to_html(
         legend_data.append({"cid": cid, "color": color, "label": lbl, "count": n})
 
     def _js_safe(obj) -> str:
-        return json.dumps(obj).replace("</", "<\\/")
+        return json.dumps(obj).replace("<", "\\u003c")
 
     nodes_json = _js_safe(vis_nodes)
     edges_json = _js_safe(vis_edges)
@@ -1201,6 +1210,9 @@ def to_callflow_html(
         label = data.get("label", nid)
         sf_type = data.get("sf_type", "") or data.get("file_type", "") or ""
         short = label[:28] + ".." if len(label) > 30 else label
+        # Quotes would end the Mermaid label string; angle brackets are escaped with the
+        # whole source below.
+        short = short.replace('"', "#quot;")
         return f"{short}\\n[{sf_type}]" if sf_type else short
 
     # Mermaid arrow style by relation
@@ -1263,7 +1275,10 @@ def to_callflow_html(
         else:
             lines.append(f"  {u_mid} {arrow} {v_mid}")
 
-    mermaid_src = "\n".join(lines)
+    # Mermaid reads the element text, so HTML-escaping the source keeps node text (which
+    # comes from project files) from being parsed as markup. Entities decode back to the
+    # original characters inside Mermaid.
+    mermaid_src = _html.escape("\n".join(lines), quote=False)
 
     n_nodes = len(included)
     n_edges_shown = len(edges)
@@ -1341,12 +1356,12 @@ def to_tree_html(
     }
 
     for cid, node_ids in sorted(communities.items()):
-        comm_label = labels.get(cid, f"Community {cid}")
+        comm_label = sanitize_label(labels.get(cid, f"Community {cid}"))
         sorted_members = sorted(node_ids, key=lambda n: degrees.get(n, 0), reverse=True)
         children = []
         for nid in sorted_members:
             data = G.nodes.get(nid, {})
-            node_label = data.get("label", nid)
+            node_label = sanitize_label(data.get("label", nid))
             sf_type = data.get("sf_type", "") or data.get("file_type", "") or ""
             source = data.get("source_file", "") or ""
             deg = degrees.get(nid, 0)
@@ -1366,7 +1381,14 @@ def to_tree_html(
             }
         )
 
-    tree_json = _json.dumps(tree_data, ensure_ascii=False)
+    # Escape every '<' (and U+2028/9) so node text can neither close the <script> element
+    # nor open an HTML comment that stops the real </script> from closing it.
+    tree_json = (
+        _json.dumps(tree_data, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
     total_nodes = G.number_of_nodes()
     total_edges = G.number_of_edges()
     n_communities = len(communities)
@@ -1448,7 +1470,17 @@ function update(source) {{
     .on('mouseover', (event, d) => {{
       if (!d.data.sf_type) return;
       tooltip.style.opacity = 1;
-      tooltip.innerHTML = `<b>${{d.data.name}}</b><br>Type: ${{d.data.sf_type}}<br>Degree: ${{d.data.degree}}<br>${{d.data.source ? 'Source: '+d.data.source : ''}}`;
+      // Node text comes from project files: build the tooltip with textContent, never innerHTML.
+      tooltip.replaceChildren();
+      const title = document.createElement('b');
+      title.textContent = d.data.name;
+      const lines = ['Type: ' + d.data.sf_type, 'Degree: ' + d.data.degree];
+      if (d.data.source) lines.push('Source: ' + d.data.source);
+      tooltip.appendChild(title);
+      lines.forEach(t => {{
+        tooltip.appendChild(document.createElement('br'));
+        tooltip.appendChild(document.createTextNode(t));
+      }});
     }})
     .on('mousemove', event => {{
       tooltip.style.left = (event.pageX + 12) + 'px';
@@ -1495,14 +1527,14 @@ function update(source) {{
   const linkEnter = link.enter().insert('path', 'g').attr('class', 'link')
     .attr('d', d => {{
       const o = {{x: source.x0, y: source.y0}};
-      return d3.linkHorizontal(){{x: d => d.y, y: d => d.x}}({{source: o, target: o}});
+      return d3.linkHorizontal().x(d => d.y).y(d => d.x)({{source: o, target: o}});
     }});
   linkEnter.merge(link).transition().duration(300)
     .attr('d', d3.linkHorizontal().x(d => d.y).y(d => d.x));
   link.exit().transition().duration(300)
     .attr('d', d => {{
       const o = {{x: source.x, y: source.y}};
-      return d3.linkHorizontal(){{x: d => d.y, y: d => d.x}}({{source: o, target: o}});
+      return d3.linkHorizontal().x(d => d.y).y(d => d.x)({{source: o, target: o}});
     }}).remove();
 
   nodes.forEach(d => {{ d.x0 = d.x; d.y0 = d.y; }});

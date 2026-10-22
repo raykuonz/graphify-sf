@@ -13,35 +13,82 @@ import threading
 import time
 from pathlib import Path
 
-# Metadata file patterns that should trigger a rebuild
-_SF_EXTENSIONS = (
-    ".cls",
-    ".trigger",
-    ".page",
-    ".component",
-    ".flow-meta.xml",
-    ".object-meta.xml",
-    ".field-meta.xml",
-    ".validationRule-meta.xml",
-    ".recordType-meta.xml",
-    ".layout-meta.xml",
-    ".profile-meta.xml",
-    ".permissionset-meta.xml",
-    ".permissionsetgroup-meta.xml",
-    ".labels-meta.xml",
-    ".md-meta.xml",
-    ".workflow-meta.xml",
-    ".approvalProcess-meta.xml",
-)
+from graphify_sf.detect import _COMPOUND_EXT_MAP, _SIMPLE_EXT_MAP
+from graphify_sf.detect import _SKIP_DIRS as _DETECT_SKIP_DIRS
 
-_SKIP_DIRS = frozenset({".sfdx", "node_modules", "__pycache__", ".git", "graphify-sf-out"})
+# Metadata file patterns that should trigger a rebuild: every suffix detect.py classifies,
+# so a file type the detector understands can never be silently ignored by the watcher.
+# LWC and Aura bundles are classified by directory instead (any file inside one counts).
+# Reference documents (.md, .pdf, ...) deliberately don't trigger rebuilds.
+_SF_EXTENSIONS = tuple(_COMPOUND_EXT_MAP) + tuple(_SIMPLE_EXT_MAP)
+_BUNDLE_PARENTS = frozenset({"lwc", "aura"})
+
+# watchdog also reports opened/closed events on some platforms; a rebuild opens every
+# watched file, so reacting to those would retrigger it forever.
+_CHANGE_EVENTS = frozenset({"created", "modified", "deleted", "moved"})
+
+# The detector's skip list, plus the sf CLI's state directory.
+_SKIP_DIRS = frozenset(_DETECT_SKIP_DIRS) | {".sf"}
 
 
 def _is_sf_file(path: str) -> bool:
-    for ext in _SF_EXTENSIONS:
-        if path.endswith(ext):
-            return True
-    return False
+    if not path:
+        return False
+    if path.endswith(_SF_EXTENSIONS):
+        return True
+    # <...>/lwc/<bundle>/<file> or <...>/aura/<bundle>/<file>
+    parts = Path(path).parts
+    return len(parts) >= 3 and parts[-3] in _BUNDLE_PARENTS
+
+
+def _in_skipped_dir(path: str, root: Path, resolved_root: Path | None = None) -> bool:
+    """Whether *path* lies in a skipped directory below the watched *root*.
+
+    Only components below *root* count, like detect.py's pruning: a project that itself
+    lives under ``build/`` or ``.claude/worktrees/`` must still be watched.
+    """
+    p = Path(path)
+    for base in (root, resolved_root or root.resolve()):
+        try:
+            parts = p.relative_to(base).parts
+            break
+        except ValueError:
+            continue
+    else:
+        return False  # not under the root after all: prefer a spare rebuild to a missed one
+    return any(part in _SKIP_DIRS for part in parts[:-1])
+
+
+def _event_triggers_rebuild(
+    event_type: str,
+    src: str,
+    dest: str,
+    is_directory: bool,
+    root: Path,
+    resolved_root: Path | None = None,
+    *,
+    windows: bool = os.name == "nt",
+) -> bool:
+    """Whether a file-system event below *root* can change the graph."""
+    if event_type not in _CHANGE_EVENTS:
+        return False
+    resolved_root = resolved_root or root.resolve()
+    # Judge each end of a move on its own: moving classes/A.cls into dist/ removes it.
+    ends = [
+        p for p in (src, dest) if p and not _in_skipped_dir(p, root, resolved_root) and Path(p).name not in _SKIP_DIRS
+    ]
+    if not ends:
+        return False
+    if event_type in ("deleted", "moved") and (is_directory or (windows and not Path(src).suffix)):
+        # Removing or moving a folder (an object, an LWC bundle) removes the files in it, and
+        # watchdog may report only that one event. On Windows it reports a deleted folder as a
+        # file event, so treat a suffix-less path as a folder there. (Not elsewhere: editors
+        # create and delete suffix-less probe files on every save.)
+        return True
+    if is_directory:
+        return False
+    # A rename away from a metadata suffix removes a file from the graph.
+    return any(_is_sf_file(p) for p in ends)
 
 
 # ── Resource management ────────────────────────────────────────────────────────
@@ -131,7 +178,7 @@ def _regen_callflow_if_present(out_dir: Path) -> None:
 
 
 def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
-    """Trigger an incremental rebuild (with lock + resource limits)."""
+    """Trigger a rebuild (with lock + resource limits)."""
     lock_path = out_dir / ".graphify_sf_rebuild.lock"
     with _rebuild_lock(lock_path) as acquired:
         if not acquired:
@@ -197,18 +244,14 @@ def _watch_watchdog(
         print("[graphify-sf watch] waiting for changes... (Ctrl+C to stop)", flush=True)
 
     debouncer = _DebounceTimer(debounce, do_rebuild)
+    root = Path(target)
+    resolved_root = root.resolve()
 
     class Handler(FileSystemEventHandler):
         def on_any_event(self, event):
-            if event.is_directory:
-                return
             src = getattr(event, "src_path", "") or ""
             dest = getattr(event, "dest_path", "") or ""
-            path = dest or src
-            parts = Path(path).parts
-            if any(p in _SKIP_DIRS for p in parts):
-                return
-            if _is_sf_file(path):
+            if _event_triggers_rebuild(event.event_type, src, dest, event.is_directory, root, resolved_root):
                 debouncer.trigger()
 
     observer = Observer()

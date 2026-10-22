@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -132,14 +132,15 @@ def _run_llm_extraction(
     backend: str,
     token_budget: int,
     token_cost: dict,
-) -> None:
+) -> bool:
     """Run LLM semantic extraction and merge results into *extraction* in-place.
 
     Collects all metadata files from the detection result, sends them to the
     LLM backend in token-budget chunks, and appends any new nodes/edges
     (marked INFERRED) into *extraction["nodes"]* / *extraction["edges"]*.
 
-    Mutates *token_cost* with ``{"input": N, "output": N}`` for the report.
+    Mutates *token_cost* with ``{"input": N, "output": N}`` for the report. Returns whether
+    any LLM output was merged (False when the backend is missing, unknown or failed).
     """
     from graphify_sf.llm import (
         BACKENDS,
@@ -161,7 +162,7 @@ def _run_llm_extraction(
                 "skipping LLM extraction",
                 file=sys.stderr,
             )
-            return
+            return False
         print(f"[graphify-sf] --backend auto → detected backend: {effective_backend}")
 
     if effective_backend not in BACKENDS:
@@ -169,7 +170,7 @@ def _run_llm_extraction(
             f"[graphify-sf] unknown backend '{effective_backend}'. Available: {sorted(BACKENDS)}",
             file=sys.stderr,
         )
-        return
+        return False
 
     # Collect all metadata files from the detection result
     all_files: list[Path] = []
@@ -182,7 +183,7 @@ def _run_llm_extraction(
 
     if not all_files:
         print("[graphify-sf] LLM extraction: no files to process — skipping", file=sys.stderr)
-        return
+        return False
 
     total_chunks_done = [0]
     total_chunks = [0]  # filled after chunking
@@ -219,7 +220,7 @@ def _run_llm_extraction(
         )
     except Exception as exc:
         print(f"[graphify-sf] LLM extraction failed: {exc}", file=sys.stderr)
-        return
+        return False
 
     llm_nodes = llm_result.get("nodes", [])
     llm_edges = llm_result.get("edges", [])
@@ -234,6 +235,11 @@ def _run_llm_extraction(
         flush=True,
     )
 
+    # Mark LLM output so a later --update without --backend can tell it would drop it.
+    for item in (*llm_nodes, *llm_edges):
+        if isinstance(item, dict):
+            item["extractor"] = "llm"
+
     # Merge into static extraction (LLM may produce nodes that already exist by label;
     # deduplicate_by_label in the pipeline will consolidate them)
     extraction["nodes"].extend(llm_nodes)
@@ -242,6 +248,50 @@ def _run_llm_extraction(
     # Record token cost for the report
     token_cost["input"] += in_tok
     token_cost["output"] += out_tok
+    return bool(llm_nodes or llm_edges)
+
+
+def _load_prior_graph(graph_json_path: Path) -> tuple[list[dict], list[dict]]:
+    """Nodes and links of an existing graph.json, or two empty lists when there is none."""
+    try:
+        old = json.loads(graph_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return [], []
+    if not isinstance(old, dict):
+        return [], []
+    nodes = old.get("nodes") or []
+    links = old.get("links") or old.get("edges") or []
+    if not isinstance(nodes, list) or not isinstance(links, list):
+        return [], []
+    return [n for n in nodes if isinstance(n, dict)], [e for e in links if isinstance(e, dict)]
+
+
+def _is_abs_any_os(path: str) -> bool:
+    """Absolute on POSIX or Windows (a graph.json may have been built on either)."""
+    return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
+
+
+def _update_llm_refusal(old_nodes: list[dict], old_links: list[dict], *, llm_merged: bool) -> str | None:
+    """Refuse ``--update`` when it would drop LLM-derived facts that this run did not redo.
+
+    ``--update`` rebuilds from scratch, and the hooks and the watcher run it unattended
+    without ``--backend``, so refuse instead (``--force`` overrides). LLM output is tagged
+    ``extractor: "llm"`` since 0.4.5. Older graphs carry no tag, but their LLM nodes and
+    edges have the relative ``source_file`` the prompt asks for, while every static
+    extractor records an absolute path (or none).
+    """
+    if llm_merged:
+        return None
+    items = (*old_nodes, *old_links)
+    if any(x.get("extractor") == "llm" for x in items) or any(
+        isinstance(x.get("source_file"), str) and x["source_file"] and not _is_abs_any_os(x["source_file"])
+        for x in items
+    ):
+        return (
+            "graph.json contains LLM-derived facts, and this --update run produced none, so it "
+            "would drop them. Re-run with a working --backend, or pass --force to drop them."
+        )
+    return None
 
 
 def _run_pipeline(
@@ -260,10 +310,10 @@ def _run_pipeline(
 ) -> None:
     """Full pipeline: detect → extract → [LLM] → build → cluster → report → export."""
     from graphify_sf.analyze import god_nodes, suggest_questions, surprising_connections
-    from graphify_sf.build import build_from_json, build_merge_sf, deduplicate_by_label
+    from graphify_sf.build import build_from_json, deduplicate_by_label
     from graphify_sf.cluster import cluster, score_all
-    from graphify_sf.detect import detect, detect_incremental, save_manifest
-    from graphify_sf.export import to_html, to_json
+    from graphify_sf.detect import detect, save_manifest
+    from graphify_sf.export import _git_head, to_html, to_json
     from graphify_sf.extract import extract
     from graphify_sf.report import generate
 
@@ -271,14 +321,18 @@ def _run_pipeline(
     manifest_path = out_dir / "manifest.json"
     graph_json_path = out_dir / "graph.json"
 
-    incremental = update and manifest_path.exists() and graph_json_path.exists()
-
-    if incremental:
-        print(f"[graphify-sf] incremental scan of {target}")
-        detection = detect_incremental(target, manifest_path=str(manifest_path), respect_ignore=respect_ignore)
+    # ``--update`` is a fresh rebuild: extraction always re-parses every detected file, and
+    # unioning the result with the previous graph.json multiplied edges on every run and
+    # kept facts from deleted files. Rebuilding from this run's extraction alone is
+    # idempotent. (``check-update`` still reports which files changed.)
+    if update:
+        print(f"[graphify-sf] --update: rebuilding {target} from scratch (extraction is not incremental)")
     else:
         print(f"[graphify-sf] scanning {target}")
-        detection = detect(target, respect_ignore=respect_ignore)
+    # Read HEAD before scanning, so a checkout that lands mid-run can't stamp the graph
+    # with a commit whose files it was not built from.
+    commit = _git_head(target)
+    detection = detect(target, respect_ignore=respect_ignore)
 
     total = detection.get("total_files", 0)
     skipped_count = detection.get("skipped_count", 0)
@@ -301,6 +355,9 @@ def _run_pipeline(
         print("[graphify-sf] no Salesforce metadata files found — nothing to extract", file=sys.stderr)
         sys.exit(1)
 
+    # --update rebuilds from scratch; checked below before anything is written.
+    old_nodes, old_links = _load_prior_graph(graph_json_path) if update and not force else ([], [])
+
     # Phase 1+2: Extract all metadata (static XML/source parsing)
     print("[graphify-sf] extracting metadata...", flush=True)
     extraction = extract(detection, parallel=True, max_workers=max_workers)
@@ -310,8 +367,11 @@ def _run_pipeline(
 
     # Phase 2b: LLM semantic extraction (optional — only when --backend is given)
     token_cost: dict = {"input": 0, "output": 0}
-    if backend:
-        _run_llm_extraction(target, detection, extraction, backend, token_budget, token_cost)
+    llm_merged = bool(backend) and _run_llm_extraction(target, detection, extraction, backend, token_budget, token_cost)
+    refusal = _update_llm_refusal(old_nodes, old_links, llm_merged=llm_merged) if old_nodes or old_links else None
+    if refusal:
+        print(f"[graphify-sf] error: {refusal}", file=sys.stderr)
+        sys.exit(1)
 
     # Dedup by label
     n_extracted = len(extraction["nodes"])
@@ -320,12 +380,7 @@ def _run_pipeline(
 
     new_extraction = {"nodes": nodes, "edges": edges}
 
-    # Build graph (incremental or fresh)
-    if incremental:
-        print("[graphify-sf] merging with existing graph...", flush=True)
-        G = build_merge_sf(new_extraction, graph_json_path, directed=directed)
-    else:
-        G = build_from_json(new_extraction, directed=directed)
+    G = build_from_json(new_extraction, directed=directed)
 
     print(f"[graphify-sf] graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
@@ -342,14 +397,10 @@ def _run_pipeline(
         # inject before dedup). For a fresh build: final == deduped + build_stubs.
         n_final = G.number_of_nodes()
         deduped_ids = {n["id"] for n in nodes if isinstance(n, dict) and "id" in n}
-        # In incremental mode G is merged with the ENTIRE prior graph.json, so nodes
-        # retained unchanged from that prior run are absent from this run's own
-        # deduped_ids and would be miscounted as build-injected stubs. Gate stub
-        # reporting to the fresh-build path, same as n_pruned_edges below.
-        n_build_stubs = sum(1 for nid in G.nodes() if nid not in deduped_ids) if not incremental else None
-        stub_str = "n/a (incremental merge)" if n_build_stubs is None else f"+{n_build_stubs} stub"
-        n_pruned_edges = max(0, len(edges) - G.number_of_edges()) if not incremental else None
-        pruned_str = "n/a (incremental merge)" if n_pruned_edges is None else str(n_pruned_edges)
+        n_build_stubs = sum(1 for nid in G.nodes() if nid not in deduped_ids)
+        stub_str = f"+{n_build_stubs} stub"
+        n_pruned_edges = max(0, len(edges) - G.number_of_edges())
+        pruned_str = str(n_pruned_edges)
         print(
             f"[graphify-sf] node accounting: {n_extracted} extracted "
             f"→ {n_deduped} deduped-by-label ({n_extracted - n_deduped} merged) "
@@ -374,9 +425,6 @@ def _run_pipeline(
     questions = suggest_questions(G, communities, labels)
 
     # Report
-    from graphify_sf.export import _git_head
-
-    commit = _git_head()
     report = generate(
         G,
         communities,
@@ -395,7 +443,8 @@ def _run_pipeline(
     print(f"[graphify-sf] wrote {report_path}")
 
     # Write graph.json
-    written = to_json(G, communities, str(graph_json_path), force=force, built_at_commit=commit)
+    # --update rebuilds from scratch, so a smaller graph (deleted files) is legitimate.
+    written = to_json(G, communities, str(graph_json_path), force=force or update, built_at_commit=commit)
     if written:
         print(f"[graphify-sf] wrote {graph_json_path}")
     else:
@@ -450,7 +499,7 @@ def _cmd_cluster_only(target: Path, out_dir: Path, *, no_viz: bool = False, grap
     """Re-cluster an existing graph.json and regenerate report + html."""
     from graphify_sf.analyze import god_nodes, suggest_questions, surprising_connections
     from graphify_sf.cluster import cluster, score_all
-    from graphify_sf.export import _git_head, to_html, to_json
+    from graphify_sf.export import to_html, to_json
     from graphify_sf.report import generate
 
     gp = graph_path or (out_dir / "graph.json")
@@ -480,7 +529,8 @@ def _cmd_cluster_only(target: Path, out_dir: Path, *, no_viz: bool = False, grap
     questions = suggest_questions(G, communities, labels)
 
     token_cost = {"input": 0, "output": 0}
-    commit = _git_head()
+    # Re-clustering does not re-read the project, so keep the commit the graph was built from.
+    commit = raw.get("built_at_commit") if isinstance(raw, dict) else None
     report = generate(
         G,
         communities,
@@ -819,7 +869,9 @@ def _cmd_check_update(target: Path, out_dir: Path) -> None:
         sys.exit(0)
     else:
         print()
-        print(f"[graphify-sf] {changed_count + len(deleted)} file(s) would be re-extracted by --update")
+        print(
+            f"[graphify-sf] {changed_count + len(deleted)} file(s) changed since the last run (--update rebuilds everything)"
+        )
         sys.exit(1)
 
 
@@ -829,7 +881,7 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
     from graphify_sf.analyze import god_nodes, suggest_questions, surprising_connections
     from graphify_sf.build import build_from_json, deduplicate_by_label
     from graphify_sf.cluster import cluster, score_all
-    from graphify_sf.export import _git_head, to_html, to_json
+    from graphify_sf.export import to_html, to_json
     from graphify_sf.report import generate
 
     if len(graph_paths) < 2:
@@ -877,7 +929,7 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
     out_dir = out_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     token_cost = {"input": 0, "output": 0}
-    commit = _git_head()
+    commit = None  # a merge of several graphs has no single source commit
     report = generate(
         G,
         communities,
@@ -1241,7 +1293,7 @@ This project's Salesforce metadata is indexed by [graphify-sf](https://github.co
 
 - Run `graphify-sf .` to build or rebuild the knowledge graph from SFDX metadata
 - If `graphify-sf-out/graph.json` exists, use `/graphify-sf query "<question>"` to explore it
-- Run `graphify-sf . --update` after metadata changes for an incremental refresh
+- Run `graphify-sf . --update` after metadata changes to rebuild the graph
 
 <!-- /graphify-sf -->
 """
@@ -1418,7 +1470,7 @@ GIT_DIR_PATH=$(git rev-parse --git-dir 2>/dev/null)
 [ -f "${GIT_DIR_PATH}/CHERRY_PICK_HEAD" ] && exit 0
 
 GSF_CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | \\
-    grep -cE '\\.(cls|trigger|flow-meta\\.xml|.*-meta\\.xml)$' || true)
+    grep -cE '(\\.(cls|trigger|page|component|.*-meta\\.xml)$|(^|/)(lwc|aura)/[^/]+/[^/]+$)' || true)
 [ "${GSF_CHANGED:-0}" -eq 0 ] && exit 0
 
 """
@@ -1652,7 +1704,7 @@ def main() -> None:
         print("Usage:")
         print("  graphify-sf <path>               build knowledge graph from SFDX project")
         print("    --out <dir>                      output directory (default: graphify-sf-out)")
-        print("    --update                         incremental update (re-extract changed files)")
+        print("    --update                         rebuild the graph from scratch (extraction is not incremental)")
         print("    --directed                       build directed graph")
         print("    --no-viz                         skip graph.html generation")
         print("    --verbose, -v                    print node-drop accounting (extract→dedup→build)")
@@ -1690,7 +1742,7 @@ def main() -> None:
         print("  graphify-sf hook uninstall        remove the hook")
         print("  graphify-sf hook status           check if hook is installed")
         print()
-        print("  graphify-sf check-update <path>   dry-run diff — what would --update re-extract?")
+        print("  graphify-sf check-update <path>   dry-run diff — which files changed since the last run?")
         print("    --out <dir>                      output directory (default: graphify-sf-out)")
         print()
         print("  graphify-sf merge-graphs <g1> <g2> [<gN>...]   merge multiple graph.json files")
@@ -2372,7 +2424,9 @@ def main() -> None:
             from graphify_sf.export import to_json
 
             out_path = out_dir / "graph.json"
-            to_json(G, communities, str(out_path), force=True)
+            # Re-exporting doesn't re-read the project: keep the commit the graph was built from.
+            commit = raw.get("built_at_commit") if isinstance(raw, dict) else None
+            to_json(G, communities, str(out_path), force=True, built_at_commit=commit)
             print(f"graph.json written to {out_path}")
 
         elif fmt == "wiki":

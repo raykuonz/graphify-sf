@@ -1,15 +1,12 @@
 """Assemble node+edge dicts into a NetworkX graph.
 
 Adapted from Graphify's build.py — removes LLM dedup and validate imports,
-adds build_from_extraction() and build_merge_sf() for the SF pipeline.
+adds build_from_extraction() for the SF pipeline.
 """
 
 from __future__ import annotations
 
-import json
 import re
-import sys
-from pathlib import Path
 
 import networkx as nx
 
@@ -338,36 +335,6 @@ def build(extractions: list[dict], *, directed: bool = False, multigraph: bool =
     _ensure_stub_nodes(combined["nodes"], combined["edges"])
 
     return build_from_json(combined, directed=directed, multigraph=multigraph)
-
-
-def build_merge_sf(
-    new_extraction: dict,
-    graph_path: str | Path = "graphify-sf-out/graph.json",
-    *,
-    directed: bool = False,
-    multigraph: bool = True,
-) -> nx.Graph:
-    """Load existing graph.json, merge new extraction into it.
-
-    Used by --update (incremental mode). Loads existing nodes/edges from
-    graph.json and combines them with the new extraction result.
-    """
-    graph_path = Path(graph_path)
-    if graph_path.exists():
-        try:
-            data = json.loads(graph_path.read_text(encoding="utf-8"))
-            links_key = "links" if "links" in data else "edges"
-            existing = {
-                "nodes": list(data.get("nodes", [])),
-                "edges": list(data.get(links_key, [])),
-            }
-        except Exception as exc:
-            print(f"[graphify-sf] WARNING: could not load {graph_path}: {exc}", file=sys.stderr)
-            existing = {"nodes": [], "edges": []}
-    else:
-        existing = {"nodes": [], "edges": []}
-
-    return build([existing, new_extraction], directed=directed, multigraph=multigraph)
 
 
 def _norm_label(label: str) -> str:

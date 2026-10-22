@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import networkx as nx
 
 
@@ -97,39 +95,6 @@ def test_edge_data_returns_attributes(simple_graph):
         u, v = edges[0]
         data = edge_data(simple_graph, u, v)
         assert isinstance(data, dict)
-
-
-def test_build_merge_sf_creates_graph(simple_extraction, tmp_path):
-    """Test that build_merge_sf() merges new extraction into existing graph."""
-    from graphify_sf.build import build_from_json, build_merge_sf
-
-    # Create an initial graph.json
-    graph_path = tmp_path / "graph.json"
-    initial = build_from_json(simple_extraction)
-
-    # Export to JSON format
-    from networkx.readwrite import json_graph
-
-    graph_data = json_graph.node_link_data(initial)
-    graph_path.write_text(json.dumps(graph_data), encoding="utf-8")
-
-    # Now merge with same extraction (should not duplicate)
-    merged = build_merge_sf(simple_extraction, graph_path)
-
-    assert isinstance(merged, nx.Graph)
-    # Merged graph should have similar node count (may be slightly different due to deduplication)
-    assert merged.number_of_nodes() >= initial.number_of_nodes()
-
-
-def test_build_merge_sf_missing_graph(simple_extraction, tmp_path):
-    """Test that build_merge_sf() creates new graph if existing one doesn't exist."""
-    from graphify_sf.build import build_merge_sf
-
-    graph_path = tmp_path / "nonexistent" / "graph.json"
-    merged = build_merge_sf(simple_extraction, graph_path)
-
-    assert isinstance(merged, nx.Graph)
-    assert merged.number_of_nodes() > 0
 
 
 def test_build_from_json_directed_graph(simple_extraction):

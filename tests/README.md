@@ -126,7 +126,7 @@ pytest tests/test_detect.py::test_detect_finds_apex_classes -v
 ### CLI Tests (`test_cli.py`)
 - Full pipeline execution
 - --no-viz flag
-- --update incremental mode
+- --update rebuilds from scratch (idempotent, drops deleted files)
 - --directed graph creation
 - --force overwrite
 - query command
