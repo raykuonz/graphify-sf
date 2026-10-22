@@ -13,7 +13,7 @@ Turn any Salesforce SFDX project into a navigable knowledge graph with community
 ```
 /graphify-sf                                          # full pipeline on current directory
 /graphify-sf <path>                                   # full pipeline on SFDX project path
-/graphify-sf <path> --update                          # incremental — re-extract only changed files
+/graphify-sf <path> --update                          # rebuild from scratch (idempotent)
 /graphify-sf <path> --directed                        # build directed graph (source→target)
 /graphify-sf <path> --no-viz                          # skip graph.html, just report + JSON
 /graphify-sf <path> --out <dir>                       # custom output directory (default: graphify-sf-out)
@@ -261,15 +261,15 @@ fi
 
 ---
 
-## For --update (incremental re-extraction)
+## For --update (rebuild)
 
-Use when you've added or modified metadata since the last run. Only re-extracts changed files — saves time on large projects.
+Use when you've added, modified or deleted metadata since the last run. It re-extracts every file and rebuilds the graph from scratch, so the result matches a fresh run and deleted files drop out.
 
 ```bash
 $(cat graphify-sf-out/.graphify_sf_cmd) INPUT_PATH --out graphify-sf-out --update
 ```
 
-The command merges new nodes and edges into the existing `graph.json`, updates `GRAPH_REPORT.md`, and regenerates the HTML.
+The command replaces `graph.json`, updates `GRAPH_REPORT.md`, and regenerates the HTML.
 
 ---
 

@@ -11,6 +11,76 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.5] — 2026-10-23
+
+A bug-fix release. One fix changes behaviour: `--update` now rebuilds the graph instead of merging
+into it.
+
+### Fixed
+- **`--update` duplicated edges and kept deleted files.** Extraction was never incremental: `--update`
+  re-parsed every file and then unioned the result with the previous `graph.json`. Every run added
+  another copy of each edge (6 → 12 → 18 links on a small project), and nodes and edges from deleted
+  files were never removed. `--update` now builds the graph from this run's extraction alone, so
+  repeated runs produce the same graph and deleted files drop out.
+  - `--update` may shrink `graph.json` without `--force`, because a smaller graph is the correct
+    result after files are deleted or edited. It covers exactly the path it is given, so `--update`
+    on a subdirectory replaces the graph with that subdirectory. A file that fails to parse drops out
+    until it parses again.
+  - `--update` refuses, exits 1 and writes no graph when the old graph holds LLM-derived facts and
+    this run merged none (no `--backend`, or the backend was missing or failed completely). The
+    hooks and the watcher never pass `--backend`, so without this check they would silently discard
+    paid LLM output. `--force` drops the LLM facts anyway. If the backend fails only partly, the LLM
+    facts are replaced by what succeeded.
+    - LLM output is now tagged `extractor: "llm"`. Graphs from older versions are recognised by the
+      relative `source_file` that LLM nodes and edges carry; static extractors record absolute paths.
+  - The `watch` command and the hooks installed by `graphify-sf hook install` run `--update`, so they
+    follow these rules too. A graph built with `--update` on 0.4.4 or earlier may contain duplicate
+    edges; one run on 0.4.5 replaces them. A graph built with `--include-ignored` loses the ignored
+    files on the next `--update` that doesn't pass it.
+- **`built_at_commit` recorded the wrong repository.** It came from `git rev-parse HEAD` in the
+  process's working directory, so running graphify-sf from another checkout (as sf-cockpit does)
+  stamped that checkout's commit. It now comes from the analysed project's repository, read before the
+  scan starts, and inherited `GIT_DIR`/`GIT_WORK_TREE` variables no longer redirect it. It is omitted
+  when the project isn't in a git repository.
+  - `cluster-only` and `export json` keep the commit the graph was built from instead of stamping the
+    current one.
+  - `merge-graphs` and the git merge driver record none, because a merged graph has no single
+    source commit.
+- **The tree and call-flow HTML exports rendered node text as markup.** Node labels and source paths
+  come from project files. `export tree` wrote them into its tooltip with `innerHTML` and embedded the
+  data without escaping `</`, so a crafted file name or markdown heading could inject HTML or script
+  into the page. The tooltip is now built from text nodes, and every `<` in the embedded data (in
+  `graph.html` too) is escaped, so node text can't close the `<script>` element or blank the page with
+  `<!--`. `export callflow` now HTML-escapes the Mermaid source and keeps quotes inside labels.
+- **The `export tree` page never rendered.** Its script had a syntax error
+  (`d3.linkHorizontal(){x: …}`), so the browser rejected the whole script and the page stayed blank.
+- **The watcher and the post-commit hook ignored most metadata.** `watch` only reacted to 17 file
+  suffixes, so changes to LWC and Aura components, Named Credentials, External Services, Remote Site
+  Settings, sharing rules, reports and many other types never triggered a rebuild. It now reacts to:
+  - every suffix the detector classifies;
+  - files in LWC and Aura bundles;
+  - renames away from those;
+  - deleted or moved folders.
+
+  It skips the same directories as the detector, plus `.sf`, counted from the watched folder down, so
+  a project inside a `build/` or `.claude/worktrees/` folder is still watched. It ignores open/close
+  events, which could retrigger rebuilds on some platforms. Reference documents (`.md`, `.pdf`, …)
+  still don't trigger a rebuild.
+
+  The post-commit hook likewise skipped commits that changed only LWC, Aura or Visualforce files. To
+  get the new hook, run `graphify-sf hook uninstall` and then `graphify-sf hook install`.
+
+### Changed
+- `export.to_json()` stamps `built_at_commit` only when it is passed one, and
+  `export._git_head()` now takes the project path. Both previously used the process's working
+  directory.
+
+### Removed
+- `graphify_sf/cache.py`, an extraction cache that nothing called, and `build.build_merge_sf`, which
+  only `--update` used and which duplicated edges.
+
+---
+
 ## [0.4.4] — 2026-10-21
 
 A Linux-compatibility release for the npm binaries. The Python package is unchanged apart from its

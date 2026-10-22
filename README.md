@@ -26,7 +26,7 @@ The result is a knowledge graph an architect can explore, an LLM can ground its 
 - **Community detection:** Louvain/Leiden clustering surfaces cross-metadata couplings you wouldn't think to ask about.
 - **Interactive HTML visualization:** force-directed graph with search, community filtering, and a node inspector.
 - **Many export formats:** HTML, SVG, Mermaid call-flow, D3 tree, Obsidian vault, GraphML, Cypher/Neo4j, JSON, and Markdown wiki.
-- **Incremental updates:** re-extract only changed files with `--update`, or dry-run the diff with `check-update`.
+- **Change detection:** `--update` rebuilds the graph from scratch (extraction is not incremental, and facts from deleted files are dropped); `check-update` dry-runs which files changed.
 - **Agentic IDE integration:** install a `/graphify-sf` skill into Claude Code, Cursor, Codex, Kiro, Gemini, and 10+ more IDEs.
 - **MCP server:** expose graph query tools to Claude Desktop and other MCP clients over stdio.
 - **File watcher:** auto-rebuild on metadata changes with `watch`.
@@ -76,7 +76,7 @@ On the first run you'll see:
 | `graphify-sf-out/graph.html` | Interactive force-directed graph — search, filter by community, inspect nodes |
 | `graphify-sf-out/graph.json` | GraphRAG-ready JSON with node/edge provenance, community assignments |
 | `graphify-sf-out/GRAPH_REPORT.md` | Plain-language report: god nodes, surprising connections, suggested questions |
-| `graphify-sf-out/manifest.json` | File hash manifest for incremental updates |
+| `graphify-sf-out/manifest.json` | File hash manifest (used by `check-update`) |
 | `graphify-sf-out/.graphify_sf_labels.json` | Community label sidecar |
 
 ---
@@ -113,13 +113,15 @@ graphify-sf <path> --backend auto     # auto-detect from available API keys
 graphify-sf <path> --backend gemini --token-budget 20000
 ```
 
-### Incremental Updates
+### Rebuilds and change detection
 
 ```bash
-# Re-extract only changed/new files, merge into existing graph
+# Rebuild the graph from scratch (idempotent; deleted files disappear).
+# Covers exactly <path>. Refuses (exit 1) if graph.json holds LLM-derived facts
+# that this run didn't redo (no --backend); --force overrides.
 graphify-sf <path> --update
 
-# Dry-run: show what --update would change without doing it
+# Dry-run: list the files changed since the last run
 # Exits 1 if changes exist (useful for CI)
 graphify-sf check-update <path>
 
@@ -431,7 +433,7 @@ graphify-sf hook status
 
 The hook installs both `post-commit` and `post-checkout` hooks:
 
-- **post-commit** — diffs `HEAD~1..HEAD`, triggers rebuild only when `.cls/.trigger/.flow-meta.xml/*-meta.xml` files changed
+- **post-commit** — diffs `HEAD~1..HEAD`, triggers rebuild only when Apex, Visualforce, `*-meta.xml` or LWC/Aura bundle files changed
 - **post-checkout** — triggers rebuild on branch switches (when `graphify-sf-out/` exists)
 
 Both hooks run rebuilds in the **background** (`nohup ... & disown`) so `git commit` and `git checkout` return immediately. Rebuild log: `~/.cache/graphify-sf-rebuild.log`.
@@ -474,7 +476,7 @@ graphify-sf watch . --directed
 
 If `watchdog` is installed (`pip install graphify-sf[watch]`), uses efficient FS events. Otherwise falls back to polling every 5 seconds with a notice.
 
-The watcher runs an initial full build if no `graph.json` exists, then incremental `--update` rebuilds on each detected change.
+The watcher runs an initial full build if no `graph.json` exists, then a full `--update` rebuild on each detected change.
 
 ---
 
@@ -757,7 +759,6 @@ graphify_sf/
 ├── llm.py          LLM semantic extraction — 6 backends, SF-specific prompt, adaptive retry
 ├── watch.py        File-system watcher — fcntl rebuild lock, resource limits, callflow regen
 ├── serve.py        MCP stdio server — 9 tools, 6 resources, blank-stdin filter
-├── cache.py        Per-file extraction cache — SHA-256 keyed, atomic writes
 ├── validate.py     Extraction schema validation — catches bad extractors before graph assembly
 ├── security.py     Input sanitization — sanitize_label, validate_graph_path
 └── __main__.py     CLI entry point — all command dispatch
@@ -803,7 +804,7 @@ graphify_sf/
 - Initial release: Apex, Flow, Object, LWC, Aura, Profile, Permission Set, Agentforce metadata extraction
 - NetworkX graph with Louvain community detection
 - HTML, JSON, Obsidian, GraphML, Cypher, SVG, Mermaid export formats
-- Incremental updates via SHA-256 manifest
+- Change detection via SHA-256 manifest (`check-update`)
 - MCP stdio server, file watcher, git hooks
 
 ---
