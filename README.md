@@ -89,7 +89,7 @@ On the first run you'll see:
 # Build graph from SFDX project (full scan)
 graphify-sf <path>
 
-# Custom output directory
+# Custom output directory (may be inside the project; it is never scanned)
 graphify-sf <path> --out my-graph-out
 
 # Build directed graph (edges have source→target direction)
@@ -436,7 +436,7 @@ The hook installs both `post-commit` and `post-checkout` hooks:
 - **post-commit** — diffs `HEAD~1..HEAD`, triggers rebuild only when Apex, Visualforce, `*-meta.xml` or LWC/Aura bundle files changed
 - **post-checkout** — triggers rebuild on branch switches (when `graphify-sf-out/` exists)
 
-Both hooks run rebuilds in the **background** (`nohup ... & disown`) so `git commit` and `git checkout` return immediately. Rebuild log: `~/.cache/graphify-sf-rebuild.log`.
+Both hooks run rebuilds in the **background** (`nohup ... & disown`) so `git commit` and `git checkout` return immediately. Rebuild log (appended to): `~/.cache/graphify-sf-rebuild.log`. Runs that write to the same output directory take turns: a second run waits for the first (see `GRAPHIFY_SF_LOCK_TIMEOUT`).
 
 Both hooks skip during rebase, merge, and cherry-pick. The `_hooks_dir()` respects `core.hooksPath` (Husky/Lefthook compatibility).
 
@@ -628,6 +628,7 @@ All configuration via environment variables:
 | `GRAPHIFY_SF_OUT` | `graphify-sf-out` | Default output directory |
 | `GRAPHIFY_SF_VIZ_NODE_LIMIT` | `5000` | Max nodes before HTML viz switches to aggregated community view |
 | `GRAPHIFY_SF_FORCE` | `` | Set to `1`/`true` to always overwrite `graph.json` |
+| `GRAPHIFY_SF_LOCK_TIMEOUT` | `900` | Seconds a run waits for another run that is writing to the same output directory before giving up (exit 1) |
 | `GRAPHIFY_SF_REBUILD_MEMORY_LIMIT_MB` | `` | Cap memory usage for background watch rebuilds (MB) |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Override Claude Code config directory — only set if your Claude Code config lives at a non-standard path (company-managed dotfiles, CI, or multiple installations) |
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -18,6 +19,54 @@ except Exception:
         __version__ = os.environ.get("GRAPHIFY_SF_VERSION", "dev")
 
 _DEFAULT_OUT = os.environ.get("GRAPHIFY_SF_OUT", "graphify-sf-out")
+
+
+def _communities_of(G) -> dict[int, list[str]]:
+    """Communities of a loaded graph: from the nodes' ``community`` attribute, else re-clustered."""
+    communities: dict[int, list[str]] = {}
+    for nid, data in G.nodes(data=True):
+        cid = data.get("community")
+        if cid is not None:
+            communities.setdefault(int(cid), []).append(nid)
+    if not communities:
+        from graphify_sf.cluster import cluster
+
+        communities = cluster(G)
+    return communities
+
+
+def _cmd_export_json(graph_path: Path, out_dir: Path) -> None:
+    """Re-export graph.json (normalises an older or hand-edited file)."""
+    from graphify_sf.export import to_json
+
+    G, raw = _load_graph_from_json(graph_path)
+    out_path = out_dir / "graph.json"
+    # Re-exporting doesn't re-read the project: keep the commit the graph was built from.
+    commit = raw.get("built_at_commit") if isinstance(raw, dict) else None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    to_json(G, _communities_of(G), str(out_path), force=True, built_at_commit=commit)
+    print(f"graph.json written to {out_path}")
+
+
+@contextlib.contextmanager
+def _output_lock(out_dir: Path):
+    """Serialise runs that write to *out_dir* (hooks, CLI, watch); exit 1 if the wait times out."""
+    from graphify_sf._lock import LOCK_NAME, file_lock, lock_timeout
+
+    wait = lock_timeout()
+    with file_lock(Path(out_dir) / LOCK_NAME, wait=wait, label=str(out_dir)) as acquired:
+        if not acquired:
+            print(
+                f"error: another graphify-sf run has held the lock on {out_dir} for over {wait:.0f}s; "
+                "giving up (raise GRAPHIFY_SF_LOCK_TIMEOUT, or check for a stuck process)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            yield
+        except OSError as exc:  # e.g. graph.json cannot be replaced: one clear line, not a traceback
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 def _default_graph_path() -> str:
@@ -332,7 +381,7 @@ def _run_pipeline(
     # Read HEAD before scanning, so a checkout that lands mid-run can't stamp the graph
     # with a commit whose files it was not built from.
     commit = _git_head(target)
-    detection = detect(target, respect_ignore=respect_ignore)
+    detection = detect(target, respect_ignore=respect_ignore, out_dir=out_dir)
 
     total = detection.get("total_files", 0)
     skipped_count = detection.get("skipped_count", 0)
@@ -424,6 +473,23 @@ def _run_pipeline(
     surprises = surprising_connections(G, communities)
     questions = suggest_questions(G, communities, labels)
 
+    # Write graph.json first. Everything else (report, labels, manifest, HTML) describes it,
+    # so none of that is published when the graph itself is refused or cannot be written.
+    # --update rebuilds from scratch, so a smaller graph (deleted files) is legitimate.
+    try:
+        written = to_json(G, communities, str(graph_json_path), force=force or update, built_at_commit=commit)
+    except OSError as exc:
+        print(f"[graphify-sf] error: could not write {graph_json_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not written:
+        print(
+            "[graphify-sf] error: graph.json not updated (the new graph is smaller than the existing one — "
+            "use --force to override)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"[graphify-sf] wrote {graph_json_path}")
+
     # Report
     report = generate(
         G,
@@ -441,17 +507,6 @@ def _run_pipeline(
     report_path = out_dir / "GRAPH_REPORT.md"
     report_path.write_text(report, encoding="utf-8")
     print(f"[graphify-sf] wrote {report_path}")
-
-    # Write graph.json
-    # --update rebuilds from scratch, so a smaller graph (deleted files) is legitimate.
-    written = to_json(G, communities, str(graph_json_path), force=force or update, built_at_commit=commit)
-    if written:
-        print(f"[graphify-sf] wrote {graph_json_path}")
-    else:
-        print(
-            "[graphify-sf] WARNING: graph.json not updated (new graph is smaller — use --force to override)",
-            file=sys.stderr,
-        )
 
     # Write community labels sidecar
     labels_path = out_dir / ".graphify_sf_labels.json"
@@ -544,9 +599,11 @@ def _cmd_cluster_only(target: Path, out_dir: Path, *, no_viz: bool = False, grap
         suggested_questions=questions,
         built_at_commit=commit,
     )
+    if not to_json(G, communities, str(gp), built_at_commit=commit):  # the graph first; the report describes it
+        print(f"error: {gp} was not updated", file=sys.stderr)
+        sys.exit(1)
     report_path = out_dir / "GRAPH_REPORT.md"
     report_path.write_text(report, encoding="utf-8")
-    to_json(G, communities, str(gp), built_at_commit=commit)
     labels_path.write_text(
         json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False),
         encoding="utf-8",
@@ -822,7 +879,7 @@ def _cmd_check_update(target: Path, out_dir: Path) -> None:
         sys.exit(1)
 
     print(f"[graphify-sf] scanning {target} for changes since last run...")
-    detection = detect_incremental(target, manifest_path=str(manifest_path))
+    detection = detect_incremental(target, manifest_path=str(manifest_path), out_dir=out_dir)
 
     new_files = detection.get("new_files", {})
     unchanged_files = detection.get("unchanged_files", {})
@@ -943,10 +1000,9 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
         suggested_questions=questions,
         built_at_commit=commit,
     )
+    to_json(G, communities, str(out_path), force=True, built_at_commit=commit)  # the graph first
     report_path = out_dir / "GRAPH_REPORT.md"
     report_path.write_text(report, encoding="utf-8")
-
-    to_json(G, communities, str(out_path), force=True, built_at_commit=commit)
 
     import json as _json
 
@@ -1480,7 +1536,7 @@ _GSF_LOG="${HOME}/.cache/graphify-sf-rebuild.log"
 mkdir -p "$(dirname "$_GSF_LOG")"
 echo "[graphify-sf hook] ${GSF_CHANGED} metadata file(s) changed — rebuilding graph in background..."
 nohup "$GSF_PYTHON" -m graphify_sf . --update --no-viz \\
-    > "$_GSF_LOG" 2>&1 < /dev/null &
+    >> "$_GSF_LOG" 2>&1 < /dev/null &
 disown 2>/dev/null || true
 # graphify-sf-hook-end
 """
@@ -1516,7 +1572,7 @@ _GSF_LOG="${HOME}/.cache/graphify-sf-rebuild.log"
 mkdir -p "$(dirname "$_GSF_LOG")"
 echo "[graphify-sf hook] branch switched — rebuilding graph in background..."
 nohup "$GSF_PYTHON" -m graphify_sf . --update --no-viz \\
-    > "$_GSF_LOG" 2>&1 < /dev/null &
+    >> "$_GSF_LOG" 2>&1 < /dev/null &
 disown 2>/dev/null || true
 # graphify-sf-checkout-hook-end
 """
@@ -1933,7 +1989,8 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        _cmd_merge_graphs(graph_path_args, Path(out_path_str), no_viz=no_viz)
+        with _output_lock(Path(out_path_str).parent):
+            _cmd_merge_graphs(graph_path_args, Path(out_path_str), no_viz=no_viz)
         return
 
     # ── stats ──────────────────────────────────────────────────────
@@ -2128,19 +2185,20 @@ def main() -> None:
                 i += 1
 
         out_dir = Path(out_dir_str)
-        _run_pipeline(
-            target,
-            out_dir,
-            update=update,
-            directed=directed,
-            no_viz=no_viz,
-            max_workers=max_workers,
-            force=force,
-            backend=backend,
-            token_budget=token_budget,
-            respect_ignore=respect_ignore,
-            verbose=verbose,
-        )
+        with _output_lock(out_dir):
+            _run_pipeline(
+                target,
+                out_dir,
+                update=update,
+                directed=directed,
+                no_viz=no_viz,
+                max_workers=max_workers,
+                force=force,
+                backend=backend,
+                token_budget=token_budget,
+                respect_ignore=respect_ignore,
+                verbose=verbose,
+            )
         return
 
     # ── Version ────────────────────────────────────────────────────
@@ -2180,7 +2238,8 @@ def main() -> None:
                 i += 1
 
         out_dir = Path(out_dir_str)
-        _cmd_cluster_only(Path(target_str), out_dir, no_viz=no_viz, graph_path=graph_override)
+        with _output_lock(out_dir):
+            _cmd_cluster_only(Path(target_str), out_dir, no_viz=no_viz, graph_path=graph_override)
         return
 
     # ── query ──────────────────────────────────────────────────────
@@ -2311,6 +2370,13 @@ def main() -> None:
             print(f"error: graph not found: {graph_path}", file=sys.stderr)
             sys.exit(1)
 
+        if fmt == "json":
+            # Load and write under the output lock so a concurrent rebuild can't be overwritten
+            # with an older copy of the graph.
+            with _output_lock(out_dir):
+                _cmd_export_json(graph_path, out_dir)
+            return
+
         # ── neo4j --push (special: doesn't need full graph load up front) ──
         if fmt in ("neo4j",):
             neo4j_uri = "bolt://localhost:7687"
@@ -2379,18 +2445,7 @@ def main() -> None:
                 labels = {int(k): v for k, v in json.loads(labels_path.read_text(encoding="utf-8")).items()}
             except Exception:
                 pass
-        communities: dict[int, list[str]] = {}
-
-        # Re-derive communities from node community attribute
-        for nid, data in G.nodes(data=True):
-            cid = data.get("community")
-            if cid is not None:
-                communities.setdefault(int(cid), []).append(nid)
-
-        if not communities:
-            from graphify_sf.cluster import cluster
-
-            communities = cluster(G)
+        communities = _communities_of(G)
 
         if fmt in ("html", "viz"):
             from graphify_sf.export import to_html
@@ -2419,15 +2474,6 @@ def main() -> None:
             out_path = out_dir / "cypher.txt"
             to_cypher(G, str(out_path))
             print(f"cypher.txt written to {out_path}")
-
-        elif fmt == "json":
-            from graphify_sf.export import to_json
-
-            out_path = out_dir / "graph.json"
-            # Re-exporting doesn't re-read the project: keep the commit the graph was built from.
-            commit = raw.get("built_at_commit") if isinstance(raw, dict) else None
-            to_json(G, communities, str(out_path), force=True, built_at_commit=commit)
-            print(f"graph.json written to {out_path}")
 
         elif fmt == "wiki":
             from graphify_sf.export import to_wiki

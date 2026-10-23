@@ -2,7 +2,7 @@
 "use strict";
 
 const { spawn } = require("child_process");
-const { ensureBinary } = require("../lib/download");
+const { ensureBinary, describeError } = require("../lib/download");
 
 ensureBinary()
   .then((bin) => {
@@ -16,6 +16,6 @@ ensureBinary()
     });
   })
   .catch((err) => {
-    process.stderr.write(`graphify-sf: ${err.message}\n`);
+    process.stderr.write(`graphify-sf: ${describeError(err)}\n`);
     process.exit(1);
   });

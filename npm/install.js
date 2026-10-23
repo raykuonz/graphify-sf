@@ -20,7 +20,7 @@
 // print actionable remediation and still exit 0; the binary is fetched lazily
 // on first run instead.
 
-const { envBinary, subpackageBinary, download } = require("./lib/download");
+const { envBinary, subpackageBinary, download, describeError } = require("./lib/download");
 
 async function main() {
   // If a binary already resolves (env override or the platform subpackage),
@@ -38,7 +38,7 @@ async function main() {
   } catch (err) {
     process.stderr.write(
       `\ngraphify-sf: no prebuilt binary for this platform and the fallback download failed.\n` +
-        `  Reason: ${err.message}\n` +
+        `  Reason: ${describeError(err)}\n` +
         `\n` +
         `  This is non-fatal — installation will continue. The binary will be\n` +
         `  fetched automatically the first time you run graphify-sf, provided\n` +

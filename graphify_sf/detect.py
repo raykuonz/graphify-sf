@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sys
+import unicodedata
 from enum import Enum
 from pathlib import Path
 
@@ -392,7 +393,54 @@ def _classify_doc_file(path: Path) -> DocFileType | None:
     return None
 
 
-def detect(root: Path, *, respect_ignore: bool = True) -> dict:
+def _name_key(name: str) -> str:
+    """Case- and Unicode-normalisation-insensitive form of a directory name."""
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _is_same_dir(candidate: str, target: Path) -> bool:
+    """Whether *candidate* is the directory *target* (OSError means "no")."""
+    try:
+        return os.path.samefile(candidate, target)
+    except OSError:
+        return os.path.normcase(os.path.realpath(candidate)) == os.path.normcase(str(target))
+
+
+def contained_out_dir(root: Path, out_dir: Path | None) -> Path | None:
+    """The real path of *out_dir* when it is an existing directory strictly inside *root*.
+
+    graphify-sf writes its reports (GRAPH_REPORT.md, ...) into the output directory, so a
+    run that scanned them would read its own output back in. The default name is already
+    pruned by ``_SKIP_DIRS``; this covers any ``--out`` / ``GRAPHIFY_SF_OUT`` location.
+    Returns None when there is nothing to prune: no *out_dir*, it does not exist yet, it is
+    outside *root*, or it is *root* itself (that case warns, since the reports are scanned).
+    """
+    if out_dir is None:
+        return None
+    out = Path(os.path.realpath(out_dir))
+    real_root = Path(os.path.realpath(root))
+    if _is_same_dir(str(out), real_root):
+        print(
+            "[graphify-sf] WARNING: --out is the project root, so the reports written there are "
+            "scanned on the next run. Use a dedicated output directory.",
+            file=sys.stderr,
+        )
+        return None
+    if not out.is_dir():
+        return None
+    # Inside the root? Compare each parent of *out* by identity, not by spelling: on macOS a
+    # differently cased or normalised spelling of the same directory is still the same one.
+    if not any(_is_same_dir(str(parent), real_root) for parent in out.parents):
+        return None  # outside the project (or an ancestor of it): nothing to prune
+    return out
+
+
+def is_out_dir(dirpath: str, name: str, out: Path | None, out_key: str | None) -> bool:
+    """Whether the walked directory ``dirpath/name`` is the output directory *out*."""
+    return out is not None and _name_key(name) == out_key and _is_same_dir(os.path.join(dirpath, name), out)
+
+
+def detect(root: Path, *, respect_ignore: bool = True, out_dir: Path | None = None) -> dict:
     """Scan the SFDX project and return detected files grouped by type.
 
     When ``respect_ignore`` is True (default), files matching the project's
@@ -400,8 +448,19 @@ def detect(root: Path, *, respect_ignore: bool = True) -> dict:
     Pass ``respect_ignore=False`` (CLI: ``--include-ignored``) to scan everything
     regardless of those declarations. The hardcoded ``_SKIP_DIRS`` floor and the
     ``.graphifysfignore`` file are always applied.
+
+    ``out_dir`` is the directory graphify-sf writes its output to. When it lies inside
+    *root* it is never scanned, and office-file sidecars are written under it (otherwise
+    under ``<root>/graphify-sf-out``, which is pruned).
     """
     root = root.resolve()
+    skip_out = contained_out_dir(root, out_dir)
+    out_key = _name_key(skip_out.name) if skip_out is not None else None
+    if skip_out is not None and skip_out.name not in _SKIP_DIRS:
+        # Never drop files silently: say which folder is excluded (a folder holding metadata
+        # would otherwise vanish from the graph without a trace).
+        print(f"[graphify-sf] not scanning the output directory {skip_out}", file=sys.stderr)
+    sidecar_base = Path(os.path.realpath(out_dir)) if out_dir is not None and skip_out is None else None
     files = {ft.value: [] for ft in SFFileType}
     doc_files: dict[str, list[str]] = {ft.value: [] for ft in DocFileType}
     bundle_dirs = {"lwc": [], "aura": []}
@@ -410,7 +469,13 @@ def detect(root: Path, *, respect_ignore: bool = True) -> dict:
     skipped_by_source: dict[str, int] = {".gitignore": 0, ".forceignore": 0, ".graphifysfignore": 0}
     ignore_patterns = _load_sfgraphignore(root)
     ignore_specs = _load_ignore_specs(root) if respect_ignore else {}
-    converted_dir = root / "graphify-sf-out" / "converted"
+    # Sidecars follow --out, except when --out is the root (then root/converted would be scanned).
+    if skip_out is not None:
+        converted_dir = skip_out / "converted"
+    elif sidecar_base is not None and not _is_same_dir(str(sidecar_base), root):
+        converted_dir = sidecar_base / "converted"
+    else:
+        converted_dir = root / "graphify-sf-out" / "converted"
 
     def _skip_reason(path: Path) -> str | None:
         """Return the ignore-source name if path should be skipped, else None."""
@@ -421,8 +486,8 @@ def detect(root: Path, *, respect_ignore: bool = True) -> dict:
     for dirpath, dirnames, filenames in os.walk(root):
         dp = Path(dirpath)
 
-        # Prune skip dirs
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        # Prune skip dirs, and the output directory wherever it is
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not is_out_dir(dirpath, d, skip_out, out_key)]
 
         # Check for LWC/Aura bundles
         if dp.parent.name == "lwc" and _is_lwc_bundle(dp):
@@ -536,9 +601,11 @@ def save_manifest(
     Path(manifest_path).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def detect_incremental(root: Path, manifest_path: str, *, respect_ignore: bool = True) -> dict:
+def detect_incremental(
+    root: Path, manifest_path: str, *, respect_ignore: bool = True, out_dir: Path | None = None
+) -> dict:
     """Like detect(), but returns only new or modified files since the last run."""
-    full = detect(root, respect_ignore=respect_ignore)
+    full = detect(root, respect_ignore=respect_ignore, out_dir=out_dir)
     manifest = load_manifest(manifest_path)
 
     if not manifest:

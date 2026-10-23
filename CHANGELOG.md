@@ -11,6 +11,66 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.6] — 2026-10-23
+
+A bug-fix release for the output directory, concurrent runs and `graph.json` writes. Four
+behaviours change; each is listed under **Changed**.
+
+### Fixed
+- **A custom `--out` inside the project was scanned as part of the project.** Only the name
+  `graphify-sf-out` was skipped, so with `--out <project>/reports` (or `GRAPHIFY_SF_OUT`) the run's
+  own `GRAPH_REPORT.md` and `graph.html` were read back in as documents, and the graph grew on every
+  run (6 → 24 → 26 links on a small project). The output directory is now never scanned, whatever it
+  is called and however its path is spelled (case, `out/.`). A run that skips one prints
+  `not scanning the output directory …`. If `--out` is the project root itself it can't be excluded,
+  and a warning says so.
+- **Git hooks, the CLI and `watch` could overwrite each other's output.** The post-commit and
+  post-checkout hooks both start a background rebuild, and nothing stopped two runs from writing the
+  same files with the older tree finishing last. Runs now take turns per output directory: a plain
+  or `--update` run, the git hooks, `watch`, `cluster-only`, `export json` and `merge-graphs`. The
+  second prints `another run is updating <dir>; waiting…` and continues when the first is done. The
+  other `export` formats don't take the lock.
+  - It gives up with exit 1 after 15 minutes. Set `GRAPHIFY_SF_LOCK_TIMEOUT` (seconds) to change
+    that. Each hook run waits its own turn, so several quick commits mean several rebuilds in a row.
+  - `watch` waits as long as it takes, and folds the changes that arrive meanwhile into one rebuild
+    instead of queueing one per change. Its first build is skipped if a run that held the lock
+    already produced `graph.json`.
+  - A run that is killed does not leave the lock behind, and neither do its extraction workers.
+  - **Not covered:** Windows (no `flock`) and filesystems that don't support it (some network
+    mounts) run unlocked, as before. A warning says so when the filesystem refuses the lock.
+- **An interrupted run could leave a truncated `graph.json`.** It is now written to a temporary file
+  and renamed into place, so `serve` and other readers see the old file or the new one. If the
+  rename keeps failing (on Windows, another program holding the file open), the run exits 1 with a
+  clear error and the previous `graph.json` is left untouched. Permission bits and symlinks are
+  kept; hardlinks, owner and ACLs are not. A run killed at the wrong moment can leave a hidden
+  `.graph.json.*.tmp` file in the output directory.
+- **A refused write still produced a report and HTML.** When `graph.json` was not written, the new
+  `GRAPH_REPORT.md`, `graph.html`, labels and `manifest.json` were still written next to the old
+  graph, and `check-update` then hid the stale graph. `graph.json` is now written first, and the
+  report, labels, manifest and HTML are written only after it succeeds. `cluster-only` and
+  `merge-graphs` write the graph first too, and `cluster-only`, `merge-graphs` and `export json`
+  exit 1 with one error line when the graph can't be written. (Converted `.docx`/`.xlsx` sidecars
+  are produced while scanning, so they can exist even when the graph isn't written.)
+- **The npm launcher printed a doubled prefix** (`graphify-sf: graphify-sf: sha256 mismatch …`).
+- **CHANGELOG link references** stopped at 0.3.5; 0.3.6–0.4.6 are added.
+
+### Changed
+- **A plain run that would shrink `graph.json` now exits 1** (it printed a warning and exited 0).
+  The old graph is kept and nothing else is written. `--force` still overrides, and `--update`
+  never needs it.
+- **Document sidecars** (converted `.docx`/`.xlsx`) are written under `<out>/converted` instead of
+  always `<project>/graphify-sf-out/converted`. They only move when the output directory isn't
+  `<project>/graphify-sf-out`: a custom `--out`, or running from a different directory (the
+  default `graphify-sf-out` is relative to where you run the command). No stray `graphify-sf-out`
+  folder appears in the project any more.
+- **A read-only `graph.json` is replaced** (the old in-place write failed on it), while a `graph.json`
+  that is a single-file bind mount, or sits in a directory you can't write to, now fails (exit 1).
+- **The hook log is appended to** instead of overwritten, so two hooks can't scramble it; it is not
+  trimmed. Run `graphify-sf hook uninstall` and `graphify-sf hook install` to get the new hook text.
+  The lock needs no reinstall: it lives in the CLI that the hooks call.
+
+---
+
 ## [0.4.5] — 2026-10-23
 
 A bug-fix release. One fix changes behaviour: `--update` now rebuilds the graph instead of merging
@@ -770,7 +830,18 @@ pairs ever survived).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/raykuonz/graphify-sf/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/raykuonz/graphify-sf/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/raykuonz/graphify-sf/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/raykuonz/graphify-sf/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/raykuonz/graphify-sf/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/raykuonz/graphify-sf/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/raykuonz/graphify-sf/compare/v0.3.9...v0.4.0
+[0.3.9]: https://github.com/raykuonz/graphify-sf/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/raykuonz/graphify-sf/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/raykuonz/graphify-sf/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/raykuonz/graphify-sf/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/raykuonz/graphify-sf/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/raykuonz/graphify-sf/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/raykuonz/graphify-sf/compare/v0.3.2...v0.3.3
