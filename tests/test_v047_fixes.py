@@ -255,12 +255,15 @@ def test_a_failed_in_place_write_restores_the_old_bytes_and_keeps_the_temp(tmp_p
     monkeypatch.setenv("GRAPHIFY_SF_NONATOMIC_WRITE", "1")
     _fail_replace(monkeypatch, errno.EBUSY)
     real_fsync = os.fsync
+    target_inode = target.stat().st_ino
     calls = {"n": 0}
 
     def fsync_fails_once(fd):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise OSError(errno.ENOSPC, "No space left on device")
+        # fail only the first fsync of the TARGET, so an fsync added elsewhere can't change this test
+        if os.fstat(fd).st_ino == target_inode:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError(errno.ENOSPC, "No space left on device")
         return real_fsync(fd)
 
     monkeypatch.setattr(export.os, "fsync", fsync_fails_once)
@@ -296,3 +299,55 @@ def test_nonatomic_flag_is_only_for_the_documented_values(monkeypatch):
     for value, expected in (("1", True), ("true", True), ("YES", True), ("0", False), ("", False), ("no", False)):
         monkeypatch.setenv("GRAPHIFY_SF_NONATOMIC_WRITE", value)
         assert export._nonatomic_write_allowed() is expected
+
+
+def test_in_place_write_that_cannot_even_open_the_target_says_it_is_unchanged(tmp_path, monkeypatch):
+    target = tmp_path / "graph.json"
+    target.write_text('{"previous": true}', encoding="utf-8")
+    monkeypatch.setenv("GRAPHIFY_SF_NONATOMIC_WRITE", "1")
+    _fail_replace(monkeypatch, errno.EBUSY)
+    real_open = open
+
+    def open_denied_for_target(file, mode="r", *a, **k):
+        if str(file) == str(target.resolve()) and "+" in mode:
+            raise PermissionError(errno.EROFS, "Read-only file system")
+        return real_open(file, mode, *a, **k)
+
+    monkeypatch.setattr(export, "open", open_denied_for_target, raising=False)
+
+    with pytest.raises(OSError, match="left unchanged") as exc:
+        export._write_json_atomic(str(target), {"new": True})
+
+    assert "could NOT be restored" not in str(exc.value)
+    assert target.read_text(encoding="utf-8") == '{"previous": true}'
+
+
+def test_uninstall_does_not_claim_to_remove_a_block_without_an_end_marker(tmp_path):
+    from graphify_sf.__main__ import _uninstall_single_hook
+
+    hook = tmp_path / "post-commit"
+    broken = f"#!/bin/sh\n{_HOOK_MARKER_START}\necho half a block\n"
+    hook.write_text(broken, encoding="utf-8")
+
+    message = _uninstall_single_hook(tmp_path, "post-commit", _HOOK_MARKER_START, _HOOK_MARKER_END)
+
+    assert "no end marker" in message and "by hand" in message
+    assert hook.read_text(encoding="utf-8") == broken
+
+
+@posix_only
+def test_refresh_writes_through_a_symlinked_hook_and_keeps_its_mode(tmp_path):
+    tracked = tmp_path / "tools" / "post-commit"
+    tracked.parent.mkdir()
+    tracked.write_text("#!/bin/sh\n" + _old_block(_HOOK_BLOCK), encoding="utf-8")
+    tracked.chmod(0o750)
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "post-commit").symlink_to(tracked)
+
+    message = _install_single_hook(hooks, "post-commit", _HOOK_BLOCK, _HOOK_MARKER_START, _HOOK_MARKER_END)
+
+    assert message.startswith("updated at")
+    assert (hooks / "post-commit").is_symlink()
+    assert _LOG_ROTATE_SNIPPET in tracked.read_text(encoding="utf-8")
+    assert stat.S_IMODE(tracked.stat().st_mode) == 0o750

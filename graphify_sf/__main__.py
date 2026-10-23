@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -1651,10 +1652,16 @@ def _install_single_hook(hooks_dir: Path, name: str, script: str, marker: str, m
 
 
 def _write_hook(hook_path: Path, text: str) -> None:
-    tmp = hook_path.with_suffix(".tmp")
+    """Write a hook file atomically, following a symlinked hook and keeping its mode (>= executable)."""
+    real = Path(os.path.realpath(hook_path))
+    try:
+        mode = stat.S_IMODE(real.stat().st_mode) | stat.S_IXUSR
+    except OSError:
+        mode = 0o755
+    tmp = real.with_name(real.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, hook_path)
-    hook_path.chmod(0o755)
+    tmp.chmod(mode)  # before the rename, so git never sees a non-executable hook
+    os.replace(tmp, real)
 
 
 def _refresh_hook_block(hook_path: Path, content: str, script: str, marker: str, marker_end: str) -> str:
@@ -1665,12 +1672,12 @@ def _refresh_hook_block(hook_path: Path, content: str, script: str, marker: str,
     if match is None:
         return (
             f"graphify-sf section in {hook_path} has no end marker; left unchanged "
-            "(run 'graphify-sf hook uninstall' first to replace it)"
+            "(remove the graphify-sf section from that file by hand, then run 'graphify-sf hook install')"
         )
     if match.group(0).rstrip("\n") == script.rstrip("\n"):
         return f"already up to date at {hook_path}"
     _write_hook(hook_path, content[: match.start()] + script + content[match.end() :])
-    return f"updated at {hook_path}"
+    return f"updated at {hook_path} (local edits inside the graphify-sf block, if any, were replaced)"
 
 
 def _uninstall_single_hook(hooks_dir: Path, name: str, marker_start: str, marker_end: str) -> str:
@@ -1683,6 +1690,8 @@ def _uninstall_single_hook(hooks_dir: Path, name: str, marker_start: str, marker
         return f"graphify-sf section not found in {name}"
     import re as _re
 
+    if not _re.search(rf"{_re.escape(marker_start)}\n.*?{_re.escape(marker_end)}", content, flags=_re.DOTALL):
+        return f"graphify-sf section in {hook_path} has no end marker; left unchanged (remove it by hand)"
     updated = _re.sub(
         rf"\n*{_re.escape(marker_start)}\n.*?{_re.escape(marker_end)}\n?",
         "",

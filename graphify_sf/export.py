@@ -404,7 +404,14 @@ def _write_in_place(tmp: str, target: str) -> None:
     except FileNotFoundError:
         backup = None
     try:
-        with open(target, "r+b") as f:
+        handle = open(target, "r+b")  # noqa: SIM115 - closed by the with below
+    except OSError as exc:  # nothing was touched: say so instead of claiming damage
+        raise OSError(
+            f"in-place write of {target} failed ({exc}); the previous file was left unchanged; "
+            f"the complete new graph is kept at {tmp}"
+        ) from exc
+    try:
+        with handle as f:
             f.write(new)
             f.truncate()
             f.flush()

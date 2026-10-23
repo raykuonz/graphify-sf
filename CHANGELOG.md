@@ -20,8 +20,10 @@ A small release for the git hooks and `graph.json` writes. Two behaviours change
   none of the hook fixes since 0.4.4 (the 0.4.5 file filter, the 0.4.6 append-only log, and the
   rotation below) reached existing repositories unless you ran `hook uninstall` first. It now replaces
   graphify-sf's own block with the current one and leaves the rest of the hook file alone (including
-  `core.hooksPath` and Husky hooks); it says `updated`, `already up to date`, or, if the block has
-  lost its end marker, leaves the file untouched and tells you. **Run `graphify-sf hook install`
+  `core.hooksPath` and Husky hooks; a symlinked hook is written through the link and keeps its
+  mode); anything you edited inside graphify-sf's own block is replaced. It says `updated`, `already up to date`, or, if the block has
+  lost its end marker, leaves the file untouched and tells you to remove the section by hand
+  (`hook uninstall` now says the same instead of claiming it removed it). **Run `graphify-sf hook install`
   again in each repository after upgrading.**
 - **The hook log grew without limit.** `~/.cache/graphify-sf-rebuild.log` is now moved to
   `graphify-sf-rebuild.log.1` once it passes 1 MiB (about 1–2 MiB is kept). The check only reads file
@@ -36,7 +38,7 @@ A small release for the git hooks and `graph.json` writes. Two behaviours change
 - **`GRAPHIFY_SF_NONATOMIC_WRITE=1` allows an in-place write for exactly that case** (`EBUSY` or
   `EXDEV`). It is off by default because it is not crash-safe: an interrupted write can leave a
   damaged `graph.json`. The old content is restored if the write fails, and the complete new graph is
-  kept beside it. Mounting the output directory instead needs no switch. A `graph.json` that can't be
+  kept beside it as a `.tmp` file (the next write removes it once it is an hour old). Mounting the output directory instead needs no switch. A `graph.json` that can't be
   replaced because it is held open or the directory is read-only (`PermissionError`) still fails and
   leaves the old file untouched.
 - `hook install` rewrites graphify-sf's block in hook files that already contain it (see Fixed).
