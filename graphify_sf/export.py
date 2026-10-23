@@ -369,8 +369,8 @@ def _write_json_atomic(output_path: str, data: dict) -> None:
             json.dump(data, f, indent=2)
         try:
             os.chmod(tmp, stat.S_IMODE(os.stat(target).st_mode))
-        except FileNotFoundError:
-            pass  # new file: keep the umask-derived default
+        except OSError:
+            pass  # new file, or a filesystem without permission bits: keep the default
         for attempt in range(_REPLACE_ATTEMPTS):
             try:
                 os.replace(tmp, target)

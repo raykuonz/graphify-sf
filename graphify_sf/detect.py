@@ -450,8 +450,9 @@ def detect(root: Path, *, respect_ignore: bool = True, out_dir: Path | None = No
     ``.graphifysfignore`` file are always applied.
 
     ``out_dir`` is the directory graphify-sf writes its output to. When it lies inside
-    *root* it is never scanned, and office-file sidecars are written under it (otherwise
-    under ``<root>/graphify-sf-out``, which is pruned).
+    *root* it is never scanned. Office-file sidecars are written to ``<out_dir>/converted``,
+    except when ``out_dir`` is *root* itself or not given (then ``<root>/graphify-sf-out/converted``,
+    which is pruned).
     """
     root = root.resolve()
     skip_out = contained_out_dir(root, out_dir)

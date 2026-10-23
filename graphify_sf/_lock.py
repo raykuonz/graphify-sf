@@ -122,5 +122,5 @@ def file_lock(path: Path, *, wait: float | None = 0.0, label: str | None = None)
         finally:
             with contextlib.suppress(ValueError):
                 _HELD.remove(handle)
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError, ValueError):  # ValueError: handle already closed (fork child)
                 fcntl.flock(handle, fcntl.LOCK_UN)

@@ -746,3 +746,101 @@ def test_the_watch_first_build_is_skipped_when_a_run_holding_the_lock_just_built
         watch_mod.watch(project, out)
 
     assert built == []
+
+
+# ── delta-review follow-ups ────────────────────────────────────────────────────────────────
+
+
+def test_cluster_only_and_merge_graphs_validate_inputs_before_creating_the_output_dir(tmp_path, monkeypatch, capsys):
+    from graphify_sf.__main__ import main
+
+    out = tmp_path / "never-built"
+    monkeypatch.setattr("sys.argv", ["graphify-sf", "cluster-only", str(tmp_path), "--out", str(out)])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert "no graph found" in capsys.readouterr().err
+    assert not out.exists()  # an empty output dir would make the post-checkout hook start rebuilds
+
+    merged = tmp_path / "merged" / "graph.json"
+    argv = ["graphify-sf", "merge-graphs", str(tmp_path / "a.json"), str(tmp_path / "b.json"), "--out", str(merged)]
+    monkeypatch.setattr("sys.argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert "graph not found" in capsys.readouterr().err
+    assert not merged.parent.exists()
+
+
+@needs_fcntl
+def test_an_unwritable_output_dir_is_one_error_line_not_a_traceback(tmp_path, monkeypatch, capsys):
+    from graphify_sf.__main__ import main
+
+    _two_class_project(tmp_path / "proj")
+    out = tmp_path / "out"
+    _build(tmp_path / "proj", out)
+    monkeypatch.setattr("sys.argv", ["graphify-sf", "cluster-only", str(tmp_path / "proj"), "--out", str(out)])
+
+    real_mkdir = Path.mkdir
+
+    def denied(self, *a, **k):
+        if self == out:
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+        return real_mkdir(self, *a, **k)
+
+    monkeypatch.setattr(Path, "mkdir", denied)
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and "Traceback" not in err
+
+
+@needs_fcntl
+def test_cluster_only_also_locks_the_directory_of_an_explicit_graph(tmp_path, monkeypatch, capsys):
+    from graphify_sf.__main__ import main
+
+    _two_class_project(tmp_path / "proj")
+    other = tmp_path / "other"
+    _build(tmp_path / "proj", other)
+    out = tmp_path / "out"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "graphify-sf",
+            "cluster-only",
+            str(tmp_path / "proj"),
+            "--graph",
+            str(other / "graph.json"),
+            "--out",
+            str(out),
+        ],
+    )
+    monkeypatch.setenv("GRAPHIFY_SF_LOCK_TIMEOUT", "1")
+
+    with _Holder(other / _lock.LOCK_NAME), pytest.raises(SystemExit) as exc:  # a rebuild of `other` is running
+        main()
+
+    assert exc.value.code == 1
+    assert "held the lock" in capsys.readouterr().err
+
+
+def test_to_json_tolerates_a_filesystem_that_refuses_permission_bits(tmp_path, monkeypatch):
+    from graphify_sf import export
+
+    path = tmp_path / "graph.json"
+    path.write_text("{}", encoding="utf-8")
+    real_stat = os.stat
+    target = os.path.realpath(path)  # computed before os.stat is patched
+
+    def stat_denied_for_target(p, *a, **k):
+        if str(p) == target:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        return real_stat(p, *a, **k)
+
+    monkeypatch.setattr(export.os, "stat", stat_denied_for_target)
+
+    assert export.to_json(_tiny_graph(), {}, str(path), force=True) is True
+    assert json.loads(path.read_text(encoding="utf-8"))["nodes"]

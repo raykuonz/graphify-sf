@@ -61,9 +61,9 @@ behaviours change; each is listed under **Changed**.
 - **Document sidecars** (converted `.docx`/`.xlsx`) are written under `<out>/converted` instead of
   always `<project>/graphify-sf-out/converted`. They only move when the output directory isn't
   `<project>/graphify-sf-out`: a custom `--out`, or running from a different directory (the
-  default `graphify-sf-out` is relative to where you run the command). No stray `graphify-sf-out`
-  folder appears in the project any more.
-- **A read-only `graph.json` is replaced** (the old in-place write failed on it), while a `graph.json`
+  default `graphify-sf-out` is relative to where you run the command). A stray
+  `graphify-sf-out` folder no longer appears in the project, except when `--out` is the project root.
+- **A read-only `graph.json` is replaced** on macOS and Linux (the old in-place write failed on it; on Windows it still fails), while a `graph.json`
   that is a single-file bind mount, or sits in a directory you can't write to, now fails (exit 1).
 - **The hook log is appended to** instead of overwritten, so two hooks can't scramble it; it is not
   trimmed. Run `graphify-sf hook uninstall` and `graphify-sf hook install` to get the new hook text.

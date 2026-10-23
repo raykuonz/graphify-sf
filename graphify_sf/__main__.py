@@ -54,19 +54,19 @@ def _output_lock(out_dir: Path):
     from graphify_sf._lock import LOCK_NAME, file_lock, lock_timeout
 
     wait = lock_timeout()
-    with file_lock(Path(out_dir) / LOCK_NAME, wait=wait, label=str(out_dir)) as acquired:
-        if not acquired:
-            print(
-                f"error: another graphify-sf run has held the lock on {out_dir} for over {wait:.0f}s; "
-                "giving up (raise GRAPHIFY_SF_LOCK_TIMEOUT, or check for a stuck process)",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        try:
+    try:
+        with file_lock(Path(out_dir) / LOCK_NAME, wait=wait, label=str(out_dir)) as acquired:
+            if not acquired:
+                print(
+                    f"error: another graphify-sf run has held the lock on {out_dir} for over {wait:.0f}s; "
+                    "giving up (raise GRAPHIFY_SF_LOCK_TIMEOUT, or check for a stuck process)",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             yield
-        except OSError as exc:  # e.g. graph.json cannot be replaced: one clear line, not a traceback
-            print(f"error: {exc}", file=sys.stderr)
-            sys.exit(1)
+    except OSError as exc:  # unwritable output dir, graph.json cannot be replaced: one line, not a traceback
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _default_graph_path() -> str:
@@ -1989,6 +1989,10 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        for gp in graph_path_args:  # check before locking: the lock creates the output directory
+            if not gp.exists():
+                print(f"error: graph not found: {gp}", file=sys.stderr)
+                sys.exit(1)
         with _output_lock(Path(out_path_str).parent):
             _cmd_merge_graphs(graph_path_args, Path(out_path_str), no_viz=no_viz)
         return
@@ -2238,7 +2242,14 @@ def main() -> None:
                 i += 1
 
         out_dir = Path(out_dir_str)
-        with _output_lock(out_dir):
+        gp = graph_override or (out_dir / "graph.json")
+        if not gp.exists():  # check before locking: the lock creates the output directory
+            print(f"error: no graph found at {gp} — run graphify-sf first", file=sys.stderr)
+            sys.exit(1)
+        # --graph may live in another output directory than --out; lock both (sorted: no deadlock).
+        with contextlib.ExitStack() as stack:
+            for lock_dir in sorted({out_dir, gp.parent}, key=str):
+                stack.enter_context(_output_lock(lock_dir))
             _cmd_cluster_only(Path(target_str), out_dir, no_viz=no_viz, graph_path=graph_override)
         return
 
