@@ -11,6 +11,38 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.7] — 2026-10-23
+
+A small release for the git hooks and `graph.json` writes. Two behaviours change; see **Changed**.
+
+### Fixed
+- **`graphify-sf hook install` never updated an installed hook.** It stopped at "already installed", so
+  none of the hook fixes since 0.4.4 (the 0.4.5 file filter, the 0.4.6 append-only log, and the
+  rotation below) reached existing repositories unless you ran `hook uninstall` first. It now replaces
+  graphify-sf's own block with the current one and leaves the rest of the hook file alone (including
+  `core.hooksPath` and Husky hooks); it says `updated`, `already up to date`, or, if the block has
+  lost its end marker, leaves the file untouched and tells you. **Run `graphify-sf hook install`
+  again in each repository after upgrading.**
+- **The hook log grew without limit.** `~/.cache/graphify-sf-rebuild.log` is now moved to
+  `graphify-sf-rebuild.log.1` once it passes 1 MiB (about 1–2 MiB is kept). The check only reads file
+  metadata and can't fail the hook, so it is safe under `set -e`. Two hooks racing can lose one
+  rotation's log lines.
+- **A killed run left `.graph.json.<pid>.<id>.tmp` files behind.** The next write removes ones that
+  are an hour old and match that exact name; other files, symlinks and directories are never touched.
+- **A bind-mounted `graph.json` gave a bare error.** (Docker `-v host/graph.json:/out/graph.json`
+  can't be replaced by a rename; it failed since 0.4.6.) The error now says why and how to proceed.
+
+### Changed
+- **`GRAPHIFY_SF_NONATOMIC_WRITE=1` allows an in-place write for exactly that case** (`EBUSY` or
+  `EXDEV`). It is off by default because it is not crash-safe: an interrupted write can leave a
+  damaged `graph.json`. The old content is restored if the write fails, and the complete new graph is
+  kept beside it. Mounting the output directory instead needs no switch. A `graph.json` that can't be
+  replaced because it is held open or the directory is read-only (`PermissionError`) still fails and
+  leaves the old file untouched.
+- `hook install` rewrites graphify-sf's block in hook files that already contain it (see Fixed).
+
+---
+
 ## [0.4.6] — 2026-10-23
 
 A bug-fix release for the output directory, concurrent runs and `graph.json` writes. Four
@@ -830,7 +862,8 @@ pairs ever survived).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/raykuonz/graphify-sf/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/raykuonz/graphify-sf/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/raykuonz/graphify-sf/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/raykuonz/graphify-sf/compare/v0.4.3...v0.4.4

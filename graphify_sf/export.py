@@ -1,11 +1,13 @@
 # write graph to HTML, JSON, GraphML, Obsidian vault, and Neo4j Cypher
 from __future__ import annotations
 
+import errno
 import html as _html
 import json
 import os
 import re
 import stat
+import sys
 import time
 import uuid
 from collections import Counter
@@ -350,6 +352,81 @@ def _git_head(project: str | Path) -> str | None:
 
 _REPLACE_ATTEMPTS = 6
 _REPLACE_BACKOFF_SECONDS = 0.05
+_STALE_TEMP_SECONDS = 3600
+_NONATOMIC_ENV = "GRAPHIFY_SF_NONATOMIC_WRITE"
+
+
+def _sweep_stale_temps(directory: str, name: str) -> None:
+    """Remove temp files that a killed run left beside *name*.
+
+    Only the exact shape this module generates (``.<name>.<pid>.<8 hex>.tmp``), regular files
+    (never symlinks or directories), and only when an hour old: a live writer's temp file is
+    seconds old. Errors are ignored.
+    """
+    pattern = re.compile(rf"\.{re.escape(name)}\.\d+\.[0-9a-f]{{8}}\.tmp")
+    cutoff = time.time() - _STALE_TEMP_SECONDS
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if (
+                pattern.fullmatch(entry.name)
+                and entry.is_file(follow_symlinks=False)
+                and entry.stat(follow_symlinks=False).st_mtime < cutoff
+            ):
+                os.unlink(entry.path)
+        except OSError:
+            continue
+
+
+def _nonatomic_write_allowed() -> bool:
+    return os.environ.get(_NONATOMIC_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def _write_in_place(tmp: str, target: str) -> None:
+    """Copy the complete temp file into *target* itself (not crash-safe; opt-in, see the caller).
+
+    The old bytes are kept in memory and put back if the write fails; on any failure the temp
+    file is left in place (the caller must not delete it) and OSError names it.
+    """
+    print(
+        f"[graphify-sf] WARNING: {target} cannot be replaced atomically (mount point?); "
+        f"writing it in place because {_NONATOMIC_ENV} is set",
+        file=sys.stderr,
+    )
+    with open(tmp, "rb") as f:
+        new = f.read()
+    try:
+        with open(target, "rb") as f:
+            backup: bytes | None = f.read()
+    except FileNotFoundError:
+        backup = None
+    try:
+        with open(target, "r+b") as f:
+            f.write(new)
+            f.truncate()
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException as exc:
+        restored = False
+        if backup is not None:
+            try:
+                with open(target, "r+b") as f:
+                    f.write(backup)
+                    f.truncate()
+                    f.flush()
+                    os.fsync(f.fileno())
+                restored = True
+            except OSError:
+                pass
+        if not isinstance(exc, Exception):
+            raise  # KeyboardInterrupt / SystemExit: the backup was restored above, keep the signal
+        outcome = "the previous content was restored" if restored else "the previous content could NOT be restored"
+        raise OSError(
+            f"in-place write of {target} failed ({exc}); {outcome}; the complete new graph is kept at {tmp}"
+        ) from exc
 
 
 def _write_json_atomic(output_path: str, data: dict) -> None:
@@ -360,10 +437,16 @@ def _write_json_atomic(output_path: str, data: dict) -> None:
     kept; hardlinks, owner and ACLs are not preserved. If the rename keeps failing (on Windows
     a reader or antivirus scanner may hold the file open) the old file is left untouched and
     OSError is raised: rewriting it in place could leave it truncated.
+
+    A single-file bind mount (Docker ``-v host/graph.json:/out/graph.json``) cannot be renamed
+    over (EBUSY/EXDEV). That fails the same way, with a hint, unless ``GRAPHIFY_SF_NONATOMIC_WRITE``
+    is set, which allows ``_write_in_place`` for exactly those errors.
     """
     target = os.path.realpath(output_path)
     directory, name = os.path.split(target)
+    _sweep_stale_temps(directory, name)
     tmp = os.path.join(directory, f".{name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    keep_tmp = False
     try:
         with open(tmp, "x", encoding="utf-8") as f:  # nosec
             json.dump(data, f, indent=2)
@@ -382,15 +465,31 @@ def _write_json_atomic(output_path: str, data: dict) -> None:
                         "or the directory is not writable); the previous file was left unchanged"
                     ) from exc
                 time.sleep(_REPLACE_BACKOFF_SECONDS * 2**attempt)
+            except OSError as exc:
+                if exc.errno not in (errno.EBUSY, errno.EXDEV):
+                    raise
+                if not _nonatomic_write_allowed():
+                    raise OSError(
+                        f"could not replace {target}: {exc.strerror or exc} (a bind-mounted single file?). "
+                        f"Mount its directory instead, or set {_NONATOMIC_ENV}=1 to allow an in-place write "
+                        "that is not crash-safe; the previous file was left unchanged"
+                    ) from exc
+                try:
+                    _write_in_place(tmp, target)
+                except BaseException:
+                    keep_tmp = True
+                    raise
+                return
     finally:
-        try:
-            os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # a read-only copy (Windows) can't be unlinked
-        except OSError:
-            pass
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        if not keep_tmp:
+            try:
+                os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # a read-only copy (Windows) can't be unlinked
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def to_json(

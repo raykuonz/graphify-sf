@@ -421,7 +421,9 @@ Once installed, type `/graphify-sf` in your AI coding assistant. The skill will:
 ### Post-commit hook — auto-rebuild on commit
 
 ```bash
-# Install: rebuilds graph after any commit that touches metadata files
+# Install: rebuilds graph after any commit that touches metadata files.
+# Run it again after upgrading graphify-sf: it refreshes the installed hook in place
+# and leaves everything else in your hook files alone.
 graphify-sf hook install
 
 # Remove
@@ -436,7 +438,7 @@ The hook installs both `post-commit` and `post-checkout` hooks:
 - **post-commit** — diffs `HEAD~1..HEAD`, triggers rebuild only when Apex, Visualforce, `*-meta.xml` or LWC/Aura bundle files changed
 - **post-checkout** — triggers rebuild on branch switches (when `graphify-sf-out/` exists)
 
-Both hooks run rebuilds in the **background** (`nohup ... & disown`) so `git commit` and `git checkout` return immediately. Rebuild log (appended to): `~/.cache/graphify-sf-rebuild.log`. Runs that write to the same output directory take turns: a second run waits for the first (see `GRAPHIFY_SF_LOCK_TIMEOUT`).
+Both hooks run rebuilds in the **background** (`nohup ... & disown`) so `git commit` and `git checkout` return immediately. Rebuild log (appended to; moved to `.log.1` once it passes 1 MiB): `~/.cache/graphify-sf-rebuild.log`. Runs that write to the same output directory take turns: a second run waits for the first (see `GRAPHIFY_SF_LOCK_TIMEOUT`).
 
 Both hooks skip during rebase, merge, and cherry-pick. The `_hooks_dir()` respects `core.hooksPath` (Husky/Lefthook compatibility).
 
@@ -629,6 +631,7 @@ All configuration via environment variables:
 | `GRAPHIFY_SF_VIZ_NODE_LIMIT` | `5000` | Max nodes before HTML viz switches to aggregated community view |
 | `GRAPHIFY_SF_FORCE` | `` | Set to `1`/`true` to always overwrite `graph.json` |
 | `GRAPHIFY_SF_LOCK_TIMEOUT` | `900` | Seconds a run waits for another run that is writing to the same output directory before giving up (exit 1) |
+| `GRAPHIFY_SF_NONATOMIC_WRITE` | `` | Set to `1`/`true` to let graphify-sf write `graph.json` in place when it is a bind-mounted single file (Docker `-v host/graph.json:/out/graph.json`) and cannot be replaced. Not crash-safe; mounting the output directory is better |
 | `GRAPHIFY_SF_REBUILD_MEMORY_LIMIT_MB` | `` | Cap memory usage for background watch rebuilds (MB) |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Override Claude Code config directory — only set if your Claude Code config lives at a non-standard path (company-managed dotfiles, CI, or multiple installations) |
 
