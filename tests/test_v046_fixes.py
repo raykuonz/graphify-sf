@@ -644,10 +644,13 @@ def test_out_dir_is_found_by_identity_not_spelling(tmp_path):
     from graphify_sf.detect import contained_out_dir
 
     (tmp_path / "Proj" / "reports").mkdir(parents=True)
-    if not (tmp_path / "proj").exists():
-        pytest.skip("case-sensitive filesystem")
 
-    assert contained_out_dir(tmp_path / "proj", tmp_path / "Proj" / "reports") is not None
+    found = contained_out_dir(tmp_path / "proj", tmp_path / "Proj" / "reports")
+
+    if (tmp_path / "proj").exists():  # case-insensitive filesystem (macOS, Windows): same directory
+        assert found is not None
+    else:  # case-sensitive (Linux CI): "proj" is a different, missing directory
+        assert found is None
 
 
 def test_detect_says_which_output_directory_it_is_not_scanning(tmp_path, capsys):
