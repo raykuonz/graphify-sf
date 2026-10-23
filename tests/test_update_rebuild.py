@@ -67,8 +67,11 @@ def test_plain_run_still_refuses_to_shrink_without_force(tmp_path):
     _run(tmp_path / "proj", out, update=False)
 
     (base / "Second.cls").unlink()
-    kept = _run(tmp_path / "proj", out, update=False)
+    with pytest.raises(SystemExit) as exc:  # 0.4.6: a refused write is an error, not a quiet warning
+        _run(tmp_path / "proj", out, update=False)
 
+    kept = json.loads((out / "graph.json").read_text(encoding="utf-8"))
+    assert exc.value.code == 1
     assert "Second" in {n["label"] for n in kept["nodes"]}
 
 

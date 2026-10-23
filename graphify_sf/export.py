@@ -5,6 +5,9 @@ import html as _html
 import json
 import os
 import re
+import stat
+import time
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -345,6 +348,51 @@ def _git_head(project: str | Path) -> str | None:
         return None
 
 
+_REPLACE_ATTEMPTS = 6
+_REPLACE_BACKOFF_SECONDS = 0.05
+
+
+def _write_json_atomic(output_path: str, data: dict) -> None:
+    """Write *data* as JSON so readers see the old file or the new one, never a partial file.
+
+    The JSON goes to a sibling temp file that is renamed over the target. A symlinked target
+    stays a symlink (the link's destination is replaced) and the old file's permission bits are
+    kept; hardlinks, owner and ACLs are not preserved. If the rename keeps failing (on Windows
+    a reader or antivirus scanner may hold the file open) the old file is left untouched and
+    OSError is raised: rewriting it in place could leave it truncated.
+    """
+    target = os.path.realpath(output_path)
+    directory, name = os.path.split(target)
+    tmp = os.path.join(directory, f".{name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with open(tmp, "x", encoding="utf-8") as f:  # nosec
+            json.dump(data, f, indent=2)
+        try:
+            os.chmod(tmp, stat.S_IMODE(os.stat(target).st_mode))
+        except OSError:
+            pass  # new file, or a filesystem without permission bits: keep the default
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp, target)
+                return
+            except PermissionError as exc:
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise OSError(
+                        f"could not replace {target}: {exc.strerror or exc} (another program may hold it open, "
+                        "or the directory is not writable); the previous file was left unchanged"
+                    ) from exc
+                time.sleep(_REPLACE_BACKOFF_SECONDS * 2**attempt)
+    finally:
+        try:
+            os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # a read-only copy (Windows) can't be unlinked
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def to_json(
     G: nx.Graph,
     communities: dict[int, list[str]],
@@ -393,8 +441,7 @@ def to_json(
     data["hyperedges"] = getattr(G, "graph", {}).get("hyperedges", [])
     if built_at_commit:
         data["built_at_commit"] = built_at_commit
-    with open(output_path, "w", encoding="utf-8") as f:  # nosec
-        json.dump(data, f, indent=2)
+    _write_json_atomic(output_path, data)
     return True
 
 

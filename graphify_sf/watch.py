@@ -6,14 +6,14 @@ Uses watchdog when available; falls back to polling every POLL_INTERVAL seconds.
 
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 import threading
 import time
 from pathlib import Path
 
-from graphify_sf.detect import _COMPOUND_EXT_MAP, _SIMPLE_EXT_MAP
+from graphify_sf._lock import LOCK_NAME, file_lock
+from graphify_sf.detect import _COMPOUND_EXT_MAP, _SIMPLE_EXT_MAP, _name_key, contained_out_dir, is_out_dir
 from graphify_sf.detect import _SKIP_DIRS as _DETECT_SKIP_DIRS
 
 # Metadata file patterns that should trigger a rebuild: every suffix detect.py classifies,
@@ -59,6 +59,14 @@ def _in_skipped_dir(path: str, root: Path, resolved_root: Path | None = None) ->
     return any(part in _SKIP_DIRS for part in parts[:-1])
 
 
+def _in_out_dir(path: str, out_skip: Path | None) -> bool:
+    """Whether *path* lies in (or is) the output directory *out_skip*."""
+    if out_skip is None:
+        return False
+    real = Path(os.path.realpath(path))
+    return real == out_skip or out_skip in real.parents
+
+
 def _event_triggers_rebuild(
     event_type: str,
     src: str,
@@ -68,14 +76,24 @@ def _event_triggers_rebuild(
     resolved_root: Path | None = None,
     *,
     windows: bool = os.name == "nt",
+    out_skip: Path | None = None,
 ) -> bool:
-    """Whether a file-system event below *root* can change the graph."""
+    """Whether a file-system event below *root* can change the graph.
+
+    ``out_skip`` is the output directory when it lies strictly inside *root* (see
+    ``detect.contained_out_dir``): the rebuild's own files must not trigger another rebuild.
+    """
     if event_type not in _CHANGE_EVENTS:
         return False
     resolved_root = resolved_root or root.resolve()
     # Judge each end of a move on its own: moving classes/A.cls into dist/ removes it.
     ends = [
-        p for p in (src, dest) if p and not _in_skipped_dir(p, root, resolved_root) and Path(p).name not in _SKIP_DIRS
+        p
+        for p in (src, dest)
+        if p
+        and not _in_skipped_dir(p, root, resolved_root)
+        and Path(p).name not in _SKIP_DIRS
+        and not _in_out_dir(p, out_skip)
     ]
     if not ends:
         return False
@@ -118,38 +136,6 @@ def _apply_resource_limits() -> None:
             pass  # not available on all platforms
 
 
-# ── Rebuild lock ───────────────────────────────────────────────────────────────
-
-
-@contextlib.contextmanager
-def _rebuild_lock(lock_path: Path):
-    """Exclusive file lock to prevent concurrent rebuilds.
-
-    Uses ``fcntl.flock`` (Unix) with a non-blocking acquire that
-    silently skips the rebuild if another process holds the lock.
-    Falls back to a no-op context manager on Windows.
-
-    Yields ``True`` when the lock was acquired, ``False`` when skipped.
-    """
-    try:
-        import fcntl as _fcntl
-
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lock_path, "w") as lf:
-            try:
-                _fcntl.flock(lf, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-                try:
-                    yield True
-                finally:
-                    _fcntl.flock(lf, _fcntl.LOCK_UN)
-            except OSError:
-                # Another rebuild is already running
-                yield False
-    except ImportError:
-        # fcntl not available (Windows) — no locking, always proceed
-        yield True
-
-
 # ── Callflow auto-regeneration ─────────────────────────────────────────────────
 
 
@@ -177,13 +163,10 @@ def _regen_callflow_if_present(out_dir: Path) -> None:
 # ── Core rebuild ──────────────────────────────────────────────────────────────
 
 
-def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
-    """Trigger a rebuild (with lock + resource limits)."""
-    lock_path = out_dir / ".graphify_sf_rebuild.lock"
-    with _rebuild_lock(lock_path) as acquired:
-        if not acquired:
-            print("[graphify-sf watch] rebuild already in progress — skipping", flush=True)
-            return
+def _rebuild_once(target: Path, out_dir: Path, directed: bool, no_viz: bool, on_acquired) -> None:
+    """One rebuild under the output lock (waits for hooks / CLI runs that hold it)."""
+    with file_lock(out_dir / LOCK_NAME, wait=None):
+        on_acquired()  # events that arrived while waiting are covered by the scan below
         _apply_resource_limits()
         from graphify_sf.__main__ import _run_pipeline
 
@@ -195,6 +178,59 @@ def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
             print(f"[graphify-sf watch] rebuild error: {exc}", file=sys.stderr)
         # Re-generate callflow if it was previously built
         _regen_callflow_if_present(out_dir)
+
+
+class _Coalescer:
+    """Run rebuilds one at a time and fold requests that arrive meanwhile into one follow-up.
+
+    A debounce Timer callback that is already running cannot be cancelled, so without this
+    every event during a long rebuild (or a wait for the output lock) would queue a full
+    rebuild of its own. The output lock is released between consecutive rebuilds.
+    """
+
+    def __init__(self, rebuild_once):
+        self._rebuild_once = rebuild_once
+        self._mutex = threading.Lock()
+        self._running = False
+        self._pending = False
+
+    def _on_acquired(self) -> None:
+        with self._mutex:
+            self._pending = False
+
+    def request(self) -> None:
+        with self._mutex:
+            if self._running:
+                self._pending = True
+                return
+            self._running = True
+        try:
+            while True:
+                self._rebuild_once(self._on_acquired)
+                with self._mutex:
+                    if not self._pending:
+                        self._running = False
+                        return
+        except BaseException:
+            with self._mutex:
+                self._running = False
+            raise
+
+
+_COALESCERS: dict[tuple[str, str, bool, bool], _Coalescer] = {}
+_COALESCERS_MUTEX = threading.Lock()
+
+
+def _rebuild(target: Path, out_dir: Path, directed: bool, no_viz: bool) -> None:
+    """Request a rebuild (lock + resource limits + coalescing)."""
+    key = (str(target), str(out_dir), directed, no_viz)
+    with _COALESCERS_MUTEX:
+        coalescer = _COALESCERS.get(key)
+        if coalescer is None:
+            coalescer = _COALESCERS[key] = _Coalescer(
+                lambda on_acquired: _rebuild_once(target, out_dir, directed, no_viz, on_acquired)
+            )
+    coalescer.request()
 
 
 # ── Debounce timer ────────────────────────────────────────────────────────────
@@ -246,12 +282,15 @@ def _watch_watchdog(
     debouncer = _DebounceTimer(debounce, do_rebuild)
     root = Path(target)
     resolved_root = root.resolve()
+    out_skip = contained_out_dir(resolved_root, out_dir)
 
     class Handler(FileSystemEventHandler):
         def on_any_event(self, event):
             src = getattr(event, "src_path", "") or ""
             dest = getattr(event, "dest_path", "") or ""
-            if _event_triggers_rebuild(event.event_type, src, dest, event.is_directory, root, resolved_root):
+            if _event_triggers_rebuild(
+                event.event_type, src, dest, event.is_directory, root, resolved_root, out_skip=out_skip
+            ):
                 debouncer.trigger()
 
     observer = Observer()
@@ -283,10 +322,13 @@ def _watch_polling(
 ) -> None:
     """Fallback: poll every poll_interval seconds."""
 
+    out_skip = contained_out_dir(Path(target).resolve(), out_dir)
+    out_key = _name_key(out_skip.name) if out_skip is not None else None
+
     def _snapshot() -> dict[str, float]:
         snap: dict[str, float] = {}
         for dirpath, dirnames, filenames in os.walk(str(target)):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not is_out_dir(dirpath, d, out_skip, out_key)]
             for fname in filenames:
                 fpath = os.path.join(dirpath, fname)
                 if _is_sf_file(fpath):
@@ -348,10 +390,13 @@ def watch(
         print("[graphify-sf watch] no graph.json found — running initial build...", flush=True)
         from graphify_sf.__main__ import _run_pipeline
 
-        try:
-            _run_pipeline(target, out_dir, directed=directed, no_viz=no_viz)
-        except SystemExit:
-            pass
+        # Under the output lock (a hook may be building too), released before watching starts.
+        with file_lock(out_dir / LOCK_NAME, wait=None):
+            if not graph_json_path.exists():  # a run that held the lock may have just built it
+                try:
+                    _run_pipeline(target, out_dir, directed=directed, no_viz=no_viz)
+                except SystemExit:
+                    pass
 
     try:
         import watchdog  # noqa: F401

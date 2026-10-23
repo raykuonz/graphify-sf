@@ -294,8 +294,16 @@ async function ensureBinary(opts) {
   return dest;
 }
 
+// Messages thrown by this module already start with "graphify-sf: ". Callers that print
+// them under their own prefix use this to avoid "graphify-sf: graphify-sf: ...".
+function describeError(err) {
+  const message = err && err.message != null ? String(err.message) : String(err);
+  return message.replace(/^graphify-sf:\s*/, "");
+}
+
 module.exports = {
   assetName,
+  describeError,
   binaryPath,
   binDir,
   download,
