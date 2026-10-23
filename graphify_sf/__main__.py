@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -1512,6 +1513,15 @@ fi
 [ -z "$GSF_PYTHON" ] && exit 0
 """
 
+# Keeps the log shared by both hooks from growing without limit. Best effort and cheap: the size
+# test only reads metadata (``wc -c`` can read the whole file on BusyBox), and nothing here can fail
+# the hook (it may run under ``set -e``). ``-size +2048`` = more than 2048 blocks of 512 bytes = 1 MiB.
+_LOG_ROTATE_SNIPPET = """\
+if [ -n "$(find "$_GSF_LOG" -type f -size +2048 2>/dev/null)" ]; then
+    mv -f "$_GSF_LOG" "$_GSF_LOG.1" 2>/dev/null || :
+fi
+"""
+
 _HOOK_BLOCK = (
     """\
 # graphify-sf-hook-start
@@ -1534,7 +1544,9 @@ GSF_CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | \\
     + """
 _GSF_LOG="${HOME}/.cache/graphify-sf-rebuild.log"
 mkdir -p "$(dirname "$_GSF_LOG")"
-echo "[graphify-sf hook] ${GSF_CHANGED} metadata file(s) changed — rebuilding graph in background..."
+"""
+    + _LOG_ROTATE_SNIPPET
+    + """echo "[graphify-sf hook] ${GSF_CHANGED} metadata file(s) changed — rebuilding graph in background..."
 nohup "$GSF_PYTHON" -m graphify_sf . --update --no-viz \\
     >> "$_GSF_LOG" 2>&1 < /dev/null &
 disown 2>/dev/null || true
@@ -1570,7 +1582,9 @@ GIT_DIR_PATH=$(git rev-parse --git-dir 2>/dev/null)
     + """
 _GSF_LOG="${HOME}/.cache/graphify-sf-rebuild.log"
 mkdir -p "$(dirname "$_GSF_LOG")"
-echo "[graphify-sf hook] branch switched — rebuilding graph in background..."
+"""
+    + _LOG_ROTATE_SNIPPET
+    + """echo "[graphify-sf hook] branch switched — rebuilding graph in background..."
 nohup "$GSF_PYTHON" -m graphify_sf . --update --no-viz \\
     >> "$_GSF_LOG" 2>&1 < /dev/null &
 disown 2>/dev/null || true
@@ -1623,21 +1637,47 @@ def _hooks_dir(git_root: Path) -> Path:
     return d
 
 
-def _install_single_hook(hooks_dir: Path, name: str, script: str, marker: str) -> str:
-    """Append *script* to hooks_dir/name, creating the file if absent."""
+def _install_single_hook(hooks_dir: Path, name: str, script: str, marker: str, marker_end: str) -> str:
+    """Install *script* into hooks_dir/name: create the file, append to it, or refresh our block."""
     hook_path = hooks_dir / name
     if hook_path.exists():
         content = hook_path.read_text(encoding="utf-8")
         if marker in content:
-            return f"already installed at {hook_path}"
+            return _refresh_hook_block(hook_path, content, script, marker, marker_end)
         updated = content.rstrip() + "\n\n" + script
     else:
         updated = "#!/bin/sh\n\n" + script
-    tmp = hook_path.with_suffix(".tmp")
-    tmp.write_text(updated, encoding="utf-8")
-    os.replace(tmp, hook_path)
-    hook_path.chmod(0o755)
+    _write_hook(hook_path, updated)
     return f"installed at {hook_path}"
+
+
+def _write_hook(hook_path: Path, text: str) -> None:
+    """Write a hook file atomically, following a symlinked hook and keeping its mode (>= executable)."""
+    real = Path(os.path.realpath(hook_path))
+    try:
+        mode = stat.S_IMODE(real.stat().st_mode) | stat.S_IXUSR
+    except OSError:
+        mode = 0o755
+    tmp = real.with_name(real.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.chmod(mode)  # before the rename, so git never sees a non-executable hook
+    os.replace(tmp, real)
+
+
+def _refresh_hook_block(hook_path: Path, content: str, script: str, marker: str, marker_end: str) -> str:
+    """Replace our managed block with the current *script*, leaving the rest of the hook alone."""
+    import re as _re
+
+    match = _re.search(rf"{_re.escape(marker)}\n.*?{_re.escape(marker_end)}\n?", content, flags=_re.DOTALL)
+    if match is None:
+        return (
+            f"graphify-sf section in {hook_path} has no end marker; left unchanged "
+            "(remove the graphify-sf section from that file by hand, then run 'graphify-sf hook install')"
+        )
+    if match.group(0).rstrip("\n") == script.rstrip("\n"):
+        return f"already up to date at {hook_path}"
+    _write_hook(hook_path, content[: match.start()] + script + content[match.end() :])
+    return f"updated at {hook_path} (local edits inside the graphify-sf block, if any, were replaced)"
 
 
 def _uninstall_single_hook(hooks_dir: Path, name: str, marker_start: str, marker_end: str) -> str:
@@ -1650,6 +1690,8 @@ def _uninstall_single_hook(hooks_dir: Path, name: str, marker_start: str, marker
         return f"graphify-sf section not found in {name}"
     import re as _re
 
+    if not _re.search(rf"{_re.escape(marker_start)}\n.*?{_re.escape(marker_end)}", content, flags=_re.DOTALL):
+        return f"graphify-sf section in {hook_path} has no end marker; left unchanged (remove it by hand)"
     updated = _re.sub(
         rf"\n*{_re.escape(marker_start)}\n.*?{_re.escape(marker_end)}\n?",
         "",
@@ -1695,8 +1737,10 @@ def _cmd_hook(action: str) -> None:
         return
 
     if action == "install":
-        commit_msg = _install_single_hook(hdir, "post-commit", _HOOK_BLOCK, _HOOK_MARKER_START)
-        checkout_msg = _install_single_hook(hdir, "post-checkout", _CHECKOUT_HOOK_BLOCK, _CHECKOUT_MARKER_START)
+        commit_msg = _install_single_hook(hdir, "post-commit", _HOOK_BLOCK, _HOOK_MARKER_START, _HOOK_MARKER_END)
+        checkout_msg = _install_single_hook(
+            hdir, "post-checkout", _CHECKOUT_HOOK_BLOCK, _CHECKOUT_MARKER_START, _CHECKOUT_MARKER_END
+        )
         print(f"post-commit:   {commit_msg}")
         print(f"post-checkout: {checkout_msg}")
         print()
