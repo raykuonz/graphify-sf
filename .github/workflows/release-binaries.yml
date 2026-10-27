@@ -20,7 +20,8 @@ name: Release Binaries + npm
 #
 # dry_run=true (workflow_dispatch only) builds from the dispatching ref instead of a tag and
 # exercises every job - artifacts, the five-file checks, checksums, npm packing - without
-# touching the release or the registry: `npm publish --dry-run`, no gh release writes.
+# touching the release or the registry: no gh release writes, and npm packs instead of
+# publishing, outside the `npm` environment so no publish credentials can be minted.
 #
 # npm auth: Trusted Publishing (OIDC). Each of the 6 packages has a trusted
 # publisher for raykuonz/graphify-sf + release-binaries.yml with "npm publish"
@@ -52,7 +53,7 @@ permissions:
 # A release event and a manual dispatch for the same tag must not interleave.
 # Dry runs have no tag and never contend.
 concurrency:
-  group: release-binaries-${{ github.event.inputs.tag || github.event.release.tag_name || github.run_id }}
+  group: release-binaries-${{ github.event.inputs.dry_run == 'true' && github.run_id || github.event.inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
@@ -216,6 +217,7 @@ jobs:
           path: ${{ matrix.asset-name }}
           if-no-files-found: error
           retention-days: 7
+          overwrite: true   # "Re-run all jobs" reuses the run; release assets are never replaced from these
 
   attach-assets:
     name: Attach binaries + record checksums
@@ -234,23 +236,28 @@ jobs:
       EXPECTED: graphify-sf-linux-x64 graphify-sf-linux-arm64 graphify-sf-darwin-x64 graphify-sf-darwin-arm64 graphify-sf-win32-x64.exe
 
     steps:
+      # No merge-multiple: each artifact lands in built/<artifact name>/, so the allowlist below is
+      # checked against artifact names, not just the file names inside them.
       - name: Download built binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: graphify-sf-*
-          merge-multiple: true
           path: built
 
       - name: Verify exactly the five expected binaries
         shell: bash
         run: |
           set -euo pipefail
+          names="$(ls built | sort | tr '\n' ' ')"
+          want="$(printf '%s\n' $EXPECTED | sort | tr '\n' ' ')"
+          [ "$names" = "$want" ] || { echo "artifacts [$names] != expected [$want]" >&2; exit 1; }
+          mkdir flat
           for a in $EXPECTED; do
-            [ -s "built/$a" ] || { echo "missing or empty artifact: $a" >&2; exit 1; }
+            [ "$(ls built/$a)" = "$a" ] || { echo "artifact $a must contain exactly one file named $a" >&2; exit 1; }
+            [ -s "built/$a/$a" ] || { echo "empty artifact: $a" >&2; exit 1; }
+            cp "built/$a/$a" "flat/$a"
           done
-          extra="$(ls built | grep -vxF -f <(printf '%s\n' $EXPECTED) || true)"
-          [ -z "$extra" ] || { echo "unexpected files in artifacts: $extra" >&2; exit 1; }
-          ls -l built
+          ls -l flat
 
       # Never replace an existing asset: the published npm checksums.json pins
       # these exact bytes, and PyInstaller builds are not reproducible, so a
@@ -269,7 +276,7 @@ jobs:
             if grep -qxF "$a" <<<"$assets"; then
               echo "$a already on release $TAG; keeping the published bytes"
             else
-              gh release upload "$TAG" "built/$a" --repo "$GITHUB_REPOSITORY"
+              gh release upload "$TAG" "flat/$a" --repo "$GITHUB_REPOSITORY"
             fi
           done
 
@@ -296,7 +303,7 @@ jobs:
         run: |
           set -euo pipefail
           dir=published
-          [ "$DRY_RUN" = "true" ] && dir=built
+          [ "$DRY_RUN" = "true" ] && dir=flat
           mkdir -p out
           node -e '
             const fs = require("fs"), crypto = require("crypto"), path = require("path");
@@ -326,20 +333,21 @@ jobs:
           path: out/checksums.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true   # always recomputed from the release, so a re-run may replace it
 
   publish-npm:
     name: Publish to npm (platform subpackages + main)
     needs: [resolve, attach-assets]
     runs-on: ubuntu-latest
-    environment: npm
+    # A dry run must not use the `npm` environment: the trusted publisher is bound to it, so
+    # a dry run from a branch could otherwise obtain real publish credentials. It packs instead.
+    environment: ${{ needs.resolve.outputs.dry_run == 'true' && 'dry-run' || 'npm' }}
     # No release write access: checksums are recorded and uploaded by attach-assets.
     permissions:
       contents: read
       id-token: write   # npm Trusted Publishing (OIDC) + provenance
     env:
-      # `npm publish --dry-run --tag dry-run` in a dry run (npm won't apply the implicit 'latest' tag
-      # when a higher version is already published); empty otherwise.
-      NPM_DRY: ${{ needs.resolve.outputs.dry_run == 'true' && '--dry-run --tag dry-run' || '' }}
+      DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
 
     steps:
       # The tag, not the dispatch ref: on workflow_dispatch github.ref is main,
@@ -399,6 +407,27 @@ jobs:
           name: checksums
           path: npm
 
+      # The platform subpackages are packed from release-bin/; the main package carries
+      # checksums.json. They must describe the same bytes (an asset swapped in between, or a
+      # re-run of this job against an older checksums artifact, fails here).
+      - name: Verify the binaries match checksums.json
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs"), crypto = require("crypto"), path = require("path");
+            const table = JSON.parse(fs.readFileSync("npm/checksums.json", "utf8"));
+            const bad = [];
+            for (const [asset, want] of Object.entries(table)) {
+              const file = path.join("release-bin", asset);
+              if (!fs.existsSync(file)) { bad.push("missing " + asset); continue; }
+              const got = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+              if (got !== want) bad.push("mismatch " + asset);
+            }
+            if (Object.keys(table).length !== 5) bad.push("expected 5 entries, found " + Object.keys(table).length);
+            if (bad.length) { console.error("binaries do not match checksums.json:", bad.join(", ")); process.exit(1); }
+            console.log("binaries match checksums.json");
+          '
+
       # Scaffold npm/platforms/<plat>-<arch>/ for every target whose binary is
       # present. --strict fails the job if any of the five is missing, so a
       # partial matrix never ships an incomplete set.
@@ -429,8 +458,13 @@ jobs:
               echo "${spec} is already published; skipping"
               continue
             fi
-            echo "Publishing ${spec} from ${dir} ..."
-            npm publish "${dir}" --access public ${NPM_DRY}
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "DRY RUN: packing ${spec} from ${dir} (no publish)"
+              npm pack "${dir}" --dry-run
+            else
+              echo "Publishing ${spec} from ${dir} ..."
+              npm publish "${dir}" --access public
+            fi
           done
 
       # Stamp the release version into the main package (its version and its
@@ -474,6 +508,8 @@ jobs:
           spec="graphify-sf@${ver}"
           if [ "$(npm view "${spec}" version 2>/dev/null || true)" = "${ver}" ]; then
             echo "${spec} is already published; skipping"
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: not publishing ${spec}"
           else
-            npm publish ./npm --access public ${NPM_DRY}
+            npm publish ./npm --access public
           fi
