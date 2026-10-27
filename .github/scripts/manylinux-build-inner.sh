@@ -11,8 +11,18 @@ ldd --version 2>&1 | sed -n 1p # sed reads all input: no SIGPIPE under pipefail
 # which PyInstaller needs. A full upgrade means every library PyInstaller
 # bundles (openssl, expat, zlib, libffi, xz, bzip2, ncurses/readline, ...)
 # ships at its latest EL8 errata rather than the image snapshot.
-dnf upgrade -y -q > /dev/null
-dnf install -y -q python3.12 python3.12-devel python3.12-pip > /dev/null
+# AlmaLinux mirrors occasionally answer with an empty repomd.xml; retry instead of failing the build.
+retry() {
+  local n
+  for n in 1 2 3; do
+    "$@" && return 0
+    echo "retry $n/3 after failure: $*" >&2
+    sleep $((n * 15))
+  done
+  return 1
+}
+retry dnf upgrade -y -q > /dev/null
+retry dnf install -y -q python3.12 python3.12-devel python3.12-pip > /dev/null
 rpm -q python3.12 openssl-libs expat zlib libffi xz-libs bzip2-libs readline || true # report only
 
 # Absolute path: a bare python3.12 resolves to manylinux's own static

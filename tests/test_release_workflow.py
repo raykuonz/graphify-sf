@@ -110,3 +110,16 @@ def test_tag_is_validated_once_and_never_taken_from_elsewhere():
         assert "github.event.release.tag_name" not in jobs[name]
     assert "needs.resolve.outputs.ref" in jobs["build-binaries"]
     assert "needs.resolve.outputs.ref" in jobs["publish-npm"]
+
+
+def test_dry_run_version_is_not_a_prerelease():
+    """npm refuses to publish a prerelease without --tag, even with --dry-run (found by the first dry run)."""
+    resolve = _jobs()["resolve"]
+    m = re.search(r'echo "version=(\S+)" >> "\$GITHUB_OUTPUT"\n\s+echo "ref=\$GITHUB_SHA"', resolve)
+    assert m, "dry-run branch of the resolve step not found"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", m.group(1)), m.group(1)
+
+
+def test_manylinux_package_installs_retry_mirror_failures():
+    inner = (ROOT / ".github" / "scripts" / "manylinux-build-inner.sh").read_text(encoding="utf-8")
+    assert "retry dnf upgrade" in inner and "retry dnf install" in inner
