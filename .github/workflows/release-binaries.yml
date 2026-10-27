@@ -8,7 +8,8 @@ name: Release Binaries + npm
 # e.g. to finish a partial publish. A re-run uploads only missing release
 # binaries and publishes only npm versions not yet on the registry; it never
 # replaces bytes that were already released. Dispatch checks out the tag's tree,
-# so it needs a tag at v0.4.4 or later (older tags lack .github/scripts/).
+# so it needs a tag that contains the hash-locked binary build (.github/scripts/export-binary-requirements.sh, v0.5.0
+# or later). Older tags cannot be re-run here: their trees predate it and fail the preflight check below.
 #
 # npm auth: Trusted Publishing (OIDC). Each of the 6 packages has a trusted
 # publisher for raykuonz/graphify-sf + release-binaries.yml with "npm publish"
@@ -21,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag (v0.4.4 or later) to finish building/publishing (e.g. v0.4.4)"
+        description: "Existing release tag (v0.5.0 or later) to finish building/publishing (e.g. v0.5.0)"
         required: true
         type: string
 
@@ -93,7 +94,7 @@ jobs:
           echo "Resolved tag=${TAG} version=${TAG#v}"
 
       # Check out the exact tagged commit so the build matches the release.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
@@ -107,14 +108,34 @@ jobs:
 
       - name: Set up Python 3.12
         if: matrix.target-os != 'linux'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
-      - name: Install package + PyInstaller
+      - name: Preflight - tag has the hash-locked binary build
+        shell: bash
+        run: |
+          [ -f .github/scripts/export-binary-requirements.sh ] || {
+            echo "tag ${{ steps.tag.outputs.tag }} predates the hash-locked binary build (needs v0.5.0 or later)." >&2
+            echo "Older releases cannot be re-run from this workflow." >&2
+            exit 1
+          }
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.6"
+          enable-cache: false   # never cache in a release job
+
+      - name: Export hash-locked binary requirements
+        shell: bash
+        run: bash .github/scripts/export-binary-requirements.sh
+
+      - name: Install package + PyInstaller (hash-locked)
         if: matrix.target-os != 'linux'
-        run: pip install ".[docs]" pyinstaller
-        # .[docs] pulls in optional doc extras so they're available if present,
+        shell: bash
+        run: bash .github/scripts/install-binary-deps.sh python
+        # The export includes the docs extra so its packages are available if present,
         # but pyinstaller-build.sh's --exclude-module flags keep them out of the bundle.
 
       - name: Build with PyInstaller (macOS / Windows)
@@ -190,7 +211,7 @@ jobs:
 
       # The tag, not the dispatch ref: on workflow_dispatch github.ref is main,
       # which would pack main's npm/ under the tag's version (and provenance).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
@@ -198,17 +219,17 @@ jobs:
       # No registry-url: it would write an _authToken=${NODE_AUTH_TOKEN} line
       # into .npmrc, and trusted publishing uses OIDC instead of a token.
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           package-manager-cache: false   # never cache in a release job
 
-      - name: Ensure npm supports trusted publishing (>= 11.5.1)
+      # Exact npm, installed unconditionally: the bundled one is whatever the latest Node 24 ships.
+      # Trusted Publishing needs >= 11.5.1.
+      - name: Install pinned npm
         shell: bash
         run: |
-          if ! node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"; then
-            npm install -g npm@^11.5.1
-          fi
+          npm install -g npm@11.21.1
           npm --version
 
       # Pull the binaries that build-binaries just uploaded to the GitHub

@@ -9,18 +9,32 @@
 # fails if anything bundled needs a newer glibc than 2.28. The checkout is
 # mounted read-only; only the binary comes back out, into dist/.
 #
+# The base image is pinned by digest in .github/docker/manylinux-<arch>/Dockerfile (Dependabot
+# keeps it current); this script runs exactly the reference on that file's FROM line.
+# Build dependencies come from reqs-binary.txt (hash-locked, written on the host by
+# export-binary-requirements.sh, which needs uv); it travels into the container with the
+# checkout, and uv is never installed inside the container.
+#
 # Usage (from the repo root, on an x86_64 or aarch64 host with docker):
-#   build-linux-binary.sh        -> dist/graphify-sf
+#   export-binary-requirements.sh && build-linux-binary.sh        -> dist/graphify-sf
 set -euo pipefail
 
 case "$(uname -m)" in
-  x86_64) image="quay.io/pypa/manylinux_2_28_x86_64" ;;
-  aarch64 | arm64) image="quay.io/pypa/manylinux_2_28_aarch64" ;;
+  x86_64) arch="x86_64" ;;
+  aarch64 | arm64) arch="aarch64" ;;
   *) echo "unsupported host arch: $(uname -m)" >&2; exit 1 ;;
 esac
 
-docker pull -q "$image"
-echo "build image: $(docker image inspect --format '{{index .RepoDigests 0}}' "$image")"
+dockerfile=".github/docker/manylinux-${arch}/Dockerfile"
+image="$(awk '$1 == "FROM" { print $2; exit }' "$dockerfile")"
+case "$image" in
+  *@sha256:????????????????????????????????????????????????????????????????) ;;
+  *) echo "$dockerfile: FROM must be pinned by digest, got: ${image:-<none>}" >&2; exit 1 ;;
+esac
+[ -f reqs-binary.txt ] || { echo "reqs-binary.txt missing: run .github/scripts/export-binary-requirements.sh first" >&2; exit 1; }
+
+docker pull -q "$image" > /dev/null
+echo "build image: $image"
 
 mkdir -p dist
 docker run --rm --init \
