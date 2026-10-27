@@ -196,6 +196,7 @@ def _run_llm_extraction(
         BACKENDS,
         estimate_cost,
         extract_corpus_parallel,
+        model_overridden,
     )
     from graphify_sf.llm import (
         detect_backend as _detect_backend,
@@ -237,6 +238,8 @@ def _run_llm_extraction(
 
     total_chunks_done = [0]
     total_chunks = [0]  # filled after chunking
+    # Estimates use the default model's rates, so say so when the model is overridden.
+    rate_note = " at default-model rates" if model_overridden(effective_backend) else ""
 
     def _on_chunk_done(idx: int, total: int, result: dict) -> None:
         total_chunks[0] = total
@@ -250,7 +253,7 @@ def _run_llm_extraction(
         print(
             f"[graphify-sf] LLM chunk {total_chunks_done[0]}/{total}: "
             f"{n_nodes} nodes, {n_edges} edges "
-            f"({n_in}→{n_out} tokens, ${cost:.4f}, {elapsed:.1f}s)",
+            f"({n_in}→{n_out} tokens, ${cost:.4f}{rate_note}, {elapsed:.1f}s)",
             flush=True,
         )
 
@@ -281,7 +284,7 @@ def _run_llm_extraction(
     print(
         f"[graphify-sf] LLM extraction complete: "
         f"{len(llm_nodes)} nodes, {len(llm_edges)} edges "
-        f"({in_tok}→{out_tok} tokens, ${total_cost:.4f})",
+        f"({in_tok}→{out_tok} tokens, ${total_cost:.4f}{rate_note})",
         flush=True,
     )
 

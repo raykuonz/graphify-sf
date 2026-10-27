@@ -23,8 +23,10 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         self.server.requests.append({"path": self.path, "body": body})
-        data = json.dumps(self.server.reply).encode()
-        self.send_response(200)
+        # ``queued`` holds (status, payload) answers served before the normal ``reply``.
+        status, payload = self.server.queued.pop(0) if self.server.queued else (200, self.server.reply)
+        data = json.dumps(payload).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -42,6 +44,7 @@ def fake_api(monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.requests = []
+    server.queued = []
     server.reply = {}
     server.url = f"http://127.0.0.1:{server.server_address[1]}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -153,3 +156,116 @@ def test_call_bedrock_with_real_boto3(fake_api, monkeypatch, tmp_path):
     (req,) = fake_api.requests
     assert req["path"] == "/model/test-model/converse"
     assert req["body"]["inferenceConfig"] == {"maxTokens": 222, "temperature": 0.3}
+
+
+def _openai_ok_reply(model="gpt-6-luna", content=_FAKE_JSON, reasoning_tokens=None, finish_reason="stop"):
+    usage = {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15}
+    if reasoning_tokens is not None:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+                "logprobs": None,
+            }
+        ],
+        "usage": usage,
+    }
+
+
+def _openai_400(param, message):
+    return (
+        400,
+        {
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "param": param,
+                "code": "unsupported_parameter",
+            }
+        },
+    )
+
+
+def _extract_openai(fake_api, monkeypatch, model):
+    """Run the real openai backend path against the stub server."""
+    from graphify_sf import llm
+
+    monkeypatch.setitem(llm.BACKENDS["openai"], "base_url", f"{fake_api.url}/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("GRAPHIFY_SF_OPENAI_MODEL", model)
+    return llm.extract_files_direct([], backend="openai")
+
+
+def test_openai_backend_gpt6_request_with_real_sdk(fake_api, monkeypatch):
+    pytest.importorskip("openai")
+    fake_api.reply = _openai_ok_reply()
+
+    result = _extract_openai(fake_api, monkeypatch, "gpt-6-luna")
+
+    assert result["nodes"] == [{"id": "x"}]
+    (req,) = fake_api.requests
+    body = req["body"]
+    assert body["model"] == "gpt-6-luna"
+    assert "temperature" not in body
+    assert body["reasoning_effort"] == "low"
+    assert body["max_completion_tokens"] == 16384
+
+
+def test_openai_backend_old_model_keeps_temperature_with_real_sdk(fake_api, monkeypatch):
+    pytest.importorskip("openai")
+    fake_api.reply = _openai_ok_reply(model="gpt-4.1-mini")
+
+    _extract_openai(fake_api, monkeypatch, "gpt-4.1-mini")
+
+    (req,) = fake_api.requests
+    assert req["body"]["temperature"] == 0
+    assert "reasoning_effort" not in req["body"]
+
+
+def test_openai_backend_retries_once_after_real_400_for_both_params(fake_api, monkeypatch):
+    pytest.importorskip("openai")
+    fake_api.queued = [_openai_400("reasoning_effort", "Unsupported parameter: 'reasoning_effort' is not supported.")]
+    fake_api.reply = _openai_ok_reply()
+
+    result = _extract_openai(fake_api, monkeypatch, "gpt-6-luna")
+
+    assert result["nodes"] == [{"id": "x"}]
+    first, second = (r["body"] for r in fake_api.requests)
+    assert first["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in second and "temperature" not in second
+
+
+def test_openai_backend_second_real_400_raises(fake_api, monkeypatch):
+    openai = pytest.importorskip("openai")
+    fake_api.queued = [_openai_400("temperature", "Unsupported parameter: 'temperature'")] * 2
+
+    with pytest.raises(openai.BadRequestError):
+        _extract_openai(fake_api, monkeypatch, "gpt-4.1-mini")
+    assert len(fake_api.requests) == 2
+
+
+def test_openai_backend_system_role_400_is_not_retried(fake_api, monkeypatch):
+    openai = pytest.importorskip("openai")
+    fake_api.queued = [_openai_400("messages[0].role", "'system' is not supported with this model.")]
+
+    with pytest.raises(openai.BadRequestError):
+        _extract_openai(fake_api, monkeypatch, "gpt-6-luna")
+    assert len(fake_api.requests) == 1
+
+
+def test_openai_backend_reasoning_budget_exhaustion_with_real_sdk(fake_api, monkeypatch, capsys):
+    pytest.importorskip("openai")
+    fake_api.reply = _openai_ok_reply(content="", reasoning_tokens=4096, finish_reason="length")
+
+    result = _extract_openai(fake_api, monkeypatch, "gpt-6-luna")
+
+    assert result["finish_reason"] == "length"
+    err = capsys.readouterr().err
+    assert "4096 reasoning tokens" in err and "GRAPHIFY_SF_MAX_OUTPUT_TOKENS" in err
