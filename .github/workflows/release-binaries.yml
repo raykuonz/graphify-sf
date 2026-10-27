@@ -1,15 +1,27 @@
 name: Release Binaries + npm
 
 # Triggered by the same release event as publish.yml (PyPI).
-# This workflow builds PyInstaller binaries for each platform, uploads them to
-# the GitHub Release, then publishes the npm wrapper package.
+# Jobs, in order:
+#   resolve        validates the tag (no code, no checkout)
+#   build-binaries one read-only leg per platform; builds PyInstaller binaries from the
+#                  hash-locked environment and uploads each as a workflow artifact
+#   attach-assets  the only job that writes to the release: attaches the binaries, then
+#                  records their checksums from the published bytes. Runs no PyPI/npm package
+#                  code, only pinned first-party actions and gh
+#   publish-npm    publishes the npm packages; has the OIDC token but cannot write the release
 #
-# It also supports manual re-runs against an existing tag via workflow_dispatch,
-# e.g. to finish a partial publish. A re-run uploads only missing release
-# binaries and publishes only npm versions not yet on the registry; it never
-# replaces bytes that were already released. Dispatch checks out the tag's tree,
-# so it needs a tag that contains the hash-locked binary build (.github/scripts/export-binary-requirements.sh, v0.5.0
-# or later). Older tags cannot be re-run here: their trees predate it and fail the preflight check below.
+# It also supports manual re-runs against an existing tag via workflow_dispatch, e.g. to
+# finish a partial publish. A re-run attaches only missing release binaries and publishes only
+# npm versions not yet on the registry; it never replaces bytes that were already released
+# (so a bad published asset or package needs a new patch version, not a re-run). Dispatch
+# checks out the tag's tree, so it needs a tag that contains the hash-locked binary build
+# (.github/scripts/export-binary-requirements.sh, v0.5.0 or later); older tags fail the
+# preflight check.
+#
+# dry_run=true (workflow_dispatch only) builds from the dispatching ref instead of a tag and
+# exercises every job - artifacts, the five-file checks, checksums, npm packing - without
+# touching the release or the registry: no gh release writes, and npm packs instead of
+# publishing, outside the `npm` environment so no publish credentials can be minted.
 #
 # npm auth: Trusted Publishing (OIDC). Each of the 6 packages has a trusted
 # publisher for raykuonz/graphify-sf + release-binaries.yml with "npm publish"
@@ -22,9 +34,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag (v0.5.0 or later) to finish building/publishing (e.g. v0.5.0)"
-        required: true
+        description: "Existing release tag (v0.5.0 or later) to finish building/publishing (e.g. v0.5.0). Not used when dry_run is true."
+        required: false
         type: string
+      dry_run:
+        description: "Build from this ref and run every job without writing to the release or the npm registry"
+        required: false
+        default: false
+        type: boolean
 
 # Least privilege per job. id-token (npm Trusted Publishing) goes ONLY to
 # publish-npm: the build legs run third-party PyPI code, and npm's trusted
@@ -34,17 +51,61 @@ permissions:
   contents: read
 
 # A release event and a manual dispatch for the same tag must not interleave.
+# Dry runs have no tag and never contend.
 concurrency:
-  group: release-binaries-${{ github.event.inputs.tag || github.event.release.tag_name }}
+  group: release-binaries-${{ github.event.inputs.dry_run == 'true' && github.run_id || github.event.inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
+  # Everything downstream reads the tag, version, checkout ref and mode from here; they come only
+  # from the release event / dispatch inputs and are validated before any later step interpolates them.
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+      ref: ${{ steps.r.outputs.ref }}
+      dry_run: ${{ steps.r.outputs.dry_run }}
+    steps:
+      - name: Resolve release tag
+        id: r
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "DRY RUN from $GITHUB_SHA: nothing is written to the release or the npm registry"
+            exit 0
+          fi
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          # Later steps interpolate the tag/version into scripts; accept only a
+          # plain semver tag so that is always safe.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing non-semver tag: $TAG"; exit 1; }
+          echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "ref=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=${TAG} version=${TAG#v}"
+
   build-binaries:
     name: Build binary (${{ matrix.target-os }}-${{ matrix.target-arch }})
+    needs: resolve
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    # Read-only: this job runs third-party build code. The binary leaves as a workflow
+    # artifact; attach-assets (no third-party code) is what writes to the release.
     permissions:
-      contents: write   # upload the binary to the release; deliberately no id-token
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -77,32 +138,17 @@ jobs:
             asset-name: graphify-sf-win32-x64.exe
 
     steps:
-      # Resolve the target tag from either trigger (release event or manual dispatch).
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          TAG="${INPUT_TAG:-$RELEASE_TAG}"
-          # Later steps interpolate the tag/version into scripts; accept only a
-          # plain semver tag so that is always safe.
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing non-semver tag: $TAG"; exit 1; }
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "Resolved tag=${TAG} version=${TAG#v}"
-
-      # Check out the exact tagged commit so the build matches the release.
+      # Check out the exact tagged commit so the build matches the release
+      # (the dispatching ref in a dry run).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.tag.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.ref }}
           persist-credentials: false
 
       - name: Inject version into graphify_sf/_version.py
         shell: bash
         run: |
-          VERSION="${{ steps.tag.outputs.version }}"
+          VERSION="${{ needs.resolve.outputs.version }}"
           echo "__version__ = \"${VERSION}\"" > graphify_sf/_version.py
           echo "Injected version: ${VERSION}"
 
@@ -116,7 +162,7 @@ jobs:
         shell: bash
         run: |
           [ -f .github/scripts/export-binary-requirements.sh ] || {
-            echo "tag ${{ steps.tag.outputs.tag }} predates the hash-locked binary build (needs v0.5.0 or later)." >&2
+            echo "ref ${{ needs.resolve.outputs.ref }} predates the hash-locked binary build (needs v0.5.0 or later)." >&2
             echo "Older releases cannot be re-run from this workflow." >&2
             exit 1
           }
@@ -135,8 +181,6 @@ jobs:
         if: matrix.target-os != 'linux'
         shell: bash
         run: bash .github/scripts/install-binary-deps.sh python
-        # The export includes the docs extra so its packages are available if present,
-        # but pyinstaller-build.sh's --exclude-module flags keep them out of the bundle.
 
       - name: Build with PyInstaller (macOS / Windows)
         if: matrix.target-os != 'linux'
@@ -164,56 +208,154 @@ jobs:
           fi
           cp "${SRC}" "${{ matrix.asset-name }}"
 
+      # One artifact per platform, named exactly like the release asset; attach-assets
+      # allowlists these five names. A missing file fails the leg.
+      - name: Upload binary as a workflow artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.asset-name }}
+          path: ${{ matrix.asset-name }}
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true   # "Re-run all jobs" reuses the run; release assets are never replaced from these
+
+  attach-assets:
+    name: Attach binaries + record checksums
+    needs: [resolve, build-binaries]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The only job that writes to the release. It checks nothing out and runs no PyPI/npm
+    # package code - only pinned first-party actions and gh - and has no id-token.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
+      # The only assets this workflow publishes; also the artifact names from build-binaries.
+      EXPECTED: graphify-sf-linux-x64 graphify-sf-linux-arm64 graphify-sf-darwin-x64 graphify-sf-darwin-arm64 graphify-sf-win32-x64.exe
+
+    steps:
+      # No merge-multiple: each artifact lands in built/<artifact name>/, so the allowlist below is
+      # checked against artifact names, not just the file names inside them.
+      - name: Download built binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: graphify-sf-*
+          path: built
+
+      - name: Verify exactly the five expected binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          names="$(ls built | sort | tr '\n' ' ')"
+          want="$(printf '%s\n' $EXPECTED | sort | tr '\n' ' ')"
+          [ "$names" = "$want" ] || { echo "artifacts [$names] != expected [$want]" >&2; exit 1; }
+          mkdir flat
+          for a in $EXPECTED; do
+            [ "$(ls built/$a)" = "$a" ] || { echo "artifact $a must contain exactly one file named $a" >&2; exit 1; }
+            [ -s "built/$a/$a" ] || { echo "empty artifact: $a" >&2; exit 1; }
+            cp "built/$a/$a" "flat/$a"
+          done
+          ls -l flat
+
       # Never replace an existing asset: the published npm checksums.json pins
       # these exact bytes, and PyInstaller builds are not reproducible, so a
       # re-run must reuse them. Deleting an asset to force a rebuild is only
       # safe before graphify-sf@<version> is on npm; after that the npm
       # checksums would no longer match and the fallback download is refused.
-      - name: Upload release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-          ASSET: ${{ matrix.asset-name }}
+      - name: Attach missing binaries to the release
+        if: needs.resolve.outputs.dry_run != 'true'
         shell: bash
         run: |
+          set -euo pipefail
           # Capture first: a gh error fails the step instead of reading as
           # "absent", and grep -q can't SIGPIPE gh under pipefail.
           assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
-          if grep -qxF "$ASSET" <<<"$assets"; then
-            echo "$ASSET already on release $TAG; keeping the published bytes"
-          else
-            gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY"
-          fi
+          for a in $EXPECTED; do
+            if grep -qxF "$a" <<<"$assets"; then
+              echo "$a already on release $TAG; keeping the published bytes"
+            else
+              gh release upload "$TAG" "flat/$a" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+
+      # Checksums describe what is actually published, which on a re-run can differ from the
+      # bytes just built: read them back from the release.
+      - name: Download the published binaries
+        if: needs.resolve.outputs.dry_run != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p published
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "graphify-sf-*" --dir published --clobber
+          for a in $EXPECTED; do
+            [ -s "published/$a" ] || { echo "release $TAG lacks $a" >&2; exit 1; }
+          done
+
+      # Record each binary's sha256 for the GitHub-download fallback in
+      # npm/lib/download.js. checksums.json ships inside the main npm tarball
+      # (integrity-pinned by lockfiles), so a release asset swapped later under
+      # this tag is rejected instead of executed. Copies go on the release for
+      # manual verification. Fails unless all five binaries are present.
+      - name: Record binary checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=published
+          [ "$DRY_RUN" = "true" ] && dir=flat
+          mkdir -p out
+          node -e '
+            const fs = require("fs"), crypto = require("crypto"), path = require("path");
+            const dir = process.argv[1];
+            const expected = process.env.EXPECTED.split(" ");
+            const table = {};
+            for (const asset of expected) {
+              const file = path.join(dir, asset);
+              if (!fs.existsSync(file)) { console.error("missing release binary:", asset); process.exit(1); }
+              table[asset] = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+            }
+            fs.writeFileSync("out/checksums.json", JSON.stringify(table, null, 2) + "\n");
+            fs.writeFileSync("out/SHA256SUMS", Object.entries(table).map(([a, h]) => `${h}  ${a}`).join("\n") + "\n");
+          ' "$dir"
+          cat out/SHA256SUMS
+
+      - name: Publish checksums on the release
+        if: needs.resolve.outputs.dry_run != 'true'
+        shell: bash
+        run: |
+          gh release upload "$TAG" out/checksums.json out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Hand checksums.json to publish-npm
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums
+          path: out/checksums.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true   # always recomputed from the release, so a re-run may replace it
 
   publish-npm:
     name: Publish to npm (platform subpackages + main)
-    needs: build-binaries
+    needs: [resolve, attach-assets]
     runs-on: ubuntu-latest
-    environment: npm
+    # A dry run must not use the `npm` environment: the trusted publisher is bound to it, so
+    # a dry run from a branch could otherwise obtain real publish credentials. It packs instead.
+    environment: ${{ needs.resolve.outputs.dry_run == 'true' && 'dry-run' || 'npm' }}
+    # No release write access: checksums are recorded and uploaded by attach-assets.
     permissions:
-      contents: write   # upload checksums.json / SHA256SUMS to the release
+      contents: read
       id-token: write   # npm Trusted Publishing (OIDC) + provenance
+    env:
+      DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
 
     steps:
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          TAG="${INPUT_TAG:-$RELEASE_TAG}"
-          # Later steps interpolate the tag/version into scripts; accept only a
-          # plain semver tag so that is always safe.
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "refusing non-semver tag: $TAG"; exit 1; }
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-
       # The tag, not the dispatch ref: on workflow_dispatch github.ref is main,
       # which would pack main's npm/ under the tag's version (and provenance).
+      # A dry run checks out the dispatching ref instead.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.tag.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.ref }}
           persist-credentials: false
 
       # No registry-url: it would write an _authToken=${NODE_AUTH_TOKEN} line
@@ -232,49 +374,59 @@ jobs:
           npm install -g npm@11.21.1
           npm --version
 
-      # Pull the binaries that build-binaries just uploaded to the GitHub
-      # Release. These are the exact artifacts shipped inside the platform
-      # subpackages, so the npm channel and the GitHub-download fallback serve
-      # byte-identical binaries.
+      # The binaries that attach-assets put on the GitHub Release (a dry run uses the freshly
+      # built artifacts). These are the exact bytes shipped inside the platform subpackages, so
+      # the npm channel and the GitHub-download fallback serve byte-identical binaries.
       - name: Download release binaries
+        if: needs.resolve.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           mkdir -p release-bin
           cd release-bin
-          gh release download "${{ steps.tag.outputs.tag }}" \
+          gh release download "${{ needs.resolve.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --pattern "graphify-sf-*" \
             --clobber
           ls -l
 
-      # Record each binary's sha256 for the GitHub-download fallback in
-      # npm/lib/download.js. checksums.json ships inside the main npm tarball
-      # (integrity-pinned by lockfiles), so a release asset swapped later under
-      # this tag is rejected instead of executed. Copies go on the release for
-      # manual verification. Fails unless all five binaries are present.
-      - name: Record binary checksums
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Download built binaries (dry run)
+        if: needs.resolve.outputs.dry_run == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: graphify-sf-*
+          merge-multiple: true
+          path: release-bin
+
+      # checksums.json ships inside the main npm tarball; attach-assets computed it from the
+      # published bytes and uploaded the same file to the release.
+      - name: Download checksums.json
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checksums
+          path: npm
+
+      # The platform subpackages are packed from release-bin/; the main package carries
+      # checksums.json. They must describe the same bytes (an asset swapped in between, or a
+      # re-run of this job against an older checksums artifact, fails here).
+      - name: Verify the binaries match checksums.json
         shell: bash
         run: |
           node -e '
             const fs = require("fs"), crypto = require("crypto"), path = require("path");
-            const expected = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64.exe"]
-              .map((t) => "graphify-sf-" + t);
-            const table = {};
-            for (const asset of expected) {
+            const table = JSON.parse(fs.readFileSync("npm/checksums.json", "utf8"));
+            const bad = [];
+            for (const [asset, want] of Object.entries(table)) {
               const file = path.join("release-bin", asset);
-              if (!fs.existsSync(file)) { console.error("missing release binary:", asset); process.exit(1); }
-              table[asset] = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+              if (!fs.existsSync(file)) { bad.push("missing " + asset); continue; }
+              const got = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+              if (got !== want) bad.push("mismatch " + asset);
             }
-            fs.writeFileSync("npm/checksums.json", JSON.stringify(table, null, 2) + "\n");
-            fs.writeFileSync("SHA256SUMS", Object.entries(table).map(([a, h]) => `${h}  ${a}`).join("\n") + "\n");
+            if (Object.keys(table).length !== 5) bad.push("expected 5 entries, found " + Object.keys(table).length);
+            if (bad.length) { console.error("binaries do not match checksums.json:", bad.join(", ")); process.exit(1); }
+            console.log("binaries match checksums.json");
           '
-          cat SHA256SUMS
-          gh release upload "${{ steps.tag.outputs.tag }}" npm/checksums.json SHA256SUMS \
-            --repo "${{ github.repository }}" --clobber
 
       # Scaffold npm/platforms/<plat>-<arch>/ for every target whose binary is
       # present. --strict fails the job if any of the five is missing, so a
@@ -282,7 +434,7 @@ jobs:
       - name: Scaffold platform subpackages
         run: |
           node npm/scripts/build-subpackages.js \
-            --version "${{ steps.tag.outputs.version }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
             --bin-dir release-bin \
             --out-dir npm/platforms \
             --strict
@@ -306,8 +458,13 @@ jobs:
               echo "${spec} is already published; skipping"
               continue
             fi
-            echo "Publishing ${spec} from ${dir} ..."
-            npm publish "${dir}" --access public
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "DRY RUN: packing ${spec} from ${dir} (no publish)"
+              npm pack "${dir}" --dry-run
+            else
+              echo "Publishing ${spec} from ${dir} ..."
+              npm publish "${dir}" --access public
+            fi
           done
 
       # Stamp the release version into the main package (its version and its
@@ -317,7 +474,7 @@ jobs:
       - name: Stamp version into main package + optionalDependencies
         shell: bash
         env:
-          VERSION: ${{ steps.tag.outputs.version }}
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           node -e '
             const fs = require("fs");
@@ -336,7 +493,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          ver="${{ steps.tag.outputs.version }}"
+          ver="${{ needs.resolve.outputs.version }}"
           [ -n "${ver}" ] || { echo "empty release version"; exit 1; }
           # The tarball must carry checksums.json and no stray binary in bin/.
           npm pack ./npm --dry-run --json > "$RUNNER_TEMP/pack.json"
@@ -351,6 +508,8 @@ jobs:
           spec="graphify-sf@${ver}"
           if [ "$(npm view "${spec}" version 2>/dev/null || true)" = "${ver}" ]; then
             echo "${spec} is already published; skipping"
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: not publishing ${spec}"
           else
             npm publish ./npm --access public
           fi
