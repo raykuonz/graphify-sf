@@ -87,7 +87,7 @@ def test_dry_run_writes_nothing():
         if "gh release upload" in step or "gh release download" in step:
             assert "needs.resolve.outputs.dry_run != 'true'" in step, step.splitlines()[0]
     npm = _jobs()["publish-npm"]
-    assert "NPM_DRY: ${{ needs.resolve.outputs.dry_run == 'true' && '--dry-run' || '' }}" in npm
+    assert "NPM_DRY: ${{ needs.resolve.outputs.dry_run == 'true' && '--dry-run --tag dry-run' || '' }}" in npm
     publishes = re.findall(r"^\s*npm publish .*$", npm, re.M)
     assert len(publishes) == 2
     assert all("${NPM_DRY}" in line for line in publishes), publishes

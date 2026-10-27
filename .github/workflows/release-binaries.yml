@@ -337,8 +337,9 @@ jobs:
       contents: read
       id-token: write   # npm Trusted Publishing (OIDC) + provenance
     env:
-      # `npm publish --dry-run` in a dry run; empty otherwise.
-      NPM_DRY: ${{ needs.resolve.outputs.dry_run == 'true' && '--dry-run' || '' }}
+      # `npm publish --dry-run --tag dry-run` in a dry run (npm won't apply the implicit 'latest' tag
+      # when a higher version is already published); empty otherwise.
+      NPM_DRY: ${{ needs.resolve.outputs.dry_run == 'true' && '--dry-run --tag dry-run' || '' }}
 
     steps:
       # The tag, not the dispatch ref: on workflow_dispatch github.ref is main,
