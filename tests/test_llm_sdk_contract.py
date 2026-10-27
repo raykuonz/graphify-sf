@@ -158,7 +158,7 @@ def test_call_bedrock_with_real_boto3(fake_api, monkeypatch, tmp_path):
     assert req["body"]["inferenceConfig"] == {"maxTokens": 222, "temperature": 0.3}
 
 
-def _openai_ok_reply(model="gpt-6-luna", content=_FAKE_JSON, reasoning_tokens=None):
+def _openai_ok_reply(model="gpt-6-luna", content=_FAKE_JSON, reasoning_tokens=None, finish_reason="stop"):
     usage = {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15}
     if reasoning_tokens is not None:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
@@ -171,7 +171,7 @@ def _openai_ok_reply(model="gpt-6-luna", content=_FAKE_JSON, reasoning_tokens=No
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "finish_reason": finish_reason,
                 "logprobs": None,
             }
         ],
@@ -260,11 +260,12 @@ def test_openai_backend_system_role_400_is_not_retried(fake_api, monkeypatch):
     assert len(fake_api.requests) == 1
 
 
-def test_openai_backend_empty_reasoning_reply_is_hollow_with_real_sdk(fake_api, monkeypatch, capsys):
+def test_openai_backend_reasoning_budget_exhaustion_with_real_sdk(fake_api, monkeypatch, capsys):
     pytest.importorskip("openai")
-    fake_api.reply = _openai_ok_reply(content="", reasoning_tokens=4096)
+    fake_api.reply = _openai_ok_reply(content="", reasoning_tokens=4096, finish_reason="length")
 
     result = _extract_openai(fake_api, monkeypatch, "gpt-6-luna")
 
     assert result["finish_reason"] == "length"
-    assert "4096 reasoning tokens" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "4096 reasoning tokens" in err and "GRAPHIFY_SF_MAX_OUTPUT_TOKENS" in err

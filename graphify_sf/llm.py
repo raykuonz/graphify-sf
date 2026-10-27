@@ -78,7 +78,9 @@ def _openai_request_overrides(kwargs: dict) -> dict:
     ``temperature`` is not documented for them, so it is dropped, and a low
     ``reasoning_effort`` keeps extraction cheap and fast. Other model ids (for
     example ``GRAPHIFY_SF_OPENAI_MODEL=gpt-4.1-mini``) keep ``temperature`` and get no
-    reasoning knob.
+    reasoning knob. Only the ``gpt-6`` family is recognised: a different reasoning model
+    (``o4-mini``, ``gpt-5-*``, a ``ft:`` fine-tune) is sent ``temperature``, rejected once,
+    retried without it, and remembered for the rest of the run.
     """
     if re.match(r"gpt-6", str(kwargs.get("model", ""))):
         kwargs.pop("temperature", None)
@@ -392,6 +394,10 @@ def _validate_ollama_base_url(url: str) -> None:
 
 _OPTIONAL_PARAMS = ("temperature", "reasoning_effort")
 
+# (model, parameter) pairs an API has rejected in this process: later requests (other
+# chunks, bisected halves, 429 retries) omit them up front instead of paying a 400 each.
+_REJECTED_PARAMS: set[tuple[str, str]] = set()
+
 
 def _names_optional_param_400(exc: Exception) -> bool:
     """Whether *exc* is an HTTP 400 whose message names an optional request parameter."""
@@ -464,6 +470,11 @@ def _call_openai_compat(
     if request_overrides is not None:
         kwargs = request_overrides(kwargs)
 
+    if retry_unsupported_params:
+        for p in _OPTIONAL_PARAMS:
+            if (model, p) in _REJECTED_PARAMS:
+                kwargs.pop(p, None)
+
     try:
         resp = client.chat.completions.create(**kwargs)
     except Exception as exc:
@@ -478,6 +489,8 @@ def _call_openai_compat(
         for p in dropped:
             kwargs.pop(p)
         resp = client.chat.completions.create(**kwargs)
+        # Only after the retry succeeded: remember the rejection for the rest of the run.
+        _REJECTED_PARAMS.update((model, p) for p in dropped)
     raw_content = resp.choices[0].message.content
     result = _parse_llm_json(raw_content or "{}")
     result["input_tokens"] = resp.usage.prompt_tokens if resp.usage else 0
@@ -486,16 +499,22 @@ def _call_openai_compat(
     result["finish_reason"] = resp.choices[0].finish_reason
 
     if _response_is_hollow(raw_content, result) and result["finish_reason"] != "length":
-        reasoning = _reasoning_tokens(resp)
-        note = (
-            f" ({reasoning} reasoning tokens were spent; they count against max_completion_tokens)" if reasoning else ""
-        )
         print(
-            f"[graphify-sf] {backend or 'backend'} returned a hollow response{note}; "
+            f"[graphify-sf] {backend or 'backend'} returned a hollow response; "
             "treating as truncation so adaptive retry can bisect the chunk.",
             file=sys.stderr,
         )
         result["finish_reason"] = "length"
+    elif result["finish_reason"] == "length" and not (raw_content or "").strip():
+        # A reasoning model can spend the whole completion budget thinking and return nothing.
+        reasoning = _reasoning_tokens(resp)
+        if reasoning:
+            print(
+                f"[graphify-sf] {backend or 'backend'} used {reasoning} reasoning tokens and returned no content "
+                "(reasoning tokens count against the output limit); the chunk will be bisected, or raise "
+                "GRAPHIFY_SF_MAX_OUTPUT_TOKENS.",
+                file=sys.stderr,
+            )
 
     if result.get("output_tokens", 0) < 50 and backend == "ollama":
         print(
@@ -1033,10 +1052,9 @@ def model_overridden(backend: str) -> bool:
 
     Cost estimates use the default model's rates, so the CLI labels them when this is true.
     """
-    cfg = BACKENDS.get(backend, {})
-    key = cfg.get("model_env_key")
-    chosen = os.environ.get(key, "").strip() if key else ""
-    return bool(chosen) and chosen != cfg.get("default_model")
+    if backend not in BACKENDS:
+        return False
+    return _default_model_for_backend(backend) != BACKENDS[backend]["default_model"]
 
 
 def estimate_cost(backend: str, input_tokens: int, output_tokens: int) -> float:

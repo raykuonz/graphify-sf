@@ -815,6 +815,14 @@ class _StatusError(Exception):
         self.status_code = status_code
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rejected_params(monkeypatch):
+    """The rejected-parameter memo is process-wide; keep tests independent."""
+    from graphify_sf import llm
+
+    monkeypatch.setattr(llm, "_REJECTED_PARAMS", set())
+
+
 def _call_openai(llm, model, **kw):
     cfg = llm.BACKENDS["openai"]
     return llm._call_openai_compat(
@@ -942,17 +950,11 @@ def test_parameter_retry_is_openai_only(monkeypatch):
     assert len(calls) == 1
 
 
-def test_empty_reasoning_only_reply_warns_and_is_treated_as_truncation(monkeypatch, capsys):
+def test_model_overridden_uses_the_model_actually_sent(monkeypatch):
     from graphify_sf import llm
 
-    calls = _install_scripted_openai(
-        monkeypatch, [_openai_resp(content="", finish_reason="stop", reasoning_tokens=9000)]
-    )
-    result = _call_openai(llm, "gpt-6-luna")
-    assert result["finish_reason"] == "length"  # lets the adaptive retry bisect the chunk
-    err = capsys.readouterr().err
-    assert "9000 reasoning tokens" in err and "hollow response" in err
-    assert len(calls) == 1
+    monkeypatch.setenv("GRAPHIFY_SF_OPENAI_MODEL", " gpt-4.1-mini ")
+    assert llm.model_overridden("openai") is True
 
 
 def test_model_overridden_detects_env_choice(monkeypatch):
@@ -966,3 +968,43 @@ def test_model_overridden_detects_env_choice(monkeypatch):
     assert llm.model_overridden("openai") is True
     assert llm.model_overridden("claude") is False  # no model env key
     assert llm.model_overridden("nope") is False
+
+
+def test_reasoning_budget_exhausted_reply_names_the_cause(monkeypatch, capsys):
+    """finish_reason=length + empty content + reasoning tokens is how a reasoning model runs out of budget."""
+    from graphify_sf import llm
+
+    calls = _install_scripted_openai(
+        monkeypatch, [_openai_resp(content="", finish_reason="length", reasoning_tokens=9000)]
+    )
+    result = _call_openai(llm, "gpt-6-luna")
+    assert result["finish_reason"] == "length"
+    err = capsys.readouterr().err
+    assert "9000 reasoning tokens" in err and "GRAPHIFY_SF_MAX_OUTPUT_TOKENS" in err
+    assert len(calls) == 1
+
+
+def test_legitimately_empty_reply_does_not_blame_the_reasoning_budget(monkeypatch, capsys):
+    from graphify_sf import llm
+
+    _install_scripted_openai(
+        monkeypatch, [_openai_resp(content='{"nodes":[],"edges":[]}', finish_reason="stop", reasoning_tokens=300)]
+    )
+    result = _call_openai(llm, "gpt-6-luna")
+    assert result["finish_reason"] == "length"  # hollow: still bisects, as before this change
+    err = capsys.readouterr().err
+    assert "hollow response" in err and "reasoning tokens" not in err
+
+
+def test_rejected_parameter_is_remembered_for_the_rest_of_the_run(monkeypatch):
+    from graphify_sf import llm
+
+    err = _StatusError(400, "Unsupported parameter: 'temperature' is not supported with this model.")
+    calls = _install_scripted_openai(monkeypatch, [err, _openai_resp(), _openai_resp()])
+    _call_openai(llm, "o4-mini")
+    _call_openai(llm, "o4-mini")  # a later chunk: no wasted 400
+    assert [("temperature" in c) for c in calls] == [True, False, False]
+    # Another model is unaffected.
+    other = _install_scripted_openai(monkeypatch, [_openai_resp()])
+    _call_openai(llm, "gpt-4.1-mini")
+    assert other[0]["temperature"] == 0
