@@ -74,3 +74,4 @@ npm/bin/graphify-sf-bin.exe
 # Local-only working notes (plans, CC task briefs) — not shipped
 /docs/plans/
 /TASK_*.md
+reqs-binary.txt

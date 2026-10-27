@@ -28,8 +28,8 @@ OPENSSL_FORCE_FIPS_MODE=1 "$py" -c 'import _hashlib; print("FIPS mode when force
 cp -a /src /build
 cd /build
 "$py" -m venv /tmp/venv
-/tmp/venv/bin/python -m pip install -q --upgrade pip
-/tmp/venv/bin/python -m pip install -q ".[docs]" pyinstaller pyelftools
+# Hash-locked install (reqs-binary.txt was exported on the host and came in with the checkout).
+bash .github/scripts/install-binary-deps.sh /tmp/venv/bin/python
 bash .github/scripts/pyinstaller-build.sh /tmp/venv/bin/python
 /tmp/venv/bin/python .github/scripts/check-glibc.py dist/graphify-sf --max 2.28
 

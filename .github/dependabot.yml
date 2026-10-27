@@ -28,3 +28,24 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+
+  # manylinux base images for the Linux release binary. The digest in each Dockerfile's FROM
+  # line is what the build runs (build-linux-binary.sh reads it); CI rebuilds and smoke-tests
+  # the binary on every such PR. Dependabot does not recurse, so each directory is listed.
+  - package-ecosystem: "docker"
+    directory: "/.github/docker/manylinux-x86_64"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/.github/docker/manylinux-aarch64"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "docker"
