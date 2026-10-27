@@ -28,7 +28,7 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-Python 3.10+ required.
+Python 3.11+ required.
 
 ---
 

@@ -715,7 +715,7 @@ pip install graphify-sf[all]
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - No Salesforce CLI, no org connection, no API keys
 - Core dependencies: `networkx`, `pathspec`, `idna`
 
