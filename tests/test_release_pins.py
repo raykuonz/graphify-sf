@@ -2,13 +2,14 @@
 
 Static checks over .github/: every GitHub Action is pinned to a commit SHA, tool versions
 are exact, the manylinux base images are pinned by digest and are what the build script
-actually runs, the binary-build dependencies are hash-locked, and Dependabot watches the
-pinned files so the pins do not rot.
+actually runs, the binary-build dependencies are hash-locked, and Dependabot watches what it
+can (actions, the Dockerfiles, uv.lock; the uv/npm/Node versions in workflows are bumped by hand).
 """
 
 from __future__ import annotations
 
 import os
+import platform
 import re
 import shutil
 import stat
@@ -19,18 +20,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 GITHUB = ROOT / ".github"
-WORKFLOWS = sorted((GITHUB / "workflows").glob("*.yml"))
+WORKFLOWS = sorted([*(GITHUB / "workflows").glob("*.yml"), *(GITHUB / "workflows").glob("*.yaml")])
+ACTION_FILES = sorted((GITHUB / "actions").glob("**/action.y*ml")) if (GITHUB / "actions").exists() else []
 DOCKERFILES = sorted((GITHUB / "docker").glob("*/Dockerfile"))
 SHA = r"[0-9a-f]{40}"
 DIGEST_REF = re.compile(r"^[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}$")
 
 
 def _uses_lines():
-    for wf in WORKFLOWS:
+    for wf in [*WORKFLOWS, *ACTION_FILES]:
         for lineno, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1):
             m = re.match(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$", line)
             if m:
-                yield wf.name, lineno, m.group(1), m.group(2)
+                yield str(wf.relative_to(GITHUB)), lineno, m.group(1), m.group(2)
 
 
 def test_workflows_found():
@@ -46,16 +48,39 @@ def test_every_action_is_pinned_to_a_commit_sha(wf, lineno, ref, rest):
     assert re.match(r"^\s+#\s*v\d+(\.\d+)*\s*$", rest), f"{where}: needs a trailing '# vX.Y.Z' comment for Dependabot"
 
 
-def test_setup_uv_versions_are_exact():
-    versions = []
+def _setup_uv_steps():
+    """(workflow, step text) for every setup-uv step: the lines up to the next '- name:'/'- uses:' entry."""
     for wf in WORKFLOWS:
-        text = wf.read_text(encoding="utf-8")
-        for m in re.finditer(r"setup-uv@\S+.*?\n\s+with:\n\s+version:\s*\"?([^\"\n]+)\"?", text, re.S):
-            versions.append((wf.name, m.group(1)))
-    assert versions, "no setup-uv steps found"
-    for name, version in versions:
-        assert re.fullmatch(r"\d+\.\d+\.\d+", version), f"{name}: uv version {version!r} is not exact"
-    assert len({v for _, v in versions}) == 1, f"uv versions differ between steps: {versions}"
+        lines = wf.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if "astral-sh/setup-uv@" not in line:
+                continue
+            j = i + 1
+            while j < len(lines) and not re.match(r"\s*-\s+(name|uses):", lines[j]):
+                j += 1
+            yield wf.name, "\n".join(lines[i:j])
+
+
+def test_setup_uv_versions_are_exact_and_release_steps_do_not_cache():
+    steps = list(_setup_uv_steps())
+    assert len(steps) >= 5, "setup-uv steps not found"
+    seen = set()
+    for name, step in steps:
+        m = re.search(r"^\s+version:\s*\"?(\d+\.\d+\.\d+)\"?\s*$", step, re.M)
+        assert m, f"{name}: setup-uv step without an exact version:\n{step}"
+        seen.add(m.group(1))
+        if name in ("release-binaries.yml", "publish.yml"):
+            assert re.search(r"^\s+enable-cache:\s*false\b", step, re.M), f"{name}: release jobs must not cache"
+    assert len(seen) == 1, f"uv versions differ between steps: {seen}"
+
+
+def test_pypi_oidc_permission_is_only_on_the_publish_job():
+    text = (GITHUB / "workflows" / "publish.yml").read_text(encoding="utf-8")
+    top = text.split("jobs:", 1)[0]
+    assert "id-token" not in top, "id-token must not be granted at workflow level"
+    build, publish = text.split("  publish:", 1)
+    assert "id-token" not in build, "the build job runs build-backend code and must not mint OIDC tokens"
+    assert "id-token: write" in publish
 
 
 def test_npm_is_installed_at_an_exact_trusted_publishing_version():
@@ -105,7 +130,7 @@ def test_build_script_runs_exactly_the_pinned_image(tmp_path):
         [bash, str(GITHUB / "scripts" / "build-linux-binary.sh")], cwd=work, env=env, check=True, capture_output=True
     )
 
-    arch = "aarch64" if os.uname().machine in ("aarch64", "arm64") else "x86_64"
+    arch = "aarch64" if platform.machine().lower() in ("aarch64", "arm64") else "x86_64"
     expected = (GITHUB / "docker" / f"manylinux-{arch}" / "Dockerfile").read_text(encoding="utf-8")
     ref = next(ln.split()[1] for ln in expected.splitlines() if ln.startswith("FROM "))
     calls = log.read_text(encoding="utf-8").splitlines()
@@ -155,7 +180,9 @@ def test_binary_requirements_export_is_fully_hash_locked(tmp_path):
         assert "--hash=sha256:" in block, f"requirement without a hash: {block.splitlines()[0]}"
     names = {re.match(r"[A-Za-z0-9_.-]+", b).group(0).lower() for b in blocks}
     # Build tooling, the pinned build backend, and the docs extra are all in the file.
-    assert {"pyinstaller", "setuptools", "pyelftools", "networkx", "pypdf"} <= names
+    assert {"pyinstaller", "setuptools", "pyelftools", "networkx"} <= names
+    # The docs extra is excluded from the bundle (pyinstaller-build.sh), so it is not installed either.
+    assert not names & {"pypdf", "python-docx", "openpyxl", "lxml"}
     # One file serves every platform: platform-only packages carry markers instead of being dropped.
     assert any(b.startswith("pefile") and "sys_platform == 'win32'" in b for b in blocks)
     assert any(b.startswith("macholib") and "sys_platform == 'darwin'" in b for b in blocks)
@@ -171,5 +198,9 @@ def test_install_script_uses_hashes_and_the_pinned_build_backend():
     inner = (GITHUB / "scripts" / "manylinux-build-inner.sh").read_text(encoding="utf-8")
     assert "install-binary-deps.sh" in inner
     assert "--upgrade pip" not in inner
+    assert "--only-binary=:all:" in text
     for wf in ("ci.yml", "release-binaries.yml"):
-        assert "export-binary-requirements.sh" in (GITHUB / "workflows" / wf).read_text(encoding="utf-8")
+        wf_text = (GITHUB / "workflows" / wf).read_text(encoding="utf-8")
+        assert "export-binary-requirements.sh" in wf_text, wf
+        assert "install-binary-deps.sh" in wf_text, wf
+        assert 'pip install ".[docs]"' not in wf_text, f"{wf}: unpinned binary install is back"

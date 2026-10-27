@@ -8,7 +8,8 @@ name: Release Binaries + npm
 # e.g. to finish a partial publish. A re-run uploads only missing release
 # binaries and publishes only npm versions not yet on the registry; it never
 # replaces bytes that were already released. Dispatch checks out the tag's tree,
-# so it needs a tag at v0.4.4 or later (older tags lack .github/scripts/).
+# so it needs a tag that contains the hash-locked binary build (.github/scripts/export-binary-requirements.sh, v0.5.0
+# or later). Older tags cannot be re-run here: their trees predate it and fail the preflight check below.
 #
 # npm auth: Trusted Publishing (OIDC). Each of the 6 packages has a trusted
 # publisher for raykuonz/graphify-sf + release-binaries.yml with "npm publish"
@@ -21,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag (v0.4.4 or later) to finish building/publishing (e.g. v0.4.4)"
+        description: "Existing release tag (v0.5.0 or later) to finish building/publishing (e.g. v0.5.0)"
         required: true
         type: string
 
@@ -111,10 +112,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Preflight - tag has the hash-locked binary build
+        shell: bash
+        run: |
+          [ -f .github/scripts/export-binary-requirements.sh ] || {
+            echo "tag ${{ steps.tag.outputs.tag }} predates the hash-locked binary build (needs v0.5.0 or later)." >&2
+            echo "Older releases cannot be re-run from this workflow." >&2
+            exit 1
+          }
+
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.13.6"
+          enable-cache: false   # never cache in a release job
 
       - name: Export hash-locked binary requirements
         shell: bash
@@ -213,12 +224,12 @@ jobs:
           node-version: "24"
           package-manager-cache: false   # never cache in a release job
 
-      - name: Ensure npm supports trusted publishing (>= 11.5.1)
+      # Exact npm, installed unconditionally: the bundled one is whatever the latest Node 24 ships.
+      # Trusted Publishing needs >= 11.5.1.
+      - name: Install pinned npm
         shell: bash
         run: |
-          if ! node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"; then
-            npm install -g npm@11.21.1
-          fi
+          npm install -g npm@11.21.1
           npm --version
 
       # Pull the binaries that build-binaries just uploaded to the GitHub

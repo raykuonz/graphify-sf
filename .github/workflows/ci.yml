@@ -85,6 +85,11 @@ jobs:
       - name: Install lint dependencies
         run: uv sync --extra dev --frozen
 
+      # --frozen elsewhere trusts uv.lock; this catches pyproject.toml edits (runtime deps, the
+      # binary group) that were not re-locked before they reach a release build.
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+
       - name: Run ruff (linter)
         run: uv run ruff check graphify_sf/ tests/
 
@@ -192,7 +197,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-14, macos-15-intel, windows-latest]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

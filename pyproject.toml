@@ -93,11 +93,11 @@ ignore = [
 # Binary-build tooling (PEP 735). Not an extra, so the published metadata is unchanged.
 # Release and PR binary builds install a hash-locked export of this group
 # (.github/scripts/export-binary-requirements.sh); setuptools is here because the project
-# is then built with --no-build-isolation, so no unpinned build code runs.
+# is then built with --no-build-isolation, so no unpinned build code runs (wheels only).
 [dependency-groups]
 binary = [
     "pyinstaller==6.22.3",
-    "pyelftools==0.33; sys_platform == 'linux'",  # PyInstaller's glibc/ELF analysis on Linux
+    "pyelftools==0.33; sys_platform == 'linux'",  # used by .github/scripts/check-glibc.py (Linux)
     "setuptools==84.2.1",
 ]
 
