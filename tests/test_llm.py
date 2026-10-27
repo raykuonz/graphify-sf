@@ -773,3 +773,196 @@ def test_kimi_request_overrides_hook_shape():
 
     # A caller-chosen effort is not overridden.
     assert _kimi_request_overrides({"model": "kimi-k3", "reasoning_effort": "high"})["reasoning_effort"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# OpenAI default model (gpt-6-luna), request overrides, parameter retry
+# ---------------------------------------------------------------------------
+
+
+def _install_scripted_openai(monkeypatch, script):
+    """Fake ``openai.OpenAI`` whose ``create`` plays *script* (exceptions raised, others returned)."""
+    calls: list[dict] = []
+
+    class _Client:
+        def __init__(self, **init_kwargs):
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            calls.append(dict(kwargs))
+            step = script[len(calls) - 1]
+            if isinstance(step, Exception):
+                raise step
+            return step
+
+    fake_mod = types.ModuleType("openai")
+    fake_mod.OpenAI = _Client
+    monkeypatch.setitem(sys.modules, "openai", fake_mod)
+    return calls
+
+
+def _openai_resp(content=_FAKE_JSON, finish_reason="stop", reasoning_tokens=None):
+    details = types.SimpleNamespace(reasoning_tokens=reasoning_tokens) if reasoning_tokens is not None else None
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=content), finish_reason=finish_reason)],
+        usage=types.SimpleNamespace(prompt_tokens=5, completion_tokens=10, completion_tokens_details=details),
+    )
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code, message):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _call_openai(llm, model, **kw):
+    cfg = llm.BACKENDS["openai"]
+    return llm._call_openai_compat(
+        cfg["base_url"],
+        "sk-test",
+        model,
+        "hi",
+        temperature=cfg["temperature"],
+        max_completion_tokens=321,
+        backend="openai",
+        request_overrides=cfg["request_overrides"],
+        retry_unsupported_params=cfg["retry_unsupported_params"],
+        **kw,
+    )
+
+
+def test_openai_defaults_are_gpt_6_luna_with_new_pricing(monkeypatch):
+    from graphify_sf import llm
+
+    monkeypatch.delenv("GRAPHIFY_SF_OPENAI_MODEL", raising=False)
+    assert llm.BACKENDS["openai"]["default_model"] == "gpt-6-luna"
+    assert llm._default_model_for_backend("openai") == "gpt-6-luna"
+    assert llm.BACKENDS["openai"]["pricing"] == {"input": 0.10, "output": 0.50}
+    assert abs(llm.estimate_cost("openai", 1_000_000, 1_000_000) - 0.60) < 1e-9
+
+
+def test_openai_overrides_gpt6_drops_temperature_and_sets_low_effort():
+    from graphify_sf.llm import _openai_request_overrides
+
+    out = _openai_request_overrides({"model": "gpt-6-luna", "temperature": 0})
+    assert "temperature" not in out
+    assert out["reasoning_effort"] == "low"
+    # An explicit effort is kept.
+    assert _openai_request_overrides({"model": "gpt-6-terra", "reasoning_effort": "high"})["reasoning_effort"] == "high"
+
+
+def test_openai_overrides_leave_older_models_alone():
+    from graphify_sf.llm import _openai_request_overrides
+
+    out = _openai_request_overrides({"model": "gpt-4.1-mini", "temperature": 0})
+    assert out == {"model": "gpt-4.1-mini", "temperature": 0}
+
+
+def test_openai_gpt6_request_reaches_sdk_without_temperature(monkeypatch):
+    from graphify_sf import llm
+
+    calls = _install_scripted_openai(monkeypatch, [_openai_resp()])
+    _call_openai(llm, "gpt-6-luna")
+    (kw,) = calls
+    assert "temperature" not in kw
+    assert kw["reasoning_effort"] == "low"
+    assert kw["max_completion_tokens"] == 321
+
+
+def test_openai_env_override_keeps_temperature_for_old_model(monkeypatch):
+    from graphify_sf import llm
+
+    calls = _install_scripted_openai(monkeypatch, [_openai_resp()])
+    _call_openai(llm, "gpt-4.1-mini")
+    (kw,) = calls
+    assert kw["temperature"] == 0
+    assert "reasoning_effort" not in kw
+
+
+def test_openai_400_naming_params_retries_once_without_both(monkeypatch, capsys):
+    from graphify_sf import llm
+
+    err = _StatusError(400, "Unsupported parameter: 'reasoning_effort' is not supported with this model.")
+    calls = _install_scripted_openai(monkeypatch, [err, _openai_resp()])
+    result = _call_openai(llm, "gpt-6-luna")
+    assert result["nodes"] == [{"id": "x"}]
+    assert len(calls) == 2
+    assert "reasoning_effort" in calls[0]
+    assert "reasoning_effort" not in calls[1] and "temperature" not in calls[1]
+    assert "retrying once without them" in capsys.readouterr().err
+
+
+def test_openai_retry_strips_temperature_for_non_gpt6_model(monkeypatch):
+    from graphify_sf import llm
+
+    err = _StatusError(400, "Unsupported value: 'temperature' does not support 0 with this model.")
+    calls = _install_scripted_openai(monkeypatch, [err, _openai_resp()])
+    _call_openai(llm, "some-other-model")
+    assert calls[0]["temperature"] == 0 and "temperature" not in calls[1]
+
+
+def test_openai_second_400_raises_without_a_third_call(monkeypatch):
+    from graphify_sf import llm
+
+    err = _StatusError(400, "Unsupported parameter: 'temperature'")
+    calls = _install_scripted_openai(monkeypatch, [err, _StatusError(400, "still bad temperature")])
+    with pytest.raises(_StatusError):
+        _call_openai(llm, "gpt-4.1-mini")
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _StatusError(400, "This model's maximum context length is 128000 tokens"),
+        _StatusError(429, "rate limited, mentions temperature"),
+        _StatusError(500, "temperature exploded"),
+        ValueError("temperature"),
+    ],
+)
+def test_openai_unrelated_errors_are_not_retried(monkeypatch, exc):
+    from graphify_sf import llm
+
+    calls = _install_scripted_openai(monkeypatch, [exc, _openai_resp()])
+    with pytest.raises(type(exc)):
+        _call_openai(llm, "gpt-6-luna")
+    assert len(calls) == 1
+
+
+def test_parameter_retry_is_openai_only(monkeypatch):
+    """gemini/kimi/ollama share _call_openai_compat; their 400s must propagate unchanged."""
+    from graphify_sf import llm
+
+    for name, cfg in llm.BACKENDS.items():
+        assert bool(cfg.get("retry_unsupported_params")) == (name == "openai"), name
+    err = _StatusError(400, "Unsupported parameter: 'temperature'")
+    calls = _install_scripted_openai(monkeypatch, [err, _openai_resp()])
+    with pytest.raises(_StatusError):
+        llm._call_openai_compat("http://x/v1", "k", "gemini-3.6-flash", "hi", temperature=0, backend="gemini")
+    assert len(calls) == 1
+
+
+def test_empty_reasoning_only_reply_warns_and_is_treated_as_truncation(monkeypatch, capsys):
+    from graphify_sf import llm
+
+    calls = _install_scripted_openai(
+        monkeypatch, [_openai_resp(content="", finish_reason="stop", reasoning_tokens=9000)]
+    )
+    result = _call_openai(llm, "gpt-6-luna")
+    assert result["finish_reason"] == "length"  # lets the adaptive retry bisect the chunk
+    err = capsys.readouterr().err
+    assert "9000 reasoning tokens" in err and "hollow response" in err
+    assert len(calls) == 1
+
+
+def test_model_overridden_detects_env_choice(monkeypatch):
+    from graphify_sf import llm
+
+    monkeypatch.delenv("GRAPHIFY_SF_OPENAI_MODEL", raising=False)
+    assert llm.model_overridden("openai") is False
+    monkeypatch.setenv("GRAPHIFY_SF_OPENAI_MODEL", "gpt-6-luna")
+    assert llm.model_overridden("openai") is False  # same as the default
+    monkeypatch.setenv("GRAPHIFY_SF_OPENAI_MODEL", "gpt-4.1-mini")
+    assert llm.model_overridden("openai") is True
+    assert llm.model_overridden("claude") is False  # no model env key
+    assert llm.model_overridden("nope") is False
