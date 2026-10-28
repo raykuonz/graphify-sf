@@ -39,6 +39,11 @@ def _assert_invariant(analysis: dict) -> None:
             assert entry["analyzed"] + entry["failed"] == entry["eligible"], (name, entry)
 
 
+def _count(project: Path, *patterns: str) -> int:
+    """Eligible files counted straight from disk, independently of the coordinator."""
+    return sum(1 for pattern in patterns for _ in project.rglob(pattern))
+
+
 # ── pure functions ───────────────────────────────────────────────────────────────────
 
 
@@ -68,12 +73,46 @@ def test_merged_ledger_is_a_status_only_meet():
     }
     partial = {"version": "0.6.0", "analysis": {"x": {"status": "partial", "eligible": 9, "analyzed": 5, "failed": 4}}}
     merged = _ledger.merged_ledger([complete, partial])
-    assert merged == {"scope": "merged", "analysis": {"x": {"status": "partial"}}, "capabilities": []}
+    assert merged == {
+        "scope": "merged",
+        "analysis": {"x": {"status": "partial"}},
+        "capabilities": [],
+        "versions": ["0.6.0"],
+    }
     assert _ledger.merged_ledger([complete, complete])["capabilities"] == ["x"]
     # an input without a block (or without the analyzer) never contributes coverage
     assert _ledger.merged_ledger([complete, None])["analysis"]["x"]["status"] == "not_run"
     assert _ledger.merged_ledger([complete, {"analysis": {}}])["analysis"]["x"]["status"] == "not_run"
     assert _ledger.merged_ledger([None, None]) is None
+
+
+def test_every_analyzer_suffix_is_dispatched_to_the_intended_extractor():
+    """A typo'd suffix would give eligible 0, which is 'complete': guard the table against that."""
+    import graphify_sf.extract as ex
+    from graphify_sf.extract.apex import extract_apex_class, extract_apex_trigger
+    from graphify_sf.extract.flow import extract_flow
+
+    expected = {".cls": extract_apex_class, ".trigger": extract_apex_trigger, ".flow-meta.xml": extract_flow}
+    for name, spec in _ledger.ANALYZERS.items():
+        assert spec["suffixes"], name
+        for suffix in spec["suffixes"]:
+            assert ex._DISPATCH[suffix] is expected[suffix], (name, suffix)
+
+
+def test_merged_ledger_tolerates_malformed_blocks_and_records_versions():
+    good = {"version": "0.6.0", "analysis": {"x": {"status": "complete"}}}
+    for bad in (
+        {"analysis": None},
+        {"analysis": {"x": None}},
+        {"analysis": {"x": {"status": "weird"}}},
+        {"analysis": ["x"]},
+        "not a dict",
+    ):
+        merged = _ledger.merged_ledger([good, bad])
+        assert merged["analysis"]["x"]["status"] == "not_run", bad
+        assert merged["capabilities"] == []
+    assert _ledger.merged_ledger([good, good])["versions"] == ["0.6.0"]
+    assert "versions" not in _ledger.merged_ledger([{"analysis": {"x": {"status": "complete"}}}])
 
 
 # ── coordinator accounting ───────────────────────────────────────────────────────────
@@ -85,9 +124,12 @@ def test_disabled_analyzers_report_not_run(tmp_path):
 
 
 def test_enabled_analyzers_count_their_eligible_files(tmp_path, enabled):
-    analysis = extract(detect(_project(tmp_path)), parallel=False)["analysis"]
-    assert analysis["callout-edges.apex"]["eligible"] == 3 and analysis["callout-edges.apex"]["status"] == "complete"
-    assert analysis["callout-edges.flow-http"]["eligible"] == 1
+    project = _project(tmp_path)
+    analysis = extract(detect(project), parallel=False)["analysis"]
+    apex, flow = analysis["callout-edges.apex"], analysis["callout-edges.flow-http"]
+    assert apex["eligible"] == _count(project, "*.cls", "*.trigger") == 3 and apex["status"] == "complete"
+    assert flow["eligible"] == _count(project, "*.flow-meta.xml") == 1
+    assert apex["analyzed"] == apex["eligible"] and flow["analyzed"] == flow["eligible"]
     _assert_invariant(analysis)
 
 
@@ -284,7 +326,12 @@ def test_merge_graphs_writes_a_status_only_meet(tmp_path):
     out = tmp_path / "merged" / "graph.json"
     _cmd_merge_graphs([a, b], out, no_viz=True)
     merged = json.loads(out.read_text())["graphify_sf"]
-    assert merged == {"scope": "merged", "analysis": {"callout-edges.apex": {"status": "partial"}}, "capabilities": []}
+    assert merged == {
+        "scope": "merged",
+        "analysis": {"callout-edges.apex": {"status": "partial"}},
+        "capabilities": [],
+        "versions": ["0.6.0"],
+    }
 
 
 def test_merge_graphs_without_any_block_writes_none(tmp_path):
@@ -307,6 +354,16 @@ def test_merge_graphs_with_one_block_does_not_claim_coverage(tmp_path):
     assert json.loads(out.read_text())["graphify_sf"]["capabilities"] == []
 
 
+def test_merge_driver_ignores_the_bases_ledger(tmp_path):
+    from graphify_sf.__main__ import _cmd_merge_driver
+
+    base = _graph_with(tmp_path / "base.json", _block("partial"))  # would drag the meet down if it counted
+    ours = _graph_with(tmp_path / "ours.json", _block("complete"))
+    theirs = _graph_with(tmp_path / "theirs.json", _block("complete"))
+    _cmd_merge_driver(base, ours, theirs)
+    assert json.loads(ours.read_text())["graphify_sf"]["capabilities"] == ["callout-edges.apex"]
+
+
 def test_merge_driver_writes_the_meet_of_ours_and_theirs(tmp_path):
     from graphify_sf.__main__ import _cmd_merge_driver
 
@@ -317,6 +374,52 @@ def test_merge_driver_writes_the_meet_of_ours_and_theirs(tmp_path):
     merged = json.loads(ours.read_text())["graphify_sf"]
     assert merged["scope"] == "merged" and merged["capabilities"] == []
     assert merged["analysis"]["callout-edges.apex"] == {"status": "partial"}
+
+
+def test_only_the_top_level_block_counts(tmp_path):
+    """A nested graph.graphify_sf (hand-built or from an odd tool) is never promoted to a ledger."""
+    from graphify_sf.__main__ import _cmd_export_json, _load_graph_from_json
+
+    nested = tmp_path / "nested" / "graph.json"
+    nested.parent.mkdir()
+    nested.write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "a", "label": "A", "sf_type": "ApexClass", "file_type": "apex"}],
+                "links": [],
+                "graph": {"graphify_sf": _block("complete")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    G, raw = _load_graph_from_json(nested)
+    assert "graphify_sf" not in G.graph
+    assert "graphify_sf" in raw["graph"], "loading must not mutate the caller's raw dict"
+    _cmd_export_json(nested, tmp_path / "exported")
+    exported = json.loads((tmp_path / "exported" / "graph.json").read_text())
+    assert "graphify_sf" not in exported and "graphify_sf" not in exported["graph"]
+
+
+def test_an_empty_top_level_block_is_not_written_anywhere(tmp_path):
+    from graphify_sf.__main__ import _cmd_export_json
+
+    empty = _graph_with(tmp_path / "e" / "graph.json", {})
+    _cmd_export_json(empty, tmp_path / "exported")
+    exported = json.loads((tmp_path / "exported" / "graph.json").read_text())
+    assert "graphify_sf" not in exported and "graphify_sf" not in exported["graph"]
+
+
+def test_the_block_is_written_once_even_when_the_graph_dict_also_holds_one(tmp_path):
+    import networkx as nx
+
+    from graphify_sf.export import to_json
+
+    G = nx.MultiDiGraph()
+    G.add_node("a", label="A", sf_type="ApexClass", file_type="apex")
+    G.graph["graphify_sf"] = _block("complete")
+    to_json(G, {}, str(tmp_path / "graph.json"), force=True)
+    data = json.loads((tmp_path / "graph.json").read_text())
+    assert data["graphify_sf"] == _block("complete") and "graphify_sf" not in data["graph"]
 
 
 # ── surfaces ─────────────────────────────────────────────────────────────────────────
@@ -336,6 +439,27 @@ def test_stats_command_says_so_when_there_is_no_block(tmp_path, capsys):
 
     _cmd_stats(_graph_with(tmp_path / "graph.json", None))
     assert "coverage ledger" in capsys.readouterr().out
+
+
+def test_stats_command_survives_a_hand_edited_ledger(tmp_path, capsys):
+    from graphify_sf.__main__ import _cmd_stats
+
+    block = {
+        "version": "x",
+        "analysis": {"callout-edges.apex": {"status": "complete", "eligible": 3}},
+        "capabilities": [],
+    }
+    _cmd_stats(_graph_with(tmp_path / "graph.json", block))
+    assert "eligible 3" in capsys.readouterr().out
+
+
+def test_mcp_graph_stats_says_null_when_the_graph_has_no_block(tmp_path):
+    from graphify_sf import serve
+
+    serve._G = None
+    serve._ensure_graph(str(_graph_with(tmp_path / "graph.json", None)))
+    stats = serve._tool_graph_stats({})
+    assert stats["analysis"] is None and stats["capabilities"] is None
 
 
 def test_mcp_graph_stats_exposes_analysis_and_capabilities(tmp_path, enabled):

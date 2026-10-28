@@ -352,8 +352,9 @@ def _tool_graph_stats(args: dict) -> dict:
         "community_labels": {str(k): v for k, v in _community_labels.items()},
         "top_sf_types": dict(sf_types.most_common(10)),
         # Which analyses this graph was built with ("callout-edges.apex", ...). Absent = never analysed.
+        # Both are null when the graph carries no ledger: that is "never analysed", not "analysed, nothing complete".
         "analysis": (_G.graph.get("graphify_sf") or {}).get("analysis"),
-        "capabilities": (_G.graph.get("graphify_sf") or {}).get("capabilities", []),
+        "capabilities": (_G.graph.get("graphify_sf") or {}).get("capabilities"),
     }
 
 

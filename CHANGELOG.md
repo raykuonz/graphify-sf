@@ -42,7 +42,9 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   watch rebuilds) writes counters. `cluster-only` and `export json` carry the block through untouched and never
   create or upgrade one; `merge-graphs` and the merge driver write a status-only meet (`"scope": "merged"`, worst
   status per analyzer, an input without a block counts as `not_run`, no counters). `graphify-sf stats` and the
-  MCP `graph_stats` tool show it. The two callout analyzers report `not_run` in this build until their extractors
+  MCP `graph_stats` tool show it (the MCP fields are `null` when a graph has no block). "Complete" is relative to what
+  graphify-sf scanned: files skipped by `.gitignore` / `.forceignore` and bundle or document extraction are not part of an
+  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The two callout analyzers report `not_run` in this build until their extractors
   ship, so no capability is advertised yet.
 
 ### Changed

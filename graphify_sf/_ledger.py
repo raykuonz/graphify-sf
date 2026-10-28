@@ -16,6 +16,10 @@ write a status-only meet (`merged_ledger`), never counters.
 
 from __future__ import annotations
 
+# Scope: "complete" is relative to what ``detect`` handed the extractors (so files skipped by .gitignore /
+# .forceignore / .graphifysfignore, or in formats it does not read, are not "eligible"), and only single-file
+# metadata is accounted: bundle (LWC / Aura) and document extraction are not part of any analyzer here.
+
 # Analyzers the coordinator accounts for. ``enabled`` flips to True when the extractor that does the
 # work ships; until then the analyzer reports ``not_run`` and no capability is advertised.
 ANALYZERS: dict[str, dict] = {
@@ -74,14 +78,27 @@ def build_ledger(version: str, analysis: dict) -> dict:
 def merged_ledger(blocks: list[dict | None]) -> dict | None:
     """Status-only meet of several inputs' blocks, or None when no input has one.
 
-    An input without a block, or without an analyzer, counts as ``not_run`` for it. The merged block
-    carries no counters: eligible/analyzed/failed/sites of a merged graph have no truthful meaning.
+    An input without a block, or without the analyzer, counts as ``not_run`` for it. The merged block
+    carries no counters (eligible/analyzed/failed/sites of a merged graph have no truthful meaning) but
+    lists the tool versions that produced the inputs. Malformed entries count as ``not_run``.
     """
+    blocks = [b if isinstance(b, dict) else None for b in blocks]
     if not any(blocks):
         return None
-    names = sorted({name for b in blocks if b for name in (b.get("analysis") or {})})
-    analysis = {}
-    for name in names:
-        statuses = [((b or {}).get("analysis") or {}).get(name, {}).get("status", "not_run") for b in blocks]
-        analysis[name] = {"status": min(statuses, key=lambda s: _RANK.get(s, 0))}
-    return {"scope": "merged", "analysis": analysis, "capabilities": derive_capabilities(analysis)}
+
+    def analysis_of(block: dict | None) -> dict:
+        analysis = (block or {}).get("analysis")
+        return analysis if isinstance(analysis, dict) else {}
+
+    def status_of(block: dict | None, name: str) -> str:
+        entry = analysis_of(block).get(name)
+        status = entry.get("status") if isinstance(entry, dict) else None
+        return status if status in _RANK else "not_run"
+
+    names = sorted({name for b in blocks for name in analysis_of(b)})
+    analysis = {name: {"status": min((status_of(b, name) for b in blocks), key=_RANK.get)} for name in names}
+    versions = sorted({str(b["version"]) for b in blocks if b and b.get("version")})
+    merged = {"scope": "merged", "analysis": analysis, "capabilities": derive_capabilities(analysis)}
+    if versions:
+        merged["versions"] = versions
+    return merged

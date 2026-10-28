@@ -87,7 +87,9 @@ def _load_graph_from_json(path: Path):
         G = _jg.node_link_graph(raw)
     # The coverage ledger is top-level in graph.json; keep it on the graph so every command that loads and
     # re-exports (cluster-only, export json) passes it through unchanged.
-    if isinstance(raw.get("graphify_sf"), dict):
+    G.graph = dict(G.graph)  # node_link_graph aliases raw["graph"]; do not mutate the caller's dict
+    G.graph.pop("graphify_sf", None)  # only the top-level block counts, never a nested copy
+    if isinstance(raw.get("graphify_sf"), dict) and raw["graphify_sf"]:
         G.graph["graphify_sf"] = raw["graphify_sf"]
     return G, raw
 
@@ -808,8 +810,9 @@ def _cmd_stats(graph_path: Path) -> None:
             counts = ""
             if "eligible" in entry:
                 counts = (
-                    f"  eligible {entry['eligible']}, analyzed {entry['analyzed']}, failed {entry['failed']}, "
-                    f"sites {entry.get('sites', 0)}, unresolved {entry.get('unresolved', 0)}"
+                    f"  eligible {entry.get('eligible', 0)}, analyzed {entry.get('analyzed', 0)}, "
+                    f"failed {entry.get('failed', 0)}, sites {entry.get('sites', 0)}, "
+                    f"unresolved {entry.get('unresolved', 0)}"
                 )
             print(f"  {name:30s} {entry.get('status', 'unknown')}{counts}")
         print(f"  Capabilities:   {', '.join(ledger.get('capabilities') or []) or '(none)'}")
