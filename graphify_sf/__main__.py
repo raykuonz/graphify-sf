@@ -88,40 +88,15 @@ def _load_graph_from_json(path: Path):
 
 
 def _union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Union raw graph.json node/link lists across multiple graphs.
+    """Union raw graph.json node/link lists across multiple graphs (see ``_merge.union_graph_json``).
 
-    Nodes are deduped by ``id`` (first occurrence wins). Links are unioned and
-    deduped on a canonical hash of the full edge dict (minus the per-graph
-    ``key``/``source_file`` fields), so distinct parallel edges are ALL
-    preserved — both those differing in ``relation`` (e.g. ``queries`` + ``dml``
-    on the same pair) and those differing only in ``operation`` (e.g. two
-    ``dml`` edges, one create + one update, on the same pair). A plain
-    ``nx.Graph()`` union would collapse the former, and a coarse
-    ``(source, target, relation)`` key would collapse the latter, before the
-    multigraph build ever runs. Genuinely-identical duplicate edges (the
-    base/ours/theirs 3-way merge case) still coalesce to one.
+    Links are matched on their logical identity (everything except per-graph and volatile fields), so
+    distinct parallel edges (``queries`` + ``dml``, or ``dml`` create + update on one pair) are all
+    preserved, which a plain ``nx.Graph()`` union would collapse before the multigraph build runs.
     """
-    from graphify_sf._merge import edge_identity
+    from graphify_sf._merge import union_graph_json
 
-    all_nodes: dict[str, dict] = {}
-    all_edges: list[dict] = []
-    seen_edges: set[str] = set()
-    for data in datas:
-        for node in data.get("nodes", []):
-            nid = node.get("id", "")
-            if nid and nid not in all_nodes:
-                all_nodes[nid] = node
-        links_key = "links" if "links" in data else "edges"
-        for edge in data.get(links_key, []):
-            identity = edge_identity(edge)
-            if identity not in seen_edges:
-                seen_edges.add(identity)
-                # Drop the exported per-graph "key" — each source graph numbers its
-                # own parallel edges from 0, so two distinct relations on the same
-                # pair both arrive as key=0 and would collapse on rebuild. Stripping
-                # it lets the MultiDiGraph assign fresh keys per parallel edge.
-                all_edges.append({k: v for k, v in edge.items() if k != "key"})
-    return list(all_nodes.values()), all_edges
+    return union_graph_json(datas)
 
 
 def _derive_community_labels(G, communities: dict) -> dict[int, str]:
@@ -1032,7 +1007,7 @@ def _cmd_merge_driver(base: Path, ours: Path, theirs: Path) -> None:
         print(f"[graphify-sf] merge-driver: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    all_nodes, all_edges = three_way_merge(base_data, ours_data, theirs_data)
+    all_nodes, all_edges = three_way_merge(base_data, ours_data, theirs_data, prune_dangling=True)
     nodes_dedup, edges_dedup = deduplicate_by_label(all_nodes, all_edges)
     G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup}, multigraph=True)
     communities = cluster(G)

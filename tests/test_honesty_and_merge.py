@@ -52,6 +52,15 @@ def test_commented_or_quoted_setendpoint_emits_no_edge(tmp_path, body):
     assert _apex_edges(tmp_path, body) == []
 
 
+def test_an_unclosed_quote_in_a_comment_does_not_swallow_the_next_real_call(tmp_path):
+    body = "// TODO fix req.setEndpoint('\npublic void go() { req.setEndpoint('callout:Real_NC/x'); }"
+    assert [e["target"] for e in _apex_edges(tmp_path, body)] == ["namedcredential_real_nc"]
+
+
+def test_a_double_quoted_call_inside_a_single_quoted_apex_string_emits_no_edge(tmp_path):
+    assert _apex_edges(tmp_path, "String doc = 'then .setEndpoint(\"callout:Quoted_NC\") runs';") == []
+
+
 def test_comment_next_to_a_real_call_does_not_hide_it(tmp_path):
     body = "// req.setEndpoint('callout:Old_NC');\npublic void go() { req.setEndpoint('callout:New_NC/v1'); }"
     assert [e["target"] for e in _apex_edges(tmp_path, body)] == ["namedcredential_new_nc"]
@@ -87,7 +96,6 @@ def test_export_graphml_writes_a_real_graph_and_drops_graph_level_metadata(tmp_p
     G.graph["graphify_sf"] = {"analysis": {"x": {"status": "complete"}}}
     G.graph["hyperedges"] = [{"nodes": ["a", "b"]}]
     for _u, _v, a in G.edges(data=True):
-        a["_tgt_name"] = "Original_Case"
         a["listy"] = ["a", "b"]
         break
 
@@ -98,8 +106,24 @@ def test_export_graphml_writes_a_real_graph_and_drops_graph_level_metadata(tmp_p
     assert H.number_of_nodes() == G.number_of_nodes()
     assert H.number_of_edges() == G.number_of_edges()
     assert "graphify_sf" not in H.graph and "hyperedges" not in H.graph
-    assert all("_tgt_name" not in a for _, _, a in H.edges(data=True))
     assert any(json.loads(a["listy"]) == ["a", "b"] for _, _, a in H.edges(data=True) if "listy" in a)
+
+
+@pytest.mark.parametrize("cls", [nx.Graph, nx.DiGraph, nx.MultiGraph, nx.MultiDiGraph])
+def test_graphml_projection_handles_every_graph_class(tmp_path, cls):
+    from graphify_sf.export import to_graphml
+
+    G = cls()
+    G.add_node("a", label="A", source_location=None, tags=["x", "y"], flag=True)
+    G.add_node("b", label="B")
+    G.add_edge("a", "b", relation="calls", source_location=None, extra={"k": 1})
+    G.graph["graphify_sf"] = {"analysis": {}}
+    path = tmp_path / "g.graphml"
+    to_graphml(G, {0: ["a", "b"]}, str(path))
+    H = nx.read_graphml(path)
+    assert H.number_of_nodes() == 2 and H.number_of_edges() == 1
+    assert json.loads(H.nodes["a"]["tags"]) == ["x", "y"] and H.nodes["a"]["flag"] is True
+    assert "source_location" not in H.nodes["a"]
 
 
 # ── Merge: strict loading ────────────────────────────────────────────────────────────
@@ -126,6 +150,22 @@ def test_strict_loader_rejects_unusable_files(tmp_path, text):
         load_graph_json_strict(p)
     with pytest.raises(GraphJsonError):
         load_graph_json_strict(tmp_path / "missing.json")
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"nodes": [1], "links": []},
+        {"nodes": [{"label": "no id"}], "links": []},
+        {"nodes": [{"id": 0}], "links": []},
+        {"nodes": [{"id": ""}], "links": []},
+        {"nodes": [], "links": ["x"]},
+        {"nodes": [], "links": [{"source": "a"}]},
+    ],
+)
+def test_strict_loader_rejects_entries_that_would_be_silently_dropped(tmp_path, data):
+    with pytest.raises(GraphJsonError):
+        load_graph_json_strict(_write(tmp_path / "g.json", data))
 
 
 def test_strict_loader_accepts_edges_alias_and_valid_empty_graph(tmp_path):
@@ -178,6 +218,8 @@ def test_attributes_merge_per_attribute_and_base_never_wins():
     assert merge_attrs(None, {"a": 1}, {"a": 2, "b": 3}) == {"a": 1, "b": 3}
     # an attribute dropped by one side and untouched by the other is dropped
     assert merge_attrs({"k": 1}, {}, {"k": 1}) == {}
+    # with no base, an explicit None in ours does not hide a real value in theirs
+    assert merge_attrs(None, {"loc": None}, {"loc": "L5"}) == {"loc": "L5"}
 
 
 def _callout(site_count, line, **extra):
@@ -186,35 +228,113 @@ def _callout(site_count, line, **extra):
         "target": "namedcredential_x",
         "relation": "makes_callout",
         "confidence": "EXTRACTED",
-        "test_context": False,
+        "weight": 1.0,
         "site_count": site_count,
         "source_location": f"L{line}",
         **extra,
     }
 
 
-def test_callout_edge_identity_ignores_mutable_site_attributes():
-    assert edge_identity(_callout(1, 10)) == edge_identity(_callout(5, 99))
-    assert edge_identity(_callout(1, 10)) != edge_identity(_callout(1, 10, confidence="INFERRED"))
-    assert edge_identity(_callout(1, 10)) != edge_identity(_callout(1, 10, test_context=True))
+def test_edge_identity_ignores_only_volatile_fields():
+    base = _callout(1, 10)
+    volatile = {**base, "source_location": "L99", "site_count": 5, "weight": 2.0, "confidence_score": 0.5, "key": 3}
+    assert edge_identity(base) == edge_identity({**volatile, "source_file": "/elsewhere/X.cls"})
+    # everything that says something about the edge still splits identities (also fields added later)
+    for change in (
+        {"confidence": "INFERRED"},
+        {"test_context": True},
+        {"inference_reason": "x"},
+        {"method": "POST"},
+        {"relation": "calls"},
+    ):
+        assert edge_identity(base) != edge_identity({**base, **change}), change
 
 
-def test_modified_on_one_side_deleted_on_the_other_stays_deleted_for_callout_edges():
+def test_modified_on_one_side_deleted_on_the_other_stays_deleted_for_any_relation():
     nodes = [("a", {}), ("namedcredential_x", {})]
-    base = _graph(nodes, [_callout(1, 10)])
-    ours = _graph(nodes, [_callout(3, 12)])  # a call site was added: site_count/location changed
-    theirs = _graph(nodes, [])  # the callout was removed
-    _, edges = three_way_merge(base, ours, theirs)
-    assert edges == []
+    for edge_for in (
+        lambda n, line: _callout(n, line),
+        lambda n, line: {
+            "source": "a",
+            "target": "namedcredential_x",
+            "relation": "queries",
+            "weight": float(n),
+            "source_location": f"L{line}",
+        },
+    ):
+        base = _graph(nodes, [edge_for(1, 10)])
+        ours = _graph(nodes, [edge_for(3, 12)])  # a line moved / an attribute changed
+        theirs = _graph(nodes, [])  # the edge was removed
+        _, edges = three_way_merge(base, ours, theirs)
+        assert edges == []
 
 
-def test_callout_edge_modified_on_both_sides_merges_attributes_not_duplicates():
+def test_edge_modified_on_both_sides_merges_attributes_into_one_edge():
     nodes = [("a", {}), ("namedcredential_x", {})]
     base = _graph(nodes, [_callout(1, 10)])
     ours = _graph(nodes, [_callout(2, 10)])
-    theirs = _graph(nodes, [_callout(1, 10, inference_reason=None)])
+    theirs = _graph(nodes, [_callout(1, 14)])
     _, edges = three_way_merge(base, ours, theirs)
-    assert len(edges) == 1 and edges[0]["site_count"] == 2
+    assert len(edges) == 1
+    assert edges[0]["site_count"] == 2 and edges[0]["source_location"] == "L14"
+
+
+def test_an_attribute_a_newer_tool_adds_splits_edges_instead_of_merging_distinct_ones():
+    nodes = [("a", {}), ("namedcredential_x", {})]
+    post = _callout(1, 10, method="POST")
+    get = _callout(1, 10, method="GET")
+    _, edges = three_way_merge(None, _graph(nodes, [post]), _graph(nodes, [get]))
+    assert sorted(e["method"] for e in edges) == ["GET", "POST"]
+
+
+def test_edges_to_a_deleted_node_do_not_bring_it_back():
+    base = _graph([("apex_a", {}), ("apex_b", {})], [{"source": "apex_a", "target": "apex_b", "relation": "calls"}])
+    ours = _graph([("apex_a", {})])  # deleted class B
+    theirs = _graph(
+        [("apex_a", {}), ("apex_b", {}), ("apex_c", {})],
+        [
+            {"source": "apex_a", "target": "apex_b", "relation": "calls"},
+            {"source": "apex_c", "target": "apex_b", "relation": "calls"},  # a new call to B
+        ],
+    )
+    nodes, edges = three_way_merge(base, ours, theirs, prune_dangling=True)
+    assert _ids(nodes) == ["apex_a", "apex_c"]
+    assert edges == []
+    # the union used by merge-graphs never prunes (an endpoint may arrive from a later input)
+    _, union_edges = three_way_merge(
+        None,
+        _graph([("apex_c", {})], [{"source": "apex_c", "target": "apex_b", "relation": "calls"}]),
+        _graph([("apex_b", {})]),
+    )
+    assert len(union_edges) == 1
+
+
+def test_merge_driver_does_not_resurrect_a_deleted_class_as_a_stub(tmp_path):
+    from graphify_sf.__main__ import _cmd_merge_driver
+
+    call = {"source": "apex_c", "target": "apex_b", "relation": "calls", "confidence": "EXTRACTED"}
+    base = _write(tmp_path / "base.json", _graph([("apex_a", {}), ("apex_b", {})]))
+    ours = _write(tmp_path / "ours.json", _graph([("apex_a", {})]))
+    theirs = _write(tmp_path / "theirs.json", _graph([("apex_a", {}), ("apex_b", {}), ("apex_c", {})], [call]))
+    _cmd_merge_driver(base, ours, theirs)
+    data = json.loads(ours.read_text())
+    assert _ids(data["nodes"]) == ["apex_a", "apex_c"]
+    assert data["links"] == []
+
+
+def test_replacing_one_dml_operation_with_another_ends_with_the_new_one(tmp_path):
+    from graphify_sf.__main__ import _cmd_merge_driver
+
+    def dml(op):
+        return {"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": op, "confidence": "INFERRED"}
+
+    nodes = [("apex_a", {}), ("obj_b", {"sf_type": "CustomObject", "file_type": "object"})]
+    base = _write(tmp_path / "base.json", _graph(nodes, [dml("create")]))
+    ours = _write(tmp_path / "ours.json", _graph(nodes, [dml("create")]))
+    theirs = _write(tmp_path / "theirs.json", _graph(nodes, [dml("update")]))  # create replaced by update
+    _cmd_merge_driver(base, ours, theirs)
+    ops = [e["operation"] for e in json.loads(ours.read_text())["links"] if e["relation"] == "dml"]
+    assert ops == ["update"]
 
 
 def test_operation_distinct_edges_keep_their_full_identity():

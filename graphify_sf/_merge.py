@@ -12,16 +12,14 @@ from pathlib import Path
 
 _MISSING = object()
 
-# Fields that legitimately differ between inputs and never decide whether two edges are the same:
-# ``key`` is numbered per source graph, ``source_file`` is an absolute path of the building machine.
-_IDENTITY_IGNORED = frozenset({"key", "source_file"})
-
-# ``makes_callout`` edges aggregate call sites: ``site_count`` and the first-line ``source_location``
-# change whenever a call site is added or moved, so they must not decide identity (otherwise an edge one
-# side modified and the other deleted would survive). Every other relation keeps the full-hash identity,
-# because per-operation edges (e.g. two ``dml`` edges, create and update) are told apart by those fields
-# on purpose.
-_CALLOUT_IDENTITY_FIELDS = ("source", "target", "relation", "confidence", "test_context", "inference_reason")
+# Edge fields that never decide whether two links are the same edge. ``key`` is numbered per source graph;
+# ``source_file`` is an absolute path of the building machine; ``source_location`` is a line number that moves
+# whenever the file is edited; ``confidence_score`` is derived from ``confidence`` and ``weight`` is constant;
+# ``site_count`` counts call sites on an aggregated edge. Everything else (relation, confidence, operation,
+# trigger_type, test_context, inference_reason, ...) is part of the identity, so ``dml`` create and update stay
+# separate edges, and an attribute added by a newer tool version can only ever *split* edges, never merge two
+# distinct ones. A denylist (not an allowlist) is deliberate.
+_VOLATILE_EDGE_FIELDS = frozenset({"key", "source_file", "source_location", "confidence_score", "weight", "site_count"})
 
 
 class GraphJsonError(ValueError):
@@ -45,46 +43,50 @@ def load_graph_json_strict(path: Path) -> dict:
     for key in ("nodes", "links"):
         if not isinstance(raw.get(key), list):
             raise GraphJsonError(f"{path}: missing or invalid '{key}' array")
+    # A node without a usable id (or a non-object entry) would be silently dropped, and under
+    # deletion-wins that deletes the other side's copy: refuse instead.
+    for i, node in enumerate(raw["nodes"]):
+        if not isinstance(node, dict) or not isinstance(node.get("id"), str) or not node["id"]:
+            raise GraphJsonError(f"{path}: nodes[{i}] is not an object with a non-empty string 'id'")
+    for i, link in enumerate(raw["links"]):
+        if not isinstance(link, dict) or "source" not in link or "target" not in link:
+            raise GraphJsonError(f"{path}: links[{i}] is not an object with 'source' and 'target'")
     return raw
 
 
 def load_base_graph_json(path: Path) -> dict | None:
     """The merge base, or None when there is none (missing or zero-byte file = add/add merge).
 
-    A non-empty base that cannot be parsed is an error: guessing "no base" would resurrect
+    A non-empty base that cannot be read or parsed is an error: guessing "no base" would resurrect
     nodes that one side deleted.
     """
+    p = Path(path)
     try:
-        if not Path(path).exists() or Path(path).stat().st_size == 0:
+        if not p.exists() or p.stat().st_size == 0:
             return None
-    except OSError:
-        return None
-    return load_graph_json_strict(path)
+    except OSError as exc:
+        raise GraphJsonError(f"{path}: cannot inspect merge base ({exc})") from exc
+    return load_graph_json_strict(p)
 
 
 def edge_identity(edge: dict) -> str:
-    """Canonical dedup identity for a link.
-
-    The full edge minus per-graph fields, except for ``makes_callout`` which uses the logical
-    identity above.
-    """
-    if edge.get("relation") == "makes_callout":
-        ident = {k: edge.get(k) for k in _CALLOUT_IDENTITY_FIELDS}
-    else:
-        ident = {k: v for k, v in edge.items() if k not in _IDENTITY_IGNORED}
-    return json.dumps(ident, sort_keys=True, default=str)
+    """Canonical identity of a link: every field except the volatile ones above."""
+    return json.dumps({k: v for k, v in edge.items() if k not in _VOLATILE_EDGE_FIELDS}, sort_keys=True, default=str)
 
 
 def merge_attrs(base: dict | None, ours: dict, theirs: dict) -> dict:
     """Per-attribute 3-way merge: ours if it differs from base, else theirs; never base alone.
 
-    With no base every attribute is "changed", so ours wins and theirs fills in what ours lacks.
+    With no base every attribute is "changed", so ours wins, except that an explicit ``None`` in ours
+    does not hide a real value in theirs.
     """
     base = base or {}
     merged: dict = {}
-    for k in [*ours, *(k for k in theirs if k not in ours), *(k for k in base if k not in ours and k not in theirs)]:
+    for k in dict.fromkeys([*ours, *theirs]):
         b, o, t = base.get(k, _MISSING), ours.get(k, _MISSING), theirs.get(k, _MISSING)
-        chosen = o if o != b else t if t != b else b
+        chosen = o if o != b else t
+        if o is None and b is _MISSING and t is not _MISSING:
+            chosen = t
         if chosen is not _MISSING:
             merged[k] = chosen
     return merged
@@ -106,14 +108,17 @@ def _index_edges(data: dict | None) -> dict[str, dict]:
     return out
 
 
-def three_way_merge(base: dict | None, ours: dict, theirs: dict) -> tuple[list[dict], list[dict]]:
+def three_way_merge(
+    base: dict | None, ours: dict, theirs: dict, *, prune_dangling: bool = False
+) -> tuple[list[dict], list[dict]]:
     """Git-style 3-way merge of node and edge lists.
 
     Keep x if it is in both heads, or in exactly one head and not in the base. Present in the base
     but missing from either head means that head deleted it, and deletion wins (a node one side
     modified and the other deleted is deleted; graph.json is regenerated by the next build).
     Attributes merge per attribute, never letting the base win. ``base is None`` means no common
-    base: a plain union.
+    base: a plain union. With *prune_dangling*, edges whose endpoint did not survive are dropped (an edge
+    one side added to a node the other side deleted would otherwise bring the node back as a stub).
     """
 
     def keep(in_ours: bool, in_theirs: bool, in_base: bool) -> bool:
@@ -132,4 +137,16 @@ def three_way_merge(base: dict | None, ours: dict, theirs: dict) -> tuple[list[d
     for ident in [*o_edges, *(e for e in t_edges if e not in o_edges)]:
         if keep(ident in o_edges, ident in t_edges, ident in b_edges):
             edges.append(merge_attrs(b_edges.get(ident), o_edges.get(ident, {}), t_edges.get(ident, {})))
+    if prune_dangling:
+        alive = {n["id"] for n in nodes}
+        edges = [e for e in edges if e.get("source") in alive and e.get("target") in alive]
     return nodes, edges
+
+
+def union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Union of several graphs' node/link lists (no base, nothing is deleted), for ``merge-graphs``."""
+    acc: dict = {"nodes": [], "links": []}
+    for data in datas:
+        nodes, links = three_way_merge(None, acc, data)
+        acc = {"nodes": nodes, "links": links}
+    return acc["nodes"], acc["links"]

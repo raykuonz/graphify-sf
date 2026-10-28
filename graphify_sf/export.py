@@ -948,10 +948,6 @@ def to_obsidian(
     return G.number_of_nodes() + community_notes_written
 
 
-# Private edge/node keys that never leave the pipeline (see to_json).
-_GRAPHML_DROP_KEYS = frozenset({"_src", "_tgt", "_tgt_name"})
-
-
 def _graphml_value(value):
     """Coerce an attribute to a type GraphML can store, or None to drop it."""
     if value is None:
@@ -965,6 +961,11 @@ def _graphml_value(value):
         return str(value)
 
 
+def _graphml_attrs(attrs: dict) -> dict:
+    cleaned = ((k, _graphml_value(v)) for k, v in attrs.items())
+    return {k: v for k, v in cleaned if v is not None}
+
+
 def _graphml_safe(G: nx.Graph) -> nx.Graph:
     """Copy of *G* whose attributes GraphML can write.
 
@@ -974,23 +975,13 @@ def _graphml_safe(G: nx.Graph) -> nx.Graph:
     """
     H = G.__class__()
     for node_id, attrs in G.nodes(data=True):
-        H.add_node(node_id, **{k: v for k, v in ((k, _graphml_value(v)) for k, v in attrs.items()) if v is not None})
+        H.add_node(node_id, **_graphml_attrs(attrs))
     if G.is_multigraph():
         for u, v, key, attrs in G.edges(keys=True, data=True):
-            clean = {
-                k: x
-                for k, x in ((k, _graphml_value(x)) for k, x in attrs.items() if k not in _GRAPHML_DROP_KEYS)
-                if x is not None
-            }
-            H.add_edge(u, v, key=key, **clean)
+            H.add_edge(u, v, key=key, **_graphml_attrs(attrs))
     else:
         for u, v, attrs in G.edges(data=True):
-            clean = {
-                k: x
-                for k, x in ((k, _graphml_value(x)) for k, x in attrs.items() if k not in _GRAPHML_DROP_KEYS)
-                if x is not None
-            }
-            H.add_edge(u, v, **clean)
+            H.add_edge(u, v, **_graphml_attrs(attrs))
     return H
 
 
