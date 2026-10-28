@@ -147,17 +147,31 @@ def extract_flow(path: Path) -> dict:
             nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
             if nc_match:
                 nc_name = nc_match.group(1).strip()
-                edges.append(
-                    _make_edge(flow_nid, make_sf_id("namedcredential", nc_name), "makes_callout", "EXTRACTED", str_path)
+                nc_edge = _make_edge(
+                    flow_nid, make_sf_id("namedcredential", nc_name), "makes_callout", "EXTRACTED", str_path
                 )
+                nc_edge["_tgt_name"] = nc_name  # original-case label for a stub node; consumed in extract()
+                edges.append(nc_edge)
             elif endpoint.startswith(("http://", "https://")):
                 try:
                     host = urlparse(endpoint).hostname or endpoint
                 except Exception:
                     host = endpoint
-                edges.append(
-                    _make_edge(flow_nid, make_sf_id("externalendpoint", host), "makes_callout", "INFERRED", str_path)
+                ep_id = make_sf_id("externalendpoint", host)
+                # The Flow creates the endpoint node itself, as Apex does, so the edge survives even when no
+                # Apex class calls the same host.
+                nodes.append(
+                    {
+                        "id": ep_id,
+                        "label": host,
+                        "sf_type": "ExternalEndpoint",
+                        "file_type": "flow",
+                        "source_file": str_path,
+                        "source_location": None,
+                        "confidence": "INFERRED",
+                    }
                 )
+                edges.append(_make_edge(flow_nid, ep_id, "makes_callout", "INFERRED", str_path))
 
     # Object record operations. The relation stays "references" (a generic relation
     # reused by many extractors — never change its semantics), but each edge carries an

@@ -47,6 +47,24 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The two callout analyzers report `not_run` in this build until their extractors
   ship, so no capability is advertised yet.
 
+- **Callout targets that are not in the repo now appear in the graph.** A `makes_callout` (Apex, Flow) or `uses`
+  (External Service, External Data Source) edge to a Named Credential whose metadata is not in the project used to be
+  dropped when the graph was built, so a class calling `callout:Not_In_Repo` showed no callout at all. The target is
+  now a stub node (`stub: true`, no `source_file`, exact `sf_type`, original-case label) and the edge stays
+  EXTRACTED. A real node always replaces a stub, in every merge path and in either order.
+- **A Flow that calls a literal URL now creates the `ExternalEndpoint` node itself.** Before, the edge survived only
+  if some Apex class happened to call the same host; otherwise it was dropped.
+- **`ExternalEndpoint` ids that collide are flagged instead of silently conflated.** `make_sf_id` is lossy, so
+  `api.example.com` and `api-example.com` share an id. Ids are unchanged, but such a node now carries
+  `identity_ambiguous: true` and `hosts: [...]`, and calls to it are INFERRED with
+  `inference_reason: "host_id_collision"`; do not read "unreferenced" off an ambiguous node. Adding a second host
+  that collides with an existing one can therefore turn an earlier EXTRACTED edge INFERRED.
+- **Apex files whose class header the declaration regex misses are no longer invisible.** A `.cls` file with an
+  unrecognised header (for example `class Foo {` without an access modifier) produced no node and no analysis. It
+  now gets an `ApexClass` node named after the file (`declaration_unparsed: true`) and is analysed like any other
+  class. This adds nodes; no existing id changes, and ApexClass inbound EXTRACTED counts are identical to 0.5.0 on
+  every test fixture.
+
 ### Changed
 - `merge-graphs` now fails on a malformed input where it used to skip it silently.
 - The merge driver takes no output-directory lock: git hands it its own temporary `.merge_file_*` files, never the

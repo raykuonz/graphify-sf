@@ -55,6 +55,19 @@ def edge_datas(G: nx.Graph, u: str, v: str) -> list[dict]:
     return [raw]
 
 
+def prefer_real(a: dict, b: dict) -> dict | None:
+    """The real node when exactly one of two same-id nodes is a stub, else None.
+
+    A stub (``stub: true``) only stands in for metadata that is not in the repo, so whenever a real
+    node for the same entity exists it wins whole, whatever the order the two arrive in, and none of the
+    stub's fields (``stub``, null ``source_file``) leak into it.
+    """
+    a_stub, b_stub = bool(a.get("stub")), bool(b.get("stub"))
+    if a_stub == b_stub:
+        return None
+    return b if a_stub else a
+
+
 def build_from_json(extraction: dict, *, directed: bool = False, multigraph: bool = True) -> nx.Graph:
     """Build a NetworkX graph from an extraction dict.
 
@@ -85,7 +98,15 @@ def build_from_json(extraction: dict, *, directed: bool = False, multigraph: boo
         if "source_file" in node:
             node = dict(node)
             node["source_file"] = _norm_source_file(node["source_file"])
-        G.add_node(node["id"], **{k: v for k, v in node.items() if k != "id"})
+        attrs = {k: v for k, v in node.items() if k != "id"}
+        if G.has_node(node["id"]):
+            # Same id twice: a real node replaces a stub whole, a stub never overwrites a real node.
+            winner = prefer_real(G.nodes[node["id"]], attrs)
+            if winner is attrs:
+                G.nodes[node["id"]].clear()
+            elif winner is not None:
+                continue
+        G.add_node(node["id"], **attrs)
 
     node_set = set(G.nodes())
     norm_to_id: dict[str, str] = {_normalize_id(nid): nid for nid in node_set}
@@ -370,6 +391,11 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
         existing = canonical.get(key)
         if existing is None:
             canonical[key] = node
+        elif (winner := prefer_real(existing, node)) is not None:
+            # A real node always beats a stub for the same entity, regardless of order or id length.
+            loser = existing if winner is node else node
+            canonical[key] = winner
+            remap[loser["id"]] = winner["id"]
         else:
             has_suffix = bool(_CHUNK_SUFFIX.search(node["id"]))
             existing_has_suffix = bool(_CHUNK_SUFFIX.search(existing["id"]))

@@ -150,7 +150,9 @@ def extract_external_service(path: Path) -> dict:
         ns = _get_ns(root_el)
         nc = _find_text(root_el, "namedCredential", ns)
         if nc:
-            edges.append(_make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path))
+            nc_edge = _make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path)
+            nc_edge["_tgt_name"] = nc  # original-case label for a stub node; consumed in extract()
+            edges.append(nc_edge)
     except ET.ParseError:
         pass
 
@@ -266,7 +268,9 @@ def extract_external_data_source(path: Path) -> dict:
         ns = _get_ns(root_el)
         nc = _find_text(root_el, "namedCredential", ns)
         if nc:
-            edges.append(_make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path))
+            nc_edge = _make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path)
+            nc_edge["_tgt_name"] = nc  # original-case label for a stub node; consumed in extract()
+            edges.append(nc_edge)
     except ET.ParseError:
         pass
     return {"nodes": [node], "edges": edges}

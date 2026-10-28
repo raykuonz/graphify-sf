@@ -387,266 +387,271 @@ def extract_apex_class(path: Path) -> dict:
 
     # Find the class declaration
     m = _CLASS_RE.search(scrubbed)
-    if not m:
-        # Fallback: try to extract class name from filename
-        class_name = path.stem
-    else:
+    declaration_unparsed = m is None
+    if m:
         kind = m.group(1).lower()  # class / interface / enum
         class_name = m.group(2)
         superclass = (m.group(3) or "").strip()
         interfaces_raw = (m.group(4) or "").strip()
+    else:
+        # The declaration regex missed (an unusual header). A .cls file still declares an Apex class, so name it
+        # after the file and analyse it like any other: it is neither invisible nor counted as a failed file.
+        kind, class_name, superclass, interfaces_raw = "class", path.stem, "", ""
 
-        class_nid = apex_class_id(class_name)
-        sf_type = "ApexInterface" if kind == "interface" else "ApexEnum" if kind == "enum" else "ApexClass"
+    class_nid = apex_class_id(class_name)
+    sf_type = "ApexInterface" if kind == "interface" else "ApexEnum" if kind == "enum" else "ApexClass"
 
-        nodes.append(
-            {
-                "id": class_nid,
-                "label": class_name,
-                "sf_type": sf_type,
-                "file_type": "apex",
-                "source_file": str_path,
-                "source_location": None,
-            }
+    nodes.append(
+        {
+            "id": class_nid,
+            "label": class_name,
+            "sf_type": sf_type,
+            "file_type": "apex",
+            "source_file": str_path,
+            "source_location": None,
+            **({"declaration_unparsed": True} if declaration_unparsed else {}),
+        }
+    )
+
+    # Superclass edge
+    if superclass and superclass.lower() not in _APEX_KEYWORDS:
+        edges.append(
+            _make_edge(
+                class_nid,
+                apex_class_id(superclass),
+                "extends",
+                "INFERRED",
+                str_path,
+                confidence_score=0.9,
+            )
         )
 
-        # Superclass edge
-        if superclass and superclass.lower() not in _APEX_KEYWORDS:
-            edges.append(
-                _make_edge(
-                    class_nid,
-                    apex_class_id(superclass),
-                    "extends",
-                    "INFERRED",
-                    str_path,
-                    confidence_score=0.9,
-                )
-            )
-
-        # Interface edges. Split on top-level commas only so a generic interface
-        # like `Comparator<Account, String>` is not broken on its inner comma.
-        if interfaces_raw:
-            for iface in _split_implements(interfaces_raw):
-                # Drop any generic suffix: `Comparator<Account, String>` → `Comparator`.
-                iface = iface.split("<", 1)[0].strip()
-                if iface and iface.lower() not in _APEX_KEYWORDS:
-                    edges.append(
-                        _make_edge(
-                            class_nid,
-                            apex_class_id(iface),
-                            "implements",
-                            "INFERRED",
-                            str_path,
-                            confidence_score=0.9,
-                        )
+    # Interface edges. Split on top-level commas only so a generic interface
+    # like `Comparator<Account, String>` is not broken on its inner comma.
+    if interfaces_raw:
+        for iface in _split_implements(interfaces_raw):
+            # Drop any generic suffix: `Comparator<Account, String>` → `Comparator`.
+            iface = iface.split("<", 1)[0].strip()
+            if iface and iface.lower() not in _APEX_KEYWORDS:
+                edges.append(
+                    _make_edge(
+                        class_nid,
+                        apex_class_id(iface),
+                        "implements",
+                        "INFERRED",
+                        str_path,
+                        confidence_score=0.9,
                     )
+                )
 
-        # Method extraction. Track each method's span (signature start → matching
-        # closing brace) so calls and DML operands are attributed to the method
-        # that actually contains them, not to everything below it in the file.
-        raw_calls: list[dict] = []
-        # (region_start, body_end, var_types) per method — region_start includes
-        # the signature so parameter declarations are in scope for that method.
-        method_regions: list[tuple[int, int, dict[str, str]]] = []
-        for mm in _METHOD_RE.finditer(scrubbed):
-            method_name = mm.group(1)
-            if method_name.lower() in _APEX_KEYWORDS:
-                continue
-            method_nid = apex_method_id(class_name, method_name)
-            line_no = scrubbed[: mm.start()].count("\n") + 1
-            nodes.append(
-                {
-                    "id": method_nid,
-                    "label": f"{class_name}.{method_name}()",
-                    "sf_type": "ApexMethod",
-                    "file_type": "apex",
-                    "source_file": str_path,
-                    "source_location": f"L{line_no}",
-                }
+    # Method extraction. Track each method's span (signature start → matching
+    # closing brace) so calls and DML operands are attributed to the method
+    # that actually contains them, not to everything below it in the file.
+    raw_calls: list[dict] = []
+    # (region_start, body_end, var_types) per method — region_start includes
+    # the signature so parameter declarations are in scope for that method.
+    method_regions: list[tuple[int, int, dict[str, str]]] = []
+    for mm in _METHOD_RE.finditer(scrubbed):
+        method_name = mm.group(1)
+        if method_name.lower() in _APEX_KEYWORDS:
+            continue
+        method_nid = apex_method_id(class_name, method_name)
+        line_no = scrubbed[: mm.start()].count("\n") + 1
+        nodes.append(
+            {
+                "id": method_nid,
+                "label": f"{class_name}.{method_name}()",
+                "sf_type": "ApexMethod",
+                "file_type": "apex",
+                "source_file": str_path,
+                "source_location": f"L{line_no}",
+            }
+        )
+        edges.append(
+            _make_edge(
+                class_nid,
+                method_nid,
+                "contains",
+                "EXTRACTED",
+                str_path,
             )
+        )
+
+        # Method body: from the opening { to its matching }, brace-balanced.
+        start = mm.end() - 1  # position of {
+        body_end = _matching_brace_end(scrubbed, start)
+        # Per-method variable-type map (includes parameters via the signature
+        # span) so two methods reusing a local name with different declared
+        # types do not collide.
+        method_var_types = _extract_var_types(scrubbed[mm.start() : body_end])
+        method_regions.append((mm.start(), body_end, method_var_types))
+
+        # Collect method calls within *this* method's body only.
+        for cm in _CALL_RE.finditer(scrubbed, start, body_end):
+            callee_class = cm.group(1)
+            callee_method = cm.group(2)
+            if _looks_like_apex_class(callee_class):
+                raw_calls.append(
+                    {
+                        "caller_id": method_nid,
+                        "callee_class": callee_class,
+                        "callee_method": callee_method,
+                    }
+                )
+
+    # SOQL → queries edges
+    seen_soql_targets: set[str] = set()
+    for sm in _SOQL_RE.finditer(scrubbed):
+        obj_name = sm.group(1)
+        if obj_name.lower() not in _APEX_KEYWORDS and obj_name not in seen_soql_targets:
+            seen_soql_targets.add(obj_name)
             edges.append(
                 _make_edge(
                     class_nid,
-                    method_nid,
-                    "contains",
+                    object_id(obj_name),
+                    "queries",
                     "EXTRACTED",
                     str_path,
                 )
             )
 
-            # Method body: from the opening { to its matching }, brace-balanced.
-            start = mm.end() - 1  # position of {
-            body_end = _matching_brace_end(scrubbed, start)
-            # Per-method variable-type map (includes parameters via the signature
-            # span) so two methods reusing a local name with different declared
-            # types do not collide.
-            method_var_types = _extract_var_types(scrubbed[mm.start() : body_end])
-            method_regions.append((mm.start(), body_end, method_var_types))
+    # DML → dml edges. Each edge carries an "operation" field (insert→create, etc.).
+    # Resolution order for the DML operand:
+    #   (a) look up the varName→Type map built by _extract_var_types;
+    #   (b) if the operand is already PascalCase and not a keyword, use it directly
+    #       (backward-compat: handles `insert Account;` style);
+    #   (c) otherwise skip — no edge for unresolvable variables (honesty).
+    # Dedup by (resolved_type, operation) so insert+update on the same object → two edges.
+    _DML_VERB_TO_OP = {
+        "insert": "create",
+        "update": "update",
+        "delete": "delete",
+        "upsert": "upsert",
+        "merge": "merge",
+        "undelete": "undelete",
+    }
+    # Class-wide fallback map for DML that lives outside any detected method
+    # body (e.g. constructors or static initializers _METHOD_RE misses).
+    class_var_types = _extract_var_types(scrubbed)
+    seen_dml_ops: set[tuple[str, str]] = set()
+    for dm in _DML_RE.finditer(scrubbed):
+        operation = _DML_VERB_TO_OP[dm.group(1).lower()]
+        obj_var = dm.group(2)
+        if obj_var.lower() in _APEX_KEYWORDS:
+            continue
+        # Resolve against the innermost enclosing method's var map so two
+        # methods that reuse a local name with different types don't collide.
+        var_types = class_var_types
+        best_span = None
+        for region_start, region_end, region_vars in method_regions:
+            if region_start <= dm.start() < region_end:
+                span = region_end - region_start
+                if best_span is None or span < best_span:
+                    best_span = span
+                    var_types = region_vars
+        resolved_type = var_types.get(obj_var)
+        if resolved_type is None:
+            # Fallback: operand is itself PascalCase — treat as the type name
+            if obj_var[0].isupper():
+                resolved_type = obj_var
+            else:
+                continue  # lowercase variable with no declaration — skip
+        if resolved_type.lower() in _APEX_KEYWORDS:
+            continue  # primitive or system type — not a DML-able SObject
+        key = (resolved_type, operation)
+        if key not in seen_dml_ops:
+            seen_dml_ops.add(key)
+            edge = _make_edge(
+                class_nid,
+                object_id(resolved_type),
+                "dml",
+                "INFERRED",
+                str_path,
+                confidence_score=0.7,
+            )
+            edge["operation"] = operation
+            edges.append(edge)
 
-            # Collect method calls within *this* method's body only.
-            for cm in _CALL_RE.finditer(scrubbed, start, body_end):
-                callee_class = cm.group(1)
-                callee_method = cm.group(2)
-                if _looks_like_apex_class(callee_class):
-                    raw_calls.append(
-                        {
-                            "caller_id": method_nid,
-                            "callee_class": callee_class,
-                            "callee_method": callee_method,
-                        }
-                    )
-
-        # SOQL → queries edges
-        seen_soql_targets: set[str] = set()
-        for sm in _SOQL_RE.finditer(scrubbed):
-            obj_name = sm.group(1)
-            if obj_name.lower() not in _APEX_KEYWORDS and obj_name not in seen_soql_targets:
-                seen_soql_targets.add(obj_name)
-                edges.append(
-                    _make_edge(
-                        class_nid,
-                        object_id(obj_name),
-                        "queries",
-                        "EXTRACTED",
-                        str_path,
-                    )
-                )
-
-        # DML → dml edges. Each edge carries an "operation" field (insert→create, etc.).
-        # Resolution order for the DML operand:
-        #   (a) look up the varName→Type map built by _extract_var_types;
-        #   (b) if the operand is already PascalCase and not a keyword, use it directly
-        #       (backward-compat: handles `insert Account;` style);
-        #   (c) otherwise skip — no edge for unresolvable variables (honesty).
-        # Dedup by (resolved_type, operation) so insert+update on the same object → two edges.
-        _DML_VERB_TO_OP = {
-            "insert": "create",
-            "update": "update",
-            "delete": "delete",
-            "upsert": "upsert",
-            "merge": "merge",
-            "undelete": "undelete",
-        }
-        # Class-wide fallback map for DML that lives outside any detected method
-        # body (e.g. constructors or static initializers _METHOD_RE misses).
-        class_var_types = _extract_var_types(scrubbed)
-        seen_dml_ops: set[tuple[str, str]] = set()
-        for dm in _DML_RE.finditer(scrubbed):
-            operation = _DML_VERB_TO_OP[dm.group(1).lower()]
-            obj_var = dm.group(2)
-            if obj_var.lower() in _APEX_KEYWORDS:
-                continue
-            # Resolve against the innermost enclosing method's var map so two
-            # methods that reuse a local name with different types don't collide.
-            var_types = class_var_types
-            best_span = None
-            for region_start, region_end, region_vars in method_regions:
-                if region_start <= dm.start() < region_end:
-                    span = region_end - region_start
-                    if best_span is None or span < best_span:
-                        best_span = span
-                        var_types = region_vars
-            resolved_type = var_types.get(obj_var)
-            if resolved_type is None:
-                # Fallback: operand is itself PascalCase — treat as the type name
-                if obj_var[0].isupper():
-                    resolved_type = obj_var
-                else:
-                    continue  # lowercase variable with no declaration — skip
-            if resolved_type.lower() in _APEX_KEYWORDS:
-                continue  # primitive or system type — not a DML-able SObject
-            key = (resolved_type, operation)
-            if key not in seen_dml_ops:
-                seen_dml_ops.add(key)
-                edge = _make_edge(
+    # Apex → Flow invocations via Flow.Interview.FlowName
+    seen_flow_invokes: set[str] = set()
+    for fm in _FLOW_INVOKE_RE.finditer(scrubbed):
+        flow_name = fm.group(1)
+        if flow_name not in seen_flow_invokes:
+            seen_flow_invokes.add(flow_name)
+            edges.append(
+                _make_edge(
                     class_nid,
-                    object_id(resolved_type),
-                    "dml",
-                    "INFERRED",
+                    flow_id(flow_name),
+                    "invokes",
+                    "EXTRACTED",
                     str_path,
-                    confidence_score=0.7,
                 )
-                edge["operation"] = operation
-                edges.append(edge)
+            )
 
-        # Apex → Flow invocations via Flow.Interview.FlowName
-        seen_flow_invokes: set[str] = set()
-        for fm in _FLOW_INVOKE_RE.finditer(scrubbed):
-            flow_name = fm.group(1)
-            if flow_name not in seen_flow_invokes:
-                seen_flow_invokes.add(flow_name)
-                edges.append(
-                    _make_edge(
-                        class_nid,
-                        flow_id(flow_name),
-                        "invokes",
-                        "EXTRACTED",
-                        str_path,
-                    )
+    # A1: HTTP callout detection via .setEndpoint('...'). The call is located on the
+    # scrubbed text (so comments and string contents cannot match) and the endpoint
+    # URL is read from the raw text at the same offsets.
+    seen_callout_targets: set[str] = set()
+    for em in _ENDPOINT_RE.finditer(scrubbed):
+        endpoint = text[em.start(2) : em.end(2)].strip()
+        nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
+        if nc_match:
+            nc_name = nc_match.group(1).strip()
+            tgt_id = make_sf_id("namedcredential", nc_name)
+            if tgt_id not in seen_callout_targets:
+                seen_callout_targets.add(tgt_id)
+                nc_edge = _make_edge(class_nid, tgt_id, "makes_callout", "EXTRACTED", str_path)
+                nc_edge["_tgt_name"] = nc_name  # original-case label for a stub node; consumed in extract()
+                edges.append(nc_edge)
+        elif endpoint.startswith(("http://", "https://")):
+            try:
+                host = urlparse(endpoint).hostname or endpoint
+            except Exception:
+                host = endpoint
+            tgt_id = make_sf_id("externalendpoint", host)
+            if tgt_id not in seen_callout_targets:
+                seen_callout_targets.add(tgt_id)
+                # Create ExternalEndpoint node inline
+                nodes.append(
+                    {
+                        "id": tgt_id,
+                        "label": host,
+                        "sf_type": "ExternalEndpoint",
+                        "file_type": "apex",
+                        "source_file": str_path,
+                        "source_location": None,
+                        "confidence": "INFERRED",
+                    }
                 )
+                edges.append(_make_edge(class_nid, tgt_id, "makes_callout", "INFERRED", str_path))
 
-        # A1: HTTP callout detection via .setEndpoint('...'). The call is located on the
-        # scrubbed text (so comments and string contents cannot match) and the endpoint
-        # URL is read from the raw text at the same offsets.
-        seen_callout_targets: set[str] = set()
-        for em in _ENDPOINT_RE.finditer(scrubbed):
-            endpoint = text[em.start(2) : em.end(2)].strip()
-            nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
-            if nc_match:
-                nc_name = nc_match.group(1).strip()
-                tgt_id = make_sf_id("namedcredential", nc_name)
-                if tgt_id not in seen_callout_targets:
-                    seen_callout_targets.add(tgt_id)
-                    edges.append(_make_edge(class_nid, tgt_id, "makes_callout", "EXTRACTED", str_path))
-            elif endpoint.startswith(("http://", "https://")):
-                try:
-                    host = urlparse(endpoint).hostname or endpoint
-                except Exception:
-                    host = endpoint
-                tgt_id = make_sf_id("externalendpoint", host)
-                if tgt_id not in seen_callout_targets:
-                    seen_callout_targets.add(tgt_id)
-                    # Create ExternalEndpoint node inline
-                    nodes.append(
-                        {
-                            "id": tgt_id,
-                            "label": host,
-                            "sf_type": "ExternalEndpoint",
-                            "file_type": "apex",
-                            "source_file": str_path,
-                            "source_location": None,
-                            "confidence": "INFERRED",
-                        }
-                    )
-                    edges.append(_make_edge(class_nid, tgt_id, "makes_callout", "INFERRED", str_path))
+    # A5: EventBus.publish(new X__e(...)) → publishes edge
+    seen_publishes: set[str] = set()
+    for pm in _EVENT_BUS_PUBLISH_RE.finditer(scrubbed):
+        event_name = pm.group(1)
+        tgt_id = object_id(event_name)
+        if tgt_id not in seen_publishes:
+            seen_publishes.add(tgt_id)
+            edges.append(_make_edge(class_nid, tgt_id, "publishes", "EXTRACTED", str_path))
 
-        # A5: EventBus.publish(new X__e(...)) → publishes edge
-        seen_publishes: set[str] = set()
-        for pm in _EVENT_BUS_PUBLISH_RE.finditer(scrubbed):
-            event_name = pm.group(1)
-            tgt_id = object_id(event_name)
-            if tgt_id not in seen_publishes:
-                seen_publishes.add(tgt_id)
-                edges.append(_make_edge(class_nid, tgt_id, "publishes", "EXTRACTED", str_path))
+    # A6: Custom Metadata / Custom Settings config reads (INFERRED — by-type fetch)
+    seen_config_reads: set[str] = set()
+    for cm in _CUSTOM_MDT_ACCESS_RE.finditer(scrubbed):
+        mdt_type = cm.group(1)
+        tgt_id = make_sf_id("custommetadata", mdt_type)
+        if tgt_id not in seen_config_reads:
+            seen_config_reads.add(tgt_id)
+            edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
+    for cm in _CUSTOM_SETTING_ACCESS_RE.finditer(scrubbed):
+        cs_type = cm.group(1)
+        tgt_id = object_id(cs_type)
+        if tgt_id not in seen_config_reads:
+            seen_config_reads.add(tgt_id)
+            edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
 
-        # A6: Custom Metadata / Custom Settings config reads (INFERRED — by-type fetch)
-        seen_config_reads: set[str] = set()
-        for cm in _CUSTOM_MDT_ACCESS_RE.finditer(scrubbed):
-            mdt_type = cm.group(1)
-            tgt_id = make_sf_id("custommetadata", mdt_type)
-            if tgt_id not in seen_config_reads:
-                seen_config_reads.add(tgt_id)
-                edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
-        for cm in _CUSTOM_SETTING_ACCESS_RE.finditer(scrubbed):
-            cs_type = cm.group(1)
-            tgt_id = object_id(cs_type)
-            if tgt_id not in seen_config_reads:
-                seen_config_reads.add(tgt_id)
-                edges.append(_make_edge(class_nid, tgt_id, "reads_config", "INFERRED", str_path))
-
-        # Stash raw_calls in the class node for cross-file resolution
-        if raw_calls and nodes:
-            nodes[0]["_raw_calls"] = raw_calls
+    # Stash raw_calls in the class node for cross-file resolution
+    if raw_calls and nodes:
+        nodes[0]["_raw_calls"] = raw_calls
 
     return {"nodes": nodes, "edges": edges}
 
