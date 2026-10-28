@@ -72,7 +72,7 @@ def extract_flow(path: Path) -> dict:
         tree = ET.parse(str_path)
         root_el = tree.getroot()
     except (ET.ParseError, FileNotFoundError, OSError):
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "edges": [], "_failed": True}
 
     # Detect namespace
     ns = ""

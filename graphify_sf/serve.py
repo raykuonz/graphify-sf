@@ -3,7 +3,7 @@
 
 Implements JSON-RPC 2.0 over stdin/stdout per the MCP spec.
 Tools exposed:
-  - graph_stats        — node/edge/community counts
+  - graph_stats        — node/edge/community counts and the analysis coverage ledger
   - query              — BFS/DFS traversal for a question
   - get_node           — details for a single named node
   - get_neighbors      — connections of a node (up to N, optional relation filter)
@@ -36,7 +36,10 @@ from pathlib import Path
 _TOOLS = [
     {
         "name": "graph_stats",
-        "description": "Return high-level statistics about the loaded knowledge graph.",
+        "description": (
+            "Return high-level statistics about the loaded knowledge graph, including which analyses it was "
+            "built with (analysis, capabilities)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -348,6 +351,10 @@ def _tool_graph_stats(args: dict) -> dict:
         "communities": len(_communities),
         "community_labels": {str(k): v for k, v in _community_labels.items()},
         "top_sf_types": dict(sf_types.most_common(10)),
+        # Which analyses this graph was built with ("callout-edges.apex", ...). Absent = never analysed.
+        # Both are null when the graph carries no ledger: that is "never analysed", not "analysed, nothing complete".
+        "analysis": (_G.graph.get("graphify_sf") or {}).get("analysis"),
+        "capabilities": (_G.graph.get("graphify_sf") or {}).get("capabilities"),
     }
 
 

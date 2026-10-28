@@ -177,7 +177,7 @@ def _extract_file(path: Path) -> dict:
             return _DISPATCH[key](Path(path))
         except Exception as exc:
             print(f"[graphify-sf] WARNING: extraction failed for {path}: {exc}", file=sys.stderr)
-            return {"nodes": [], "edges": []}
+            return {"nodes": [], "edges": [], "_failed": True}
     return {"nodes": [], "edges": []}
 
 
@@ -320,7 +320,8 @@ def extract(
     Pass 2: Cross-file reference resolution.
 
     Returns:
-        {nodes: list, edges: list, input_tokens: int, output_tokens: int}
+        {nodes: list, edges: list, input_tokens: int, output_tokens: int, analysis: dict}
+        where ``analysis`` is the per-analyzer coverage ledger (see ``graphify_sf._ledger``).
     """
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
@@ -334,6 +335,28 @@ def extract(
     doc_file_paths: list[Path] = []
     for file_list in detect_result.get("doc_files", {}).values():
         doc_file_paths.extend(Path(f) for f in file_list)
+
+    # Coverage ledger bookkeeping: which files each analyzer is responsible for, and what happened to
+    # them. Counts are derived from this outcome record, never from counters, so a file whose result is
+    # lost (a worker exception, a pool break) cannot be mistaken for an analysed one.
+    from .. import _ledger
+
+    eligible_by_analyzer: dict[str, set] = {name: set() for name in _ledger.ANALYZERS}
+    for p in single_files:
+        key = _compound_suffix(p)
+        for name, spec in _ledger.ANALYZERS.items():
+            if key in spec["suffixes"]:
+                eligible_by_analyzer[name].add(p)
+    eligible_paths = set().union(*eligible_by_analyzer.values())
+    outcomes: dict[Path, tuple[bool, int, int]] = {}
+
+    def _record(path: Path, result: dict) -> None:
+        if path in eligible_paths:
+            outcomes[path] = (
+                not result.get("_failed"),
+                int(result.get("_sites", 0)),
+                int(result.get("_unresolved", 0)),
+            )
 
     lwc_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("lwc", [])]
     aura_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("aura", [])]
@@ -358,6 +381,7 @@ def extract(
                         result = fut.result()
                         all_nodes.extend(result.get("nodes", []))
                         all_edges.extend(result.get("edges", []))
+                        _record(futures[fut], result)
                     except BrokenProcessPool:
                         # The worker pool itself died (e.g. PyInstaller spawn
                         # bootstrap incompatibility on macOS). Partial results are
@@ -384,6 +408,7 @@ def extract(
             # the full single-file extraction sequentially below.
             all_nodes.clear()
             all_edges.clear()
+            outcomes.clear()
             use_parallel = False
 
     if not use_parallel:
@@ -391,6 +416,7 @@ def extract(
             result = _extract_file(p)
             all_nodes.extend(result.get("nodes", []))
             all_edges.extend(result.get("edges", []))
+            _record(p, result)
 
     # Phase 1b: Bundle extraction (always sequential — they're directory-level)
     for bundle_dir in lwc_dirs:
@@ -434,4 +460,5 @@ def extract(
         "edges": all_edges,
         "input_tokens": 0,
         "output_tokens": 0,
+        "analysis": _ledger.build_analysis(eligible_by_analyzer, outcomes),
     }

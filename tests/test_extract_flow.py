@@ -76,7 +76,7 @@ def test_extract_flow_missing_file():
     from graphify_sf.extract.flow import extract_flow
 
     result = extract_flow(Path("/nonexistent/flow.flow-meta.xml"))
-    assert result == {"nodes": [], "edges": []}
+    assert result == {"nodes": [], "edges": [], "_failed": True}  # flagged so the coverage ledger counts it
 
 
 def test_extract_flow_malformed_xml(tmp_path):
@@ -87,7 +87,7 @@ def test_extract_flow_malformed_xml(tmp_path):
     bad_flow.write_text("<?xml version='1.0'?><Flow><unclosed>")
 
     result = extract_flow(bad_flow)
-    assert result == {"nodes": [], "edges": []}
+    assert result == {"nodes": [], "edges": [], "_failed": True}  # flagged so the coverage ledger counts it
 
 
 def test_extract_flow_elements_as_children(simple_project_path):
