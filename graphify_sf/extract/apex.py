@@ -373,7 +373,7 @@ def extract_apex_class(path: Path) -> dict:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "edges": [], "_failed": True}
 
     # Blank out comment/string contents once, up front. Every code-structure
     # regex pass below runs over ``scrubbed`` so it never matches a DML verb,
@@ -657,7 +657,7 @@ def extract_apex_trigger(path: Path) -> dict:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "edges": [], "_failed": True}
 
     nodes: list[dict] = []
     edges: list[dict] = []

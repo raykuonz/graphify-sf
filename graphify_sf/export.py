@@ -547,6 +547,12 @@ def to_json(
     data["hyperedges"] = getattr(G, "graph", {}).get("hyperedges", [])
     if built_at_commit:
         data["built_at_commit"] = built_at_commit
+    # The coverage ledger lives at the top level, once. It is only ever carried through from the graph
+    # (written by a full pipeline run, or loaded from an existing graph.json): never synthesised here.
+    ledger = getattr(G, "graph", {}).get("graphify_sf")
+    if ledger:
+        data["graph"] = {k: v for k, v in (data.get("graph") or {}).items() if k != "graphify_sf"}
+        data["graphify_sf"] = ledger
     _write_json_atomic(output_path, data)
     return True
 

@@ -155,7 +155,7 @@ def test_extract_apex_missing_file():
     from graphify_sf.extract.apex import extract_apex_class
 
     result = extract_apex_class(Path("/nonexistent/file.cls"))
-    assert result == {"nodes": [], "edges": []}
+    assert result == {"nodes": [], "edges": [], "_failed": True}  # flagged so the coverage ledger counts it
 
 
 def test_extract_apex_method_confidence_extracted(simple_project_path):

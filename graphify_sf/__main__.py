@@ -82,9 +82,25 @@ def _load_graph_from_json(path: Path):
     if "links" not in raw and "edges" in raw:
         raw = dict(raw, links=raw["edges"])
     try:
-        return _jg.node_link_graph(raw, edges="links"), raw
+        G = _jg.node_link_graph(raw, edges="links")
     except TypeError:
-        return _jg.node_link_graph(raw), raw
+        G = _jg.node_link_graph(raw)
+    # The coverage ledger is top-level in graph.json; keep it on the graph so every command that loads and
+    # re-exports (cluster-only, export json) passes it through unchanged.
+    if isinstance(raw.get("graphify_sf"), dict):
+        G.graph["graphify_sf"] = raw["graphify_sf"]
+    return G, raw
+
+
+def _attach_merged_ledger(G, raw_inputs: list[dict]) -> None:
+    """Give a merged graph the status-only meet of its inputs' coverage ledgers (none if no input has one)."""
+    from graphify_sf._ledger import merged_ledger
+
+    merged = merged_ledger(
+        [r.get("graphify_sf") if isinstance(r.get("graphify_sf"), dict) else None for r in raw_inputs]
+    )
+    if merged:
+        G.graph["graphify_sf"] = merged
 
 
 def _union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -374,6 +390,11 @@ def _run_pipeline(
     new_extraction = {"nodes": nodes, "edges": edges}
 
     G = build_from_json(new_extraction, directed=directed)
+    if extraction.get("analysis"):
+        # Only a full extraction can state what was analysed; it is the sole writer of counters.
+        from graphify_sf._ledger import build_ledger
+
+        G.graph["graphify_sf"] = build_ledger(__version__, extraction["analysis"])
 
     print(f"[graphify-sf] graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
@@ -776,6 +797,24 @@ def _cmd_stats(graph_path: Path) -> None:
     print(f"  Isolated nodes: {isolated}")
     print()
 
+    ledger = G.graph.get("graphify_sf")
+    print("Analysis coverage:")
+    if not ledger:
+        print("  (none recorded: this graph was built without the coverage ledger)")
+    else:
+        scope = " (merged)" if ledger.get("scope") == "merged" else ""
+        print(f"  Tool version:   {ledger.get('version', 'n/a')}{scope}")
+        for name, entry in sorted((ledger.get("analysis") or {}).items()):
+            counts = ""
+            if "eligible" in entry:
+                counts = (
+                    f"  eligible {entry['eligible']}, analyzed {entry['analyzed']}, failed {entry['failed']}, "
+                    f"sites {entry.get('sites', 0)}, unresolved {entry.get('unresolved', 0)}"
+                )
+            print(f"  {name:30s} {entry.get('status', 'unknown')}{counts}")
+        print(f"  Capabilities:   {', '.join(ledger.get('capabilities') or []) or '(none)'}")
+    print()
+
     print("Node Types (sf_type):")
     for sf_type, count in sf_types.most_common():
         bar = "#" * min(count, 40)
@@ -918,6 +957,7 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
     # Dedup by label, then build the multigraph so parallel edges survive.
     nodes_dedup, edges_dedup = deduplicate_by_label(nodes_data, edges_data)
     G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup}, multigraph=True)
+    _attach_merged_ledger(G, raw_datas)
 
     print(f"[graphify-sf] after dedup: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
@@ -1010,6 +1050,7 @@ def _cmd_merge_driver(base: Path, ours: Path, theirs: Path) -> None:
     all_nodes, all_edges = three_way_merge(base_data, ours_data, theirs_data, prune_dangling=True)
     nodes_dedup, edges_dedup = deduplicate_by_label(all_nodes, all_edges)
     G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup}, multigraph=True)
+    _attach_merged_ledger(G, [ours_data, theirs_data])
     communities = cluster(G)
     to_json(G, communities, str(ours), force=True)
     print(f"[graphify-sf] merge-driver: merged {G.number_of_nodes()} nodes, {G.number_of_edges()} edges → {ours}")

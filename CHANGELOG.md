@@ -31,6 +31,20 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   non-zero (leaving `ours` untouched, so git reports a conflict) if `ours`, `theirs` or a non-empty base is
   malformed. A missing or zero-byte base means "no common ancestor" and gives a plain union.
 
+### Added
+- **A coverage ledger in `graph.json`.** A full run now writes a top-level `graphify_sf` block:
+  `{"version", "analysis": {<analyzer>: {"status", "eligible", "analyzed", "failed", "sites", "unresolved"}}, "capabilities": [...]}`.
+  `capabilities` is derived: the analyzers whose status is `complete`. A graph without the block was never
+  analysed, so a consumer can tell "no edges because there is nothing there" from "no edges because nobody
+  looked". Counts come from a per-file outcome record, so a file whose extractor raised or whose worker was
+  lost counts as failed (`analyzed + failed == eligible` always holds); `complete` means no file failed, `partial`
+  some, `failed` all, and zero eligible files is `complete`. Only a full pipeline run (including `--update`, hooks and
+  watch rebuilds) writes counters. `cluster-only` and `export json` carry the block through untouched and never
+  create or upgrade one; `merge-graphs` and the merge driver write a status-only meet (`"scope": "merged"`, worst
+  status per analyzer, an input without a block counts as `not_run`, no counters). `graphify-sf stats` and the
+  MCP `graph_stats` tool show it. The two callout analyzers report `not_run` in this build until their extractors
+  ship, so no capability is advertised yet.
+
 ### Changed
 - `merge-graphs` now fails on a malformed input where it used to skip it silently.
 - The merge driver takes no output-directory lock: git hands it its own temporary `.merge_file_*` files, never the
