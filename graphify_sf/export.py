@@ -948,12 +948,58 @@ def to_obsidian(
     return G.number_of_nodes() + community_notes_written
 
 
+# Private edge/node keys that never leave the pipeline (see to_json).
+_GRAPHML_DROP_KEYS = frozenset({"_src", "_tgt", "_tgt_name"})
+
+
+def _graphml_value(value):
+    """Coerce an attribute to a type GraphML can store, or None to drop it."""
+    if value is None:
+        return None
+    if isinstance(value, bool | int | float | str):
+        return value
+    # lists, dicts, sets, tuples, ...: keep the information as JSON text
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _graphml_safe(G: nx.Graph) -> nx.Graph:
+    """Copy of *G* whose attributes GraphML can write.
+
+    GraphML has no null and no container types, so ``None`` attributes (every node has
+    ``source_location: None`` when it is unknown) are dropped, lists and dicts become JSON text,
+    and graph-level metadata (``G.graph``: the coverage ledger, hyperedges) is not exported.
+    """
+    H = G.__class__()
+    for node_id, attrs in G.nodes(data=True):
+        H.add_node(node_id, **{k: v for k, v in ((k, _graphml_value(v)) for k, v in attrs.items()) if v is not None})
+    if G.is_multigraph():
+        for u, v, key, attrs in G.edges(keys=True, data=True):
+            clean = {
+                k: x
+                for k, x in ((k, _graphml_value(x)) for k, x in attrs.items() if k not in _GRAPHML_DROP_KEYS)
+                if x is not None
+            }
+            H.add_edge(u, v, key=key, **clean)
+    else:
+        for u, v, attrs in G.edges(data=True):
+            clean = {
+                k: x
+                for k, x in ((k, _graphml_value(x)) for k, x in attrs.items() if k not in _GRAPHML_DROP_KEYS)
+                if x is not None
+            }
+            H.add_edge(u, v, **clean)
+    return H
+
+
 def to_graphml(
     G: nx.Graph,
     communities: dict[int, list[str]],
     output_path: str,
 ) -> None:
-    H = G.copy()
+    H = _graphml_safe(G)
     node_community = _node_community_map(communities)
     for node_id in H.nodes():
         H.nodes[node_id]["community"] = node_community.get(node_id, -1)

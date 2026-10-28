@@ -229,6 +229,15 @@ def _scrub_comments_and_strings(text: str) -> str:
     return "".join(out)
 
 
+def _in_code(text: str, scrubbed: str, start: int, end: int) -> bool:
+    """Whether ``text[start:end]`` is real code, i.e. survived `_scrub_comments_and_strings`.
+
+    The scrubber blanks every non-whitespace character inside comments and string
+    literals, so a span that is unchanged in the scrubbed copy lay entirely in code.
+    """
+    return scrubbed[start:end] == text[start:end]
+
+
 def _matching_brace_end(text: str, open_pos: int) -> int:
     """Return the index just past the ``}`` matching the ``{`` at *open_pos*.
 
@@ -587,6 +596,11 @@ def extract_apex_class(path: Path) -> dict:
         # RAW text (the scrubbed copy would have blanked the URL contents).
         seen_callout_targets: set[str] = set()
         for em in _ENDPOINT_RE.finditer(text):
+            # The literal is read from the raw text, but the ``.setEndpoint(`` call itself
+            # must be code. In a comment or string literal its letters are blanked in the
+            # scrubbed copy, so any difference up to the literal means "not real code".
+            if not _in_code(text, scrubbed, em.start(), em.start(1)):
+                continue
             endpoint = em.group(1).strip()
             nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
             if nc_match:
