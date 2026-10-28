@@ -11,6 +11,69 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.0] — 2026-10-28
+
+Housekeeping release: Python 3.10 is dropped, OpenAI's default model changes, and the release pipeline
+stops trusting moving inputs. There are no changes to extraction or to the graph.
+
+### Removed
+- **Python 3.10.** It reached end of life this month. `graphify-sf` now requires Python 3.11 or newer;
+  on 3.10, `pip` keeps resolving **0.4.7** (the last release that supports it). CI tests 3.11–3.14. The
+  npm package and the prebuilt binaries are unaffected (the binaries bundle Python 3.12).
+
+### Changed
+- **OpenAI default model: `gpt-4.1-mini` → `gpt-6-luna`.** OpenAI shuts `gpt-4.1-mini` down on 2027-01-14
+  and names `gpt-6-luna` as its replacement. Price $0.40/$1.60 → $0.10/$0.50 per 1M tokens, but
+  `gpt-6-luna` is a reasoning model, so its reasoning tokens are billed as output and the real cost
+  depends on the token mix.
+  - For `gpt-6*` models the request omits `temperature` and sets `reasoning_effort="low"`. Other models
+    (for example `GRAPHIFY_SF_OPENAI_MODEL=gpt-4.1-mini`, which keeps working until its shutdown) are sent
+    exactly what they were before.
+  - If the API rejects `temperature` or `reasoning_effort` with a 400, the request is retried once
+    without them and the rejection is remembered for the rest of the run. This applies to the `openai`
+    backend only; the Gemini, Kimi and Ollama backends are unchanged.
+  - If a reasoning model spends the whole output budget thinking and returns nothing, the message now
+    says so and points at `GRAPHIFY_SF_MAX_OUTPUT_TOKENS`; the chunk is still bisected as before.
+  - Cost lines say "at default-model rates" when `GRAPHIFY_SF_OPENAI_MODEL` selects another model.
+  - **Not verified against the live API** (no OpenAI key was available): the `temperature` and
+    `reasoning_effort` handling and the price come from OpenAI's documentation. If you see a 400 or an
+    odd bill, set `GRAPHIFY_SF_OPENAI_MODEL=gpt-4.1-mini` and tell us.
+
+### Security / release pipeline
+- **Every GitHub Action is pinned to a commit SHA** (including `pypa/gh-action-pypi-publish`, which was a
+  moving branch); uv and npm are pinned to exact versions, and the release jobs do not use caches.
+- **The Linux binary's base images are pinned by digest** (`.github/docker/manylinux-*/Dockerfile`, kept
+  current by Dependabot). The `dnf upgrade` inside the container is deliberately not pinned: it brings
+  the bundled libraries to the latest security errata. The two `dnf` calls now retry on mirror errors.
+- **Binary-build dependencies are hash-locked.** PyInstaller, pyelftools and setuptools live in a
+  `binary` dependency group in `uv.lock`; every binary build installs a hash-checked export of it
+  (`pip --require-hashes --only-binary=:all:`) and then the project with `--no-build-isolation`. The
+  documentation extras are no longer installed for the binary (they were excluded from it anyway).
+- **Build legs can no longer write to the release.** `release-binaries.yml` is split into `resolve` →
+  `build-binaries` (read-only; third-party build code) → `attach-assets` (the only job that writes the
+  release; runs no PyPI or npm package code) → `publish-npm` (npm OIDC token, no release write access).
+  Published assets are still never replaced, the checksums are computed from the published bytes, and
+  the npm job verifies the binaries it packs against them.
+- **`publish.yml`:** the PyPI OIDC permission is now only on the publish job, not the build job.
+- **Both release workflows refuse a tag that differs from `pyproject.toml`'s version**, so PyPI and npm
+  can't be published at different versions; a test also keeps `pyproject.toml`, `uv.lock` and the npm
+  package and its five platform pins in step.
+- **`workflow_dispatch` has a `dry_run` mode** that builds from the dispatching ref and exercises every
+  job without writing to the release or the npm registry (it packs instead of publishing, outside the
+  `npm` environment).
+- **A manual re-run needs a tag from v0.5.0 on.** Older tags predate the hash-locked build and fail an
+  explicit preflight check.
+- PR CI now also builds the macOS Intel binary and checks that `uv.lock` is up to date.
+
+### Known issues
+- `publish.yml` (PyPI) and `release-binaries.yml` (binaries, npm) both start on `release: published` and
+  are independent, so PyPI can ship while the binary build fails. Re-running the failed jobs finishes the
+  release. Gating PyPI on the binaries is planned.
+- The smoke-test distro images and the runner images (`ubuntu-latest`, `windows-latest`) are still
+  referenced by tag.
+
+---
+
 ## [0.4.7] — 2026-10-23
 
 A small release for the git hooks and `graph.json` writes. Two behaviours change; see **Changed**.
@@ -864,7 +927,8 @@ pairs ever survived).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/raykuonz/graphify-sf/compare/v0.4.7...v0.5.0
 [0.4.7]: https://github.com/raykuonz/graphify-sf/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/raykuonz/graphify-sf/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/raykuonz/graphify-sf/compare/v0.4.4...v0.4.5

@@ -158,14 +158,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Preflight - tag has the hash-locked binary build
+      - name: Preflight - tag has the hash-locked binary build and a matching version
         shell: bash
+        env:
+          DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
+          TAG_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           [ -f .github/scripts/export-binary-requirements.sh ] || {
             echo "ref ${{ needs.resolve.outputs.ref }} predates the hash-locked binary build (needs v0.5.0 or later)." >&2
             echo "Older releases cannot be re-run from this workflow." >&2
             exit 1
           }
+          if [ "$DRY_RUN" != "true" ]; then
+            # The PyPI wheel is built from pyproject.toml; the binaries and npm packages are stamped
+            # from the tag. They must agree before anything is published.
+            pyproject_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)"
+            [ "$pyproject_version" = "$TAG_VERSION" ] || {
+              echo "tag version $TAG_VERSION != pyproject.toml version ${pyproject_version:-<none>}; refusing to build." >&2
+              exit 1
+            }
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
