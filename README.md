@@ -444,7 +444,7 @@ Both hooks skip during rebase, merge, and cherry-pick. The `_hooks_dir()` respec
 
 ### Merge driver — conflict-free graph.json merges
 
-When two branches both modify `graph.json`, a normal git merge produces a JSON conflict. The graphify-sf merge driver performs a union merge instead (all nodes + all edges from both branches, deduplicated and re-clustered):
+When two branches both modify `graph.json`, a normal git merge produces a JSON conflict. The graphify-sf merge driver performs a 3-way merge instead: a node or edge is kept when both branches have it or when one branch added it, and removed when the common ancestor had it and either branch dropped it (attributes merge per attribute, and the ancestor never wins). The result is re-clustered. An unreadable or malformed `graph.json` on either side makes the driver fail, so git reports a conflict instead of recording a graph with everything deleted (a missing or empty ancestor is treated as no ancestor, a plain union). `merge-graphs` likewise refuses a malformed input instead of treating it as empty:
 
 ```bash
 # Install (configures .gitattributes + .git/config)

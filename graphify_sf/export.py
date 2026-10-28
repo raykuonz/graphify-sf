@@ -948,12 +948,49 @@ def to_obsidian(
     return G.number_of_nodes() + community_notes_written
 
 
+def _graphml_value(value):
+    """Coerce an attribute to a type GraphML can store, or None to drop it."""
+    if value is None:
+        return None
+    if isinstance(value, bool | int | float | str):
+        return value
+    # lists, dicts, sets, tuples, ...: keep the information as JSON text
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _graphml_attrs(attrs: dict) -> dict:
+    cleaned = ((k, _graphml_value(v)) for k, v in attrs.items())
+    return {k: v for k, v in cleaned if v is not None}
+
+
+def _graphml_safe(G: nx.Graph) -> nx.Graph:
+    """Copy of *G* whose attributes GraphML can write.
+
+    GraphML has no null and no container types, so ``None`` attributes (every node has
+    ``source_location: None`` when it is unknown) are dropped, lists and dicts become JSON text,
+    and graph-level metadata (``G.graph``: the coverage ledger, hyperedges) is not exported.
+    """
+    H = G.__class__()
+    for node_id, attrs in G.nodes(data=True):
+        H.add_node(node_id, **_graphml_attrs(attrs))
+    if G.is_multigraph():
+        for u, v, key, attrs in G.edges(keys=True, data=True):
+            H.add_edge(u, v, key=key, **_graphml_attrs(attrs))
+    else:
+        for u, v, attrs in G.edges(data=True):
+            H.add_edge(u, v, **_graphml_attrs(attrs))
+    return H
+
+
 def to_graphml(
     G: nx.Graph,
     communities: dict[int, list[str]],
     output_path: str,
 ) -> None:
-    H = G.copy()
+    H = _graphml_safe(G)
     node_community = _node_community_map(communities)
     for node_id in H.nodes():
         H.nodes[node_id]["community"] = node_community.get(node_id, -1)

@@ -87,76 +87,16 @@ def _load_graph_from_json(path: Path):
         return _jg.node_link_graph(raw), raw
 
 
-def _load_graph_json_raw(path: Path) -> dict:
-    """Load a graph.json's raw ``nodes``/``links`` lists (no NetworkX collapse).
-
-    Returns ``{"nodes": [...], "links": [...]}`` — empty lists if the file is
-    missing or unreadable. The merge paths use this instead of a ``nx.Graph()``
-    union so same-direction parallel edges survive until the multigraph build.
-    """
-    if not path.exists():
-        return {"nodes": [], "links": []}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if "links" not in raw and "edges" in raw:
-            raw["links"] = raw["edges"]
-        return raw
-    except Exception:
-        return {"nodes": [], "links": []}
-
-
-_UNION_EDGE_IGNORED_FIELDS = frozenset({"key", "source_file"})
-
-
-def _union_edge_identity(edge: dict) -> str:
-    """Canonical dedup identity for a link during union.
-
-    Hashes the full edge dict minus the per-graph fields that legitimately vary
-    across inputs (``key`` — each source graph numbers its own parallel edges
-    from 0; ``source_file`` — an absolute path unique to the machine that built
-    that graph). Every other field participates, so edges that differ only in
-    ``operation`` (e.g. ``dml`` create vs. update on the same source→target
-    pair, which ``extract/apex.py`` and ``extract/flow.py`` deliberately emit as
-    distinct edges) are kept apart, while genuinely-identical duplicates (the
-    common base/ours/theirs 3-way case) still collapse to one.
-    """
-    identity = {k: v for k, v in edge.items() if k not in _UNION_EDGE_IGNORED_FIELDS}
-    return json.dumps(identity, sort_keys=True, default=str)
-
-
 def _union_graph_json(datas: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Union raw graph.json node/link lists across multiple graphs.
+    """Union raw graph.json node/link lists across multiple graphs (see ``_merge.union_graph_json``).
 
-    Nodes are deduped by ``id`` (first occurrence wins). Links are unioned and
-    deduped on a canonical hash of the full edge dict (minus the per-graph
-    ``key``/``source_file`` fields), so distinct parallel edges are ALL
-    preserved — both those differing in ``relation`` (e.g. ``queries`` + ``dml``
-    on the same pair) and those differing only in ``operation`` (e.g. two
-    ``dml`` edges, one create + one update, on the same pair). A plain
-    ``nx.Graph()`` union would collapse the former, and a coarse
-    ``(source, target, relation)`` key would collapse the latter, before the
-    multigraph build ever runs. Genuinely-identical duplicate edges (the
-    base/ours/theirs 3-way merge case) still coalesce to one.
+    Links are matched on their logical identity (everything except per-graph and volatile fields), so
+    distinct parallel edges (``queries`` + ``dml``, or ``dml`` create + update on one pair) are all
+    preserved, which a plain ``nx.Graph()`` union would collapse before the multigraph build runs.
     """
-    all_nodes: dict[str, dict] = {}
-    all_edges: list[dict] = []
-    seen_edges: set[str] = set()
-    for data in datas:
-        for node in data.get("nodes", []):
-            nid = node.get("id", "")
-            if nid and nid not in all_nodes:
-                all_nodes[nid] = node
-        links_key = "links" if "links" in data else "edges"
-        for edge in data.get(links_key, []):
-            identity = _union_edge_identity(edge)
-            if identity not in seen_edges:
-                seen_edges.add(identity)
-                # Drop the exported per-graph "key" — each source graph numbers its
-                # own parallel edges from 0, so two distinct relations on the same
-                # pair both arrive as key=0 and would collapse on rebuild. Stripping
-                # it lets the MultiDiGraph assign fresh keys per parallel edge.
-                all_edges.append({k: v for k, v in edge.items() if k != "key"})
-    return list(all_nodes.values()), all_edges
+    from graphify_sf._merge import union_graph_json
+
+    return union_graph_json(datas)
 
 
 def _derive_community_labels(G, communities: dict) -> dict[int, str]:
@@ -956,13 +896,20 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
 
     # Load all graphs as raw JSON node/link lists and union them WITHOUT going
     # through a plain nx.Graph(), which would collapse same-direction parallel
-    # edges before the multigraph-aware build ever runs. Mirrors the edge-safe
-    # union already used by _cmd_merge_driver.
+    # edges before the multigraph-aware build ever runs. Every explicitly named input
+    # must be a valid graph.json: a malformed one aborts here, before anything is written,
+    # instead of being silently merged as an empty graph.
+    from graphify_sf._merge import GraphJsonError, load_graph_json_strict
+
     raw_datas = []
     for gp in graph_paths:
         print(f"[graphify-sf] loading {gp}...")
-        raw_i = _load_graph_json_raw(gp)
-        print(f"  {len(raw_i.get('nodes', []))} nodes, {len(raw_i.get('links', raw_i.get('edges', [])))} edges")
+        try:
+            raw_i = load_graph_json_strict(gp)
+        except GraphJsonError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  {len(raw_i['nodes'])} nodes, {len(raw_i['links'])} edges")
         raw_datas.append(raw_i)
 
     nodes_data, edges_data = _union_graph_json(raw_datas)
@@ -1031,23 +978,36 @@ def _cmd_merge_graphs(graph_paths: list[Path], out_path: Path, *, no_viz: bool =
 
 
 def _cmd_merge_driver(base: Path, ours: Path, theirs: Path) -> None:
-    """Git merge driver for graph.json: union merge instead of text conflict.
+    """Git merge driver for graph.json: a 3-way merge instead of a text conflict.
 
     Registered via: graphify-sf merge-driver install
     Git calls it as: graphify-sf merge-driver run %O %A %B
 
-    The result is written to `ours` (the %A file) in-place, which is what
-    git expects from a custom merge driver.
+    Nodes and edges merge git-style against the common base: kept when both sides have them, or
+    when one side added them; deleted when the base had them and either side dropped them. Attributes
+    merge per attribute and the base never wins. An unreadable or malformed ``ours``/``theirs`` (or
+    non-empty base) is an error: the driver exits non-zero and leaves ``ours`` untouched, so git reports
+    a conflict instead of recording a graph with everything deleted. A missing or empty base means "no
+    common base" (an add/add merge) and gives a plain union.
+
+    The result is written to `ours` (the %A file) in-place, which is what git expects. That file is
+    one of git's own temporary ``.merge_file_*`` files in the worktree root, not the live graph.json,
+    so there is no output-directory lock to take.
     """
+    from graphify_sf._merge import GraphJsonError, load_base_graph_json, load_graph_json_strict, three_way_merge
     from graphify_sf.build import build_from_json, deduplicate_by_label
     from graphify_sf.cluster import cluster
     from graphify_sf.export import to_json
 
-    # Union raw node/link lists (dedup nodes by id, links by (src,tgt,rel)) so
-    # parallel edges survive; see _union_graph_json.
-    all_nodes, all_edges = _union_graph_json(
-        [_load_graph_json_raw(base), _load_graph_json_raw(ours), _load_graph_json_raw(theirs)]
-    )
+    try:
+        base_data = load_base_graph_json(base)
+        ours_data = load_graph_json_strict(ours)
+        theirs_data = load_graph_json_strict(theirs)
+    except GraphJsonError as exc:
+        print(f"[graphify-sf] merge-driver: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    all_nodes, all_edges = three_way_merge(base_data, ours_data, theirs_data, prune_dangling=True)
     nodes_dedup, edges_dedup = deduplicate_by_label(all_nodes, all_edges)
     G = build_from_json({"nodes": nodes_dedup, "edges": edges_dedup}, multigraph=True)
     communities = cluster(G)

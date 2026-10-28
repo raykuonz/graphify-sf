@@ -632,7 +632,10 @@ def test_cli_merge_driver_preserves_operation_distinct_edges(tmp_path):
     )
     _write_graph_json(
         theirs,
-        [{"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "update", "confidence": "INFERRED"}],
+        [
+            {"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "create", "confidence": "INFERRED"},
+            {"source": "apex_a", "target": "obj_b", "relation": "dml", "operation": "update", "confidence": "INFERRED"},
+        ],
     )
 
     _cmd_merge_driver(base, ours, theirs)

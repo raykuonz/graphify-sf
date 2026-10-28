@@ -47,8 +47,11 @@ _TRIGGER_RE = re.compile(
 # Apex → Flow: Flow.Interview.FlowApiName
 _FLOW_INVOKE_RE = re.compile(r"Flow\.Interview\.(\w+)", re.IGNORECASE)
 
-# A1: HTTP callout detection — endpoint literal in setEndpoint('...')
-_ENDPOINT_RE = re.compile(r'\.setEndpoint\s*\(\s*["\']([^"\']+)["\']', re.IGNORECASE)
+# A1: HTTP callout detection — endpoint literal in setEndpoint('...'). Matched on the SCRUBBED text
+# (comments and string contents blanked, delimiters kept), so a call that sits in a comment or a string
+# never matches and an unclosed quote in a comment cannot run on into the next real call; the literal
+# itself is then read from the raw text at the same offsets.
+_ENDPOINT_RE = re.compile(r'\.setEndpoint\s*\(\s*(["\'])([^"\']+)\1', re.IGNORECASE)
 
 # A5: EventBus.publish(new SomeEvent__e(...)) — extract the platform event type name
 _EVENT_BUS_PUBLISH_RE = re.compile(r"EventBus\.publish\s*\(\s*new\s+(\w+__e)\s*\(", re.IGNORECASE)
@@ -375,8 +378,8 @@ def extract_apex_class(path: Path) -> dict:
     # Blank out comment/string contents once, up front. Every code-structure
     # regex pass below runs over ``scrubbed`` so it never matches a DML verb,
     # call, brace or SOQL keyword that lives inside a comment or string literal.
-    # ``text`` (raw) is retained only for _ENDPOINT_RE, which intentionally reads
-    # the endpoint URL out of a string literal.
+    # ``text`` (raw) is retained only to read the endpoint URL out of the string literal
+    # that _ENDPOINT_RE located on the scrubbed copy.
     scrubbed = _scrub_comments_and_strings(text)
 
     nodes: list[dict] = []
@@ -582,12 +585,12 @@ def extract_apex_class(path: Path) -> dict:
                     )
                 )
 
-        # A1: HTTP callout detection via .setEndpoint('...'). This deliberately
-        # reads the endpoint URL out of a string literal, so it runs over the
-        # RAW text (the scrubbed copy would have blanked the URL contents).
+        # A1: HTTP callout detection via .setEndpoint('...'). The call is located on the
+        # scrubbed text (so comments and string contents cannot match) and the endpoint
+        # URL is read from the raw text at the same offsets.
         seen_callout_targets: set[str] = set()
-        for em in _ENDPOINT_RE.finditer(text):
-            endpoint = em.group(1).strip()
+        for em in _ENDPOINT_RE.finditer(scrubbed):
+            endpoint = text[em.start(2) : em.end(2)].strip()
             nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
             if nc_match:
                 nc_name = nc_match.group(1).strip()
