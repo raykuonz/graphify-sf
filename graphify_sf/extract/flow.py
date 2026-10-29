@@ -11,6 +11,9 @@ from ._ids import apex_class_id, flow_id, make_sf_id, object_id
 
 _SF_NS = "http://soap.sforce.com/2006/04/metadata"
 
+# ``callout:Name/...`` or the action-reference form ``callout:{{Name}}``; the name ends at a path/query delimiter.
+_NC_RE = re.compile(r"callout:\s*\{{0,2}([^/?#\s{}]+)\}{0,2}", re.IGNORECASE)
+
 
 def _strip_ns(tag: str) -> str:
     """Strip XML namespace from a tag string."""
@@ -129,7 +132,8 @@ def extract_flow(path: Path) -> dict:
             edges.append(trigger_edge)
 
     # Action calls (Apex, email alerts, HTTP callouts, etc.)
-    seen_callouts: set[str] = set()
+    seen_callouts: dict[str, dict] = {}
+    http_sites = http_unresolved = 0
     for action in _find_all(root_el, "actionCalls", ns):
         action_type = _find_text(action, "actionType", ns)
         if action_type == "apex":
@@ -140,34 +144,48 @@ def extract_flow(path: Path) -> dict:
             sub_name = _find_text(action, "actionName", ns)
             if sub_name:
                 edges.append(_make_edge(flow_nid, flow_id(sub_name), "invokes", "EXTRACTED", str_path))
-        # A2: HTTP callout or ExternalService action — scan all <stringValue> for endpoints
-        for sv_el in _find_all(action, "stringValue", ns):
-            if not sv_el.text:
-                continue
-            endpoint = sv_el.text.strip()
-            nc_match = re.match(r"callout:([^/?#\s]+)", endpoint, re.IGNORECASE)
+        # A2: HTTP callout actions. Only ``actionType=httpCallout`` actions are callout sites; a ``callout:`` string
+        # inside any other action (an email body, a chatter post) is not a callout.
+        if action_type != "httpCallout":
+            continue
+        http_sites += 1
+        action_name = _find_text(action, "name", ns) or _find_text(action, "actionName", ns)
+        resolved = False
+        # Two shapes exist in the wild: ``<stringValue>callout:Name/path</stringValue>`` under an input parameter,
+        # and ``<actionName>callout:{{Name}}</actionName>`` / ``callout:Name`` on the action itself.
+        candidates = [sv.text.strip() for sv in _find_all(action, "stringValue", ns) if sv.text]
+        action_ref = _find_text(action, "actionName", ns)
+        if action_ref:
+            candidates.append(action_ref)
+        for endpoint in candidates:
+            nc_match = _NC_RE.match(endpoint)
             if nc_match:
                 nc_name = nc_match.group(1).strip()
                 nc_id = make_sf_id("namedcredential", nc_name)
+                resolved = True
                 if nc_id in seen_callouts:
+                    seen_callouts[nc_id]["site_count"] += 1
                     continue
-                seen_callouts.add(nc_id)
                 nc_edge = _make_edge(flow_nid, nc_id, "makes_callout", "EXTRACTED", str_path)
                 nc_edge["_tgt_name"] = nc_name  # original-case label for a stub node; consumed in extract()
+                nc_edge["source_location"] = action_name
+                nc_edge["site_count"] = 1
+                seen_callouts[nc_id] = nc_edge
                 edges.append(nc_edge)
-            elif endpoint.startswith(("http://", "https://")):
+            elif endpoint.lower().startswith(("http://", "https://")):
                 try:
-                    host = urlparse(endpoint).hostname or endpoint
-                except Exception:
-                    host = endpoint
-                if "{!" in host or "{" in host:
-                    continue  # a merge-field host is not a host
+                    host = urlparse(endpoint).hostname
+                except ValueError:
+                    host = None
+                if not host or "{" in host:
+                    continue  # a merge-field or malformed host is not a host
                 ep_id = make_sf_id("externalendpoint", host)
+                resolved = True
                 if ep_id in seen_callouts:
+                    seen_callouts[ep_id]["site_count"] += 1
                     continue
-                seen_callouts.add(ep_id)
                 # The Flow creates the endpoint node itself, as Apex does, so the edge survives even when no
-                # Apex class calls the same host.
+                # Apex class calls the same host. A literal URL states its host in the source.
                 nodes.append(
                     {
                         "id": ep_id,
@@ -176,10 +194,16 @@ def extract_flow(path: Path) -> dict:
                         "file_type": "flow",
                         "source_file": str_path,
                         "source_location": None,
-                        "confidence": "INFERRED",
+                        "confidence": "EXTRACTED",
                     }
                 )
-                edges.append(_make_edge(flow_nid, ep_id, "makes_callout", "INFERRED", str_path))
+                ep_edge = _make_edge(flow_nid, ep_id, "makes_callout", "EXTRACTED", str_path)
+                ep_edge["source_location"] = action_name
+                ep_edge["site_count"] = 1
+                seen_callouts[ep_id] = ep_edge
+                edges.append(ep_edge)
+        if not resolved:
+            http_unresolved += 1
 
     # Object record operations. The relation stays "references" (a generic relation
     # reused by many extractors — never change its semantics), but each edge carries an
@@ -234,4 +258,4 @@ def extract_flow(path: Path) -> dict:
                 )
                 edges.append(_make_edge(flow_nid, elem_nid, "contains", "EXTRACTED", str_path))
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "_sites": http_sites, "_unresolved": http_unresolved}

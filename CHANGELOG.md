@@ -45,8 +45,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   status per analyzer, an input without a block counts as `not_run`, no counters). `graphify-sf stats` and the
   MCP `graph_stats` tool show it (the MCP fields are `null` when a graph has no block). "Complete" is relative to what
   graphify-sf scanned: files skipped by `.gitignore` / `.forceignore` and bundle or document extraction are not part of an
-  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The Apex analyzer (`callout-edges.apex`) is live; the Flow analyzer (`callout-edges.flow-http`) reports `not_run`
-  until its extractor ships, so only `callout-edges.apex` is advertised as a capability.
+  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. Both callout analyzers (`callout-edges.apex`, `callout-edges.flow-http`) are live, so a clean build advertises both
+  capabilities.
 
 - **Apex callout endpoints are resolved statically, with a stated confidence.** `setEndpoint(...)` is evaluated as a
   `+` concatenation of string literals and the file's own `String` constants (`static final`, `final`, or instance).
@@ -70,6 +70,15 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `this.a.b.setEndpoint(...)` and `obj.field.setEndpoint(...)` have an unknown receiver; `new Other().setEndpoint(...)`
   is not a callout. A target known only by a prefix (`'callout:Acme' + env`) keeps its INFERRED edge but never gets a
   stub node, because the real credential is probably `Acme_Something`.
+- **Flow HTTP callouts are read from `httpCallout` actions only, in both shapes.** `<stringValue>callout:Name/path`
+  under an input parameter and `<actionName>callout:{{Name}}` (or `callout:Name`) on the action itself resolve to a
+  `makes_callout` edge to the Named Credential, EXTRACTED, with `source_location` set to the action name and
+  `site_count` when several actions share a target. A literal `https://host/...` is EXTRACTED too and creates its
+  `ExternalEndpoint` node. A `callout:` string inside any other action type (an email body, a chatter post) no longer
+  produces an edge. Every `httpCallout` action is a site in the `callout-edges.flow-http` ledger entry; one that
+  yields no edge (a merge-field host, a form this version does not read) counts as `unresolved`, so a Flow-only
+  consumer can tell "no callers" from "callers we could not read". Modern External Service / Named Credential
+  action forms are not guessed.
 - **Callout targets that are not in the repo now appear in the graph.** A `makes_callout` (Apex, Flow) or `uses`
   (External Service, External Data Source) edge to a Named Credential whose metadata is not in the project used to be
   dropped when the graph was built, so a class calling `callout:Not_In_Repo` showed no callout at all. The target is
@@ -93,7 +102,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Database.executeBatch(new X())` have no inbound edge, so an orphan list will list them.
 
 ### Changed
-- Flow literal-URL callouts are deduplicated per flow and a merge-field host such as `https://{!Host}/x` is ignored; a Named Credential name ends at `/`, `?` or `#`.
+- A Named Credential name in a callout ends at `/`, `?` or `#`; a merge-field host such as `https://{!Host}/x` is not an endpoint.
 - `merge-graphs` now fails on a malformed input where it used to skip it silently.
 - The merge driver takes no output-directory lock: git hands it its own temporary `.merge_file_*` files, never the
   live `graph.json`, so there is nothing to serialise against.

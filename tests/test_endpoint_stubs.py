@@ -106,7 +106,7 @@ def test_flow_literal_url_creates_its_endpoint_node_without_any_apex(tmp_path):
     node = _node(data, "externalendpoint_only_in_flow_example_com")
     assert node["sf_type"] == "ExternalEndpoint" and node["label"] == "only-in-flow.example.com"
     assert [(e["source"], e["target"], e["confidence"]) for e in _callouts(data)] == [
-        ("flow_literalonly", "externalendpoint_only_in_flow_example_com", "INFERRED")
+        ("flow_literalonly", "externalendpoint_only_in_flow_example_com", "EXTRACTED")
     ]
 
 
