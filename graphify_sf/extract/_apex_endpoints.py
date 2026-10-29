@@ -22,6 +22,7 @@ The module is a leaf (no imports from ``apex.py``); the caller passes in the met
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -40,6 +41,16 @@ _NOT_A_TYPE = frozenset(
     }
 )  # fmt: skip
 _HTTP_REQUEST_TYPES = frozenset({"httprequest", "system.httprequest"})
+# Every form of ``Type name`` declaration (field, property, local, parameter, for-each variable): the lookahead is
+# what follows a declared name. Built once per file.
+_DECL_RE = re.compile(
+    r"(?<![\w.])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:<[^<>;(){}]*>)?(?:\[\])?\s+([A-Za-z_]\w*)\b\s*(?=[=;,):{])",
+    re.IGNORECASE,
+)
+_EXTRA_DECL_RE = re.compile(r",\s*([A-Za-z_]\w*)\s*=(?!=)")  # second and later declarators: ``String a = 'x', b = 'y'``
+_LOWER_PRECEDENCE = frozenset("?:=!<>&|")  # operators that bind looser than ``+``: the string is not a concatenation
+_RECEIVER_WINDOW = 512
+_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)  # contents are already blank; this removes the delimiters
 _MAX_DEPTH = 8
 
 
@@ -69,6 +80,28 @@ class _Val:
     reason: str | None  # when incomplete: dynamic_suffix | non_final_static
 
 
+class _Index:
+    """Per-file lookup tables, built once: declared types per name, extra declarators, newline offsets."""
+
+    def __init__(self, scrubbed: str) -> None:
+        self.types: dict[str, list[str]] = {}
+        for m in _DECL_RE.finditer(scrubbed):
+            t = m.group(1).lower()
+            if t not in _NOT_A_TYPE:
+                self.types.setdefault(m.group(2).lower(), []).append(t)
+        self.extra: dict[str, int] = {}
+        for m in _EXTRA_DECL_RE.finditer(scrubbed):
+            self.extra[m.group(1).lower()] = self.extra.get(m.group(1).lower(), 0) + 1
+        self.newlines = [i for i, c in enumerate(scrubbed) if c == "\n"]
+
+    def declarations(self, name: str) -> int:
+        key = name.lower()
+        return len(self.types.get(key, ())) + self.extra.get(key, 0)
+
+    def line(self, offset: int) -> int:
+        return bisect_right(self.newlines, offset - 1) + 1
+
+
 def analyze_callouts(
     text: str,
     scrubbed: str,
@@ -81,21 +114,22 @@ def analyze_callouts(
     if not calls:
         return CalloutAnalysis([], 0, 0)
 
-    fields = _collect_fields(text, scrubbed, method_re, brace_end)
+    scrubbed = _COMMENT_RE.sub(lambda m: " " * len(m.group()), scrubbed)  # the scrubber keeps comment delimiters
+    index = _Index(scrubbed)
+    fields = _collect_fields(text, scrubbed, method_re, brace_end, index)
     test_spans = _test_spans(scrubbed, method_re, brace_end)
     callouts: list[Callout] = []
     sites = unresolved = 0
 
     for m in calls:
-        receiver = _classify_receiver(scrubbed, m.start())
+        receiver = _classify_receiver(scrubbed, m.start(), index)
         if receiver == "disproven":
             continue
+        sites += 1
         arg_end = _paren_end(scrubbed, m.end() - 1)
         if arg_end < 0:
-            sites += 1
             unresolved += 1
             continue
-        sites += 1
         value = _evaluate(text, scrubbed, m.end(), arg_end, fields, set(), 0)
         callout = _resolve(value)
         if callout is None:
@@ -106,33 +140,31 @@ def analyze_callouts(
             confidence, reason = "INFERRED", "receiver_unproven"
         if confidence != "EXTRACTED":
             unresolved += 1
-        line = scrubbed.count("\n", 0, m.start()) + 1
         in_test = any(start <= m.start() < end for start, end in test_spans)
-        callouts.append(Callout(kind, name, confidence, reason, in_test, line))
+        callouts.append(Callout(kind, name, confidence, reason, in_test, index.line(m.start())))
     return CalloutAnalysis(callouts, sites, unresolved)
 
 
 # ── receiver ─────────────────────────────────────────────────────────────────────────
 
 
-def _classify_receiver(scrubbed: str, dot: int) -> str:
+def _classify_receiver(scrubbed: str, dot: int, index: _Index) -> str:
     """'proven', 'disproven' or 'unknown' for the expression before the ``.setEndpoint``."""
-    before = scrubbed[:dot].rstrip()
+    before = scrubbed[max(0, dot - _RECEIVER_WINDOW) : dot].rstrip()
     if before.endswith(")"):
         open_paren = _open_paren_before(before, len(before) - 1)
         head = before[:open_paren].rstrip() if open_paren >= 0 else ""
         m = re.search(r"\bnew\s+([\w.]+)$", head, re.IGNORECASE)
-        if m and m.group(1).lower() in _HTTP_REQUEST_TYPES:
-            return "proven"
+        if m:
+            return "proven" if m.group(1).lower() in _HTTP_REQUEST_TYPES else "disproven"
         return "unknown"
     chain = re.search(r"([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)$", before)
     if not chain:
         return "unknown"
     parts = [p.strip() for p in chain.group(1).split(".")]
-    if len(parts) > 1 and parts[0].lower() != "this":
-        return "unknown"  # obj.field: its type is not visible here
-    name = parts[-1]
-    types = _declared_types(scrubbed, name)
+    if len(parts) > 2 or (len(parts) == 2 and parts[0].lower() != "this"):
+        return "unknown"  # obj.field / this.a.b: the type is not visible here
+    types = set(index.types.get(parts[-1].lower(), ()))
     if not types:
         return "unknown"
     if types <= _HTTP_REQUEST_TYPES:
@@ -142,26 +174,17 @@ def _classify_receiver(scrubbed: str, dot: int) -> str:
     return "unknown"  # shadowed under different types
 
 
-def _declared_types(scrubbed: str, name: str) -> set[str]:
-    pattern = re.compile(
-        r"(?<![\w.])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:<[^<>;(){}]*>)?(?:\[\])?\s+"
-        + re.escape(name)
-        + r"\b\s*(?=[=;,):])",
-        re.IGNORECASE,
-    )
-    types = {m.group(1).lower() for m in pattern.finditer(scrubbed)}
-    return {t for t in types if t not in _NOT_A_TYPE}
-
-
 # ── value ────────────────────────────────────────────────────────────────────────────
 
 
 def _collect_fields(
-    text: str, scrubbed: str, method_re: re.Pattern[str], brace_end: Callable[[str, int], int]
+    text: str, scrubbed: str, method_re: re.Pattern[str], brace_end: Callable[[str, int], int], index: _Index
 ) -> dict[str, tuple[int, int, bool, bool]]:
     """Class-level ``String`` fields: lower-cased name -> (expr_start, expr_end, is_final, is_static).
 
-    Declarations inside a method body are locals and are skipped.
+    A name counts only if the whole file declares it exactly once, in any form (field, property, local, parameter,
+    for-each variable, later declarator). Anything shadowed or redeclared anywhere is dynamic: failing closed here
+    also covers locals the method-span check below misses (constructors, methods without modifiers).
     """
     method_spans = []
     for mm in method_re.finditer(scrubbed):
@@ -172,6 +195,9 @@ def _collect_fields(
             continue
         mods = fm.group(1).lower()
         key = fm.group(2).lower()
+        if index.declarations(key) != 1:
+            fields[key] = (-1, -1, False, False)
+            continue
         # a name declared twice is ambiguous: keep none of them
         if key in fields:
             fields[key] = (-1, -1, False, False)
@@ -210,18 +236,40 @@ def _evaluate(
     seen: set[str],
     depth: int,
 ) -> _Val:
+    if _has_lower_precedence_operator(scrubbed, start, end):
+        return _Val("", False, "dynamic_suffix")  # a ternary / comparison / assignment: not a plain concatenation
     prefix, complete, reason = "", True, None
     for a, b in _split_plus(scrubbed, start, end):
-        raw_op, scrub_op = text[a:b].strip(), scrubbed[a:b].strip()
-        while scrub_op.startswith("(") and scrub_op.endswith(")") and _paren_end(scrub_op, 0) == len(scrub_op) - 1:
-            raw_op, scrub_op = raw_op[1:-1].strip(), scrub_op[1:-1].strip()
-        op = _operand(raw_op, scrub_op, text, scrubbed, fields, seen, depth)
         if not complete:
-            continue
+            break
+        a, b = _trim(scrubbed, a, b)
+        while scrubbed[a:b].startswith("(") and _paren_end(scrubbed, a) == b - 1:
+            a, b = _trim(scrubbed, a + 1, b - 1)
+        op = _operand(text[a:b], scrubbed[a:b], text, scrubbed, fields, seen, depth)
         prefix += op.text
         if not op.complete:
             complete, reason = False, op.reason
     return _Val(prefix, complete, reason)
+
+
+def _trim(scrubbed: str, a: int, b: int) -> tuple[int, int]:
+    """Shrink [a, b) past surrounding whitespace *and blanked comments* (scrubbed text keeps offsets in step)."""
+    seg = scrubbed[a:b]
+    lead = len(seg) - len(seg.lstrip())
+    return a + lead, b - (len(seg) - len(seg.rstrip()))
+
+
+def _has_lower_precedence_operator(scrubbed: str, start: int, end: int) -> bool:
+    depth = 0
+    for i in range(start, end):
+        c = scrubbed[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and c in _LOWER_PRECEDENCE:
+            return True
+    return False
 
 
 def _operand(
@@ -235,7 +283,10 @@ def _operand(
 ) -> _Val:
     literal = re.fullmatch(r"(['\"]) *\1", scrub_op)
     if literal and raw_op[:1] == literal.group(1) and raw_op[-1:] == literal.group(1) and len(raw_op) >= 2:
-        return _Val(_unescape(raw_op[1:-1]), True, None)
+        value = _unescape(raw_op[1:-1])
+        if value is None:
+            return _Val("", False, "dynamic_suffix")
+        return _Val(value, True, None)
     if re.fullmatch(r"[A-Za-z_]\w*", scrub_op):
         key = scrub_op.lower()
         info = fields.get(key)
@@ -248,8 +299,23 @@ def _operand(
     return _Val("", False, "dynamic_suffix")
 
 
-def _unescape(s: str) -> str:
-    return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), s)
+_SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", "'": "'", '"': '"'}
+
+
+def _unescape(s: str) -> str | None:
+    """Decode a string literal body, or None if it uses an escape this resolver does not model (``\\u``, ``\\r``...)."""
+    out, i = [], 0
+    while i < len(s):
+        if s[i] != "\\":
+            out.append(s[i])
+            i += 1
+            continue
+        nxt = s[i + 1 : i + 2]
+        if nxt not in _SIMPLE_ESCAPES:
+            return None
+        out.append(_SIMPLE_ESCAPES[nxt])
+        i += 2
+    return "".join(out)
 
 
 def _resolve(value: _Val) -> tuple[str, str, str, str | None] | None:

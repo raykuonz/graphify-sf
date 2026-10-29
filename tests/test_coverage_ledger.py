@@ -19,7 +19,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture
 def enabled(monkeypatch):
-    """Turn both callout analyzers on (they ship disabled until their extractors land)."""
+    """Turn both callout analyzers on (a no-op while both ship enabled)."""
     for spec in _ledger.ANALYZERS.values():
         monkeypatch.setitem(spec, "enabled", True)
 

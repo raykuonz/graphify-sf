@@ -369,6 +369,7 @@ def _add_callout_edges(owner_id: str, callouts, nodes: list[dict], edges: list[d
     neither is hidden. ``ExternalEndpoint`` nodes are created inline for hosts.
     """
     groups: dict[tuple, dict] = {}
+    endpoint_confidence: dict[str, str] = {}
     for c in callouts.callouts:
         tgt_id = make_sf_id(c.kind, c.name)
         key = (tgt_id, c.confidence, c.test_context, c.reason)
@@ -385,18 +386,25 @@ def _add_callout_edges(owner_id: str, callouts, nodes: list[dict], edges: list[d
             edge["inference_reason"] = c.reason
         groups[key] = edge
         edges.append(edge)
-        if c.kind == "externalendpoint" and not any(n["id"] == tgt_id for n in nodes):
-            nodes.append(
-                {
-                    "id": tgt_id,
-                    "label": c.name,
-                    "sf_type": "ExternalEndpoint",
-                    "file_type": "apex",
-                    "source_file": str_path,
-                    "source_location": None,
-                    "confidence": c.confidence,
-                }
+        if c.kind == "externalendpoint":
+            endpoint_confidence[tgt_id] = (
+                "EXTRACTED" if "EXTRACTED" in (c.confidence, endpoint_confidence.get(tgt_id)) else "INFERRED"
             )
+            if not any(n["id"] == tgt_id for n in nodes):
+                nodes.append(
+                    {
+                        "id": tgt_id,
+                        "label": c.name,
+                        "sf_type": "ExternalEndpoint",
+                        "file_type": "apex",
+                        "source_file": str_path,
+                        "source_location": None,
+                        "confidence": endpoint_confidence[tgt_id],
+                    }
+                )
+    for node in nodes:
+        if node["id"] in endpoint_confidence and node.get("sf_type") == "ExternalEndpoint":
+            node["confidence"] = endpoint_confidence[node["id"]]
 
 
 def extract_apex_class(path: Path) -> dict:
@@ -441,8 +449,10 @@ def extract_apex_class(path: Path) -> dict:
             kind, class_name = m.group(1).lower(), m.group(2)
             superclass, interfaces_raw = (m.group(3) or "").strip(), (m.group(4) or "").strip()
         else:
-            # Not an Apex declaration at all (a LaTeX or VB6 ``.cls``): no node.
-            return {"nodes": [], "edges": [], "_sites": 0, "_unresolved": 0}
+            # No recognisable Apex declaration (a LaTeX or VB6 ``.cls``, or a header this tool cannot read): there is
+            # no node to hang edges on, so any setEndpoint call here is a site we could not resolve.
+            stray = analyze_callouts(text, scrubbed, method_re=_METHOD_RE, brace_end=_matching_brace_end)
+            return {"nodes": [], "edges": [], "_sites": stray.sites, "_unresolved": stray.sites}
 
     class_nid = apex_class_id(class_name)
     sf_type = "ApexInterface" if kind == "interface" else "ApexEnum" if kind == "enum" else "ApexClass"

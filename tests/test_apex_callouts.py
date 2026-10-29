@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from graphify_sf.extract.apex import extract_apex_class, extract_apex_trigger
 
 
@@ -227,3 +229,157 @@ def test_a_result_without_the_sites_marker_counts_as_failed(tmp_path, monkeypatc
     assert block["status"] == "failed"
     assert (block["eligible"], block["analyzed"], block["failed"]) == (1, 0, 1)
     json.dumps(result["analysis"])  # serialisable
+
+
+# ── review follow-ups (E4 code review) ───────────────────────────────────────────────
+
+
+def _one(tmp_path, body):
+    edges = _edges(_cls(tmp_path, body))
+    return edges
+
+
+def test_parameter_that_shadows_a_constant_is_not_the_constant(tmp_path):
+    body = (
+        "public class Svc { private static final String ENDPOINT = 'callout:Prod_API';"
+        " public static void send(String endpoint) { HttpRequest req = new HttpRequest(); req.setEndpoint(endpoint); } }"
+    )
+    assert _edges(_cls(tmp_path, body)) == []
+
+
+def test_local_that_shadows_a_constant_is_not_the_constant(tmp_path):
+    body = (
+        "public class Svc { static final String URL = 'https://prod.example.com/api';"
+        " void go() { HttpRequest req = new HttpRequest(); String url = flag() ? 'https://mock.test/' : getUrl();"
+        " req.setEndpoint(url); } }"
+    )
+    assert _edges(_cls(tmp_path, body)) == []
+
+
+def test_inner_class_field_with_the_same_name_makes_the_constant_ambiguous(tmp_path):
+    body = (
+        "public class Svc { static final String EP = 'callout:Outer';"
+        " class Inner { final String EP; Inner(String e) { EP = e; } void go(HttpRequest req) { req.setEndpoint(EP); } } }"
+    )
+    assert _edges(_cls(tmp_path, body)) == []
+
+
+def test_later_declarator_with_the_same_name_makes_the_constant_ambiguous(tmp_path):
+    body = (
+        "public class Svc { static final String EP = 'callout:Outer';"
+        " class Inner { static final String A = 'x', EP = 'callout:Inner'; void go(HttpRequest req) { req.setEndpoint(EP); } } }"
+    )
+    assert _edges(_cls(tmp_path, body)) == []
+
+
+def test_constructor_local_is_not_a_class_constant(tmp_path):
+    body = (
+        "public class Svc { Svc() { final String EP = 'callout:CtorLocal'; }"
+        " void go(String ep) { HttpRequest req = new HttpRequest(); req.setEndpoint(ep); } }"
+    )
+    assert _edges(_cls(tmp_path, body)) == []
+
+
+@pytest.mark.parametrize(
+    "arg",
+    [
+        "'callout:Prod/' + path == null ? fallback : path",
+        "'https://prod.example.com/' + path != null ? path : fallback",
+        "ep += '/v1'",
+    ],
+)
+def test_lower_precedence_operators_make_the_whole_expression_dynamic(tmp_path, arg):
+    body = _method(f"req.setEndpoint({arg});", "String path; String fallback; String ep; Boolean flag;")
+    assert _edges(_cls(tmp_path, body)) == []
+
+
+def test_chained_receiver_is_not_matched_to_an_unrelated_local(tmp_path):
+    body = (
+        "public class Svc { void a() { HttpRequest req = new HttpRequest(); }"
+        " void b(Wrapper w) { this.w.req.setEndpoint('callout:B'); } }"
+    )
+    (edge,) = _edges(_cls(tmp_path, body))
+    assert edge["confidence"] == "INFERRED" and edge["inference_reason"] == "receiver_unproven"
+
+
+def test_property_declaration_counts_as_a_receiver_declaration(tmp_path):
+    body = (
+        "public class Svc { public FakeRequest req { get; set; }"
+        " void a() { HttpRequest req = new HttpRequest(); } void b() { req.setEndpoint('callout:Fake'); } }"
+    )
+    (edge,) = _edges(_cls(tmp_path, body))
+    assert edge["confidence"] == "INFERRED"
+
+    body = (
+        "public class Svc { public HttpRequest req { get; set; }"
+        " void a() { MockReq req = new MockReq(); } void b() { req.setEndpoint('callout:Real'); } }"
+    )
+    r = _cls(tmp_path, body, "Svc2")
+    assert r["_sites"] == 1  # never silently dropped as "not a callout"
+
+
+def test_new_of_another_type_is_not_a_callout(tmp_path):
+    r = _cls(tmp_path, "public class Svc { void go() { new Builder().setEndpoint('callout:X'); } }")
+    assert _edges(r) == [] and r["_sites"] == 0
+
+
+def test_unmodelled_escape_sequences_are_dynamic(tmp_path):
+    r = _cls(tmp_path, _method("req.setEndpoint('callout:A\\u005F');"))
+    # the literal ends in an escape we do not decode: no EXTRACTED edge is claimed for it
+    assert all(e["confidence"] != "EXTRACTED" for e in _edges(r))
+
+
+def test_trailing_comment_inside_a_multiline_concatenation_still_resolves(tmp_path):
+    body = (
+        "public class Svc {\n  void go() {\n    HttpRequest req = new HttpRequest();\n"
+        "    req.setEndpoint('callout:Acme/' // base\n      + 'v1');\n  }\n}\n"
+    )
+    (edge,) = _edges(_cls(tmp_path, body))
+    assert edge["confidence"] == "EXTRACTED"
+
+
+def test_undeclared_class_header_with_a_callout_counts_as_an_unresolved_site(tmp_path):
+    r = _cls(tmp_path, "class Bar { void go(HttpRequest r) { r.setEndpoint('callout:X'); } }", "Foo")
+    assert r["nodes"] == [] and (r["_sites"], r["_unresolved"]) == (1, 1)
+
+
+def test_endpoint_node_confidence_does_not_depend_on_site_order(tmp_path):
+    body = (
+        "public class Svc { void a(Thing t) { other.setEndpoint('https://h.example.com/a'); }"
+        " void b() { HttpRequest r = new HttpRequest(); r.setEndpoint('https://h.example.com/b'); } }"
+    )
+    r = _cls(tmp_path, body)
+    (node,) = [n for n in r["nodes"] if n["sf_type"] == "ExternalEndpoint"]
+    assert node["confidence"] == "EXTRACTED"
+
+
+def test_a_prefix_only_credential_name_gets_no_stub(tmp_path):
+    from graphify_sf.detect import detect
+    from graphify_sf.extract import extract
+
+    root = tmp_path / "proj" / "force-app" / "main" / "default" / "classes"
+    root.mkdir(parents=True)
+    (root / "Svc.cls").write_text(_method("req.setEndpoint('callout:Acme' + env);", "String env;"), encoding="utf-8")
+    (root / "Svc.cls-meta.xml").write_text("<ApexClass/>", encoding="utf-8")
+    result = extract(detect(tmp_path / "proj"), parallel=False)
+    assert not [n for n in result["nodes"] if n.get("sf_type") == "NamedCredential"]
+
+
+def test_many_sites_in_one_file_stay_fast(tmp_path):
+    import time
+
+    lines = "\n".join(
+        f"        HttpRequest r{i} = new HttpRequest(); r{i}.setEndpoint('callout:NC_{i % 7}/p{i}');"
+        for i in range(1500)
+    )
+    body = "public class Big {\n    public void go() {\n" + lines + "\n    }\n}\n"
+    t0 = time.perf_counter()
+    r = _cls(tmp_path, body, "Big")
+    assert time.perf_counter() - t0 < 5
+    assert r["_sites"] == 1500
+
+
+def test_a_dynamic_group_after_a_known_prefix_is_inferred_not_extracted(tmp_path):
+    body = _method("req.setEndpoint('callout:A' + (flag ? 'x' : 'y'));", "Boolean flag;")
+    (edge,) = _edges(_cls(tmp_path, body))
+    assert (edge["confidence"], edge["inference_reason"]) == ("INFERRED", "dynamic_suffix")
