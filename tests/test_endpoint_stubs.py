@@ -226,3 +226,125 @@ def test_apex_inbound_extracted_counts_are_unchanged_on_existing_fixtures(tmp_pa
     project = tmp_path / "aura"
     shutil.copytree(FIXTURES / "epicD_aura_vf", project)
     assert _apex_inbound_extracted(_build(project, tmp_path / "out")) == {"apex_myctrl": 1}
+
+
+# ── review follow-ups (E3 code review) ───────────────────────────────────────────────
+
+
+def _real_nc(label="My_NC"):
+    return {"id": "namedcredential_my_nc", "label": label, "sf_type": "NamedCredential", "source_file": "/r/My_NC.xml"}
+
+
+def _stub_nc(label="My_NC"):
+    return {
+        "id": "namedcredential_my_nc",
+        "label": label,
+        "sf_type": "NamedCredential",
+        "source_file": None,
+        "stub": True,
+    }
+
+
+def test_three_way_merge_honours_a_deleted_credential_file_over_the_old_real_node():
+    base = {"nodes": [_real_nc()], "links": []}
+    ours = {"nodes": [_stub_nc()], "links": []}  # metadata file deleted; Apex still calls it
+    theirs = {"nodes": [_real_nc()], "links": []}  # untouched
+    nodes, _ = three_way_merge(base, ours, theirs)
+    (node,) = nodes
+    assert node.get("stub") is True and node["source_file"] is None
+    # and the mirror image
+    nodes, _ = three_way_merge(base, theirs, ours)
+    assert nodes[0].get("stub") is True
+
+
+def test_three_way_merge_still_prefers_real_when_both_sides_add_the_node():
+    base = {"nodes": [], "links": []}
+    nodes, _ = three_way_merge(base, {"nodes": [_stub_nc()], "links": []}, {"nodes": [_real_nc()], "links": []})
+    assert nodes[0].get("stub") is None and nodes[0]["source_file"] == "/r/My_NC.xml"
+
+
+def test_label_dedup_does_not_fold_a_stub_into_a_different_real_node():
+    stub = {**_stub_nc("MyNC"), "id": "namedcredential_mync"}
+    real = _real_nc("My_NC")
+    nodes, edges = deduplicate_by_label(
+        [stub, real], [{"source": "apexclass_a", "target": "namedcredential_mync", "relation": "makes_callout"}]
+    )
+    assert {n["id"] for n in nodes} == {"namedcredential_mync", "namedcredential_my_nc"}
+    assert edges[0]["target"] == "namedcredential_mync"
+
+
+def test_label_dedup_keeps_nodes_whose_label_has_no_ascii_letters():
+    jp = {"id": "flow_x_label", "label": "ラベル", "sf_type": "FlowElement"}
+    a = {"id": "object_account", "label": "Account", "sf_type": "CustomObject"}
+    b = {"id": "object_account_c1", "label": "Account", "sf_type": "CustomObject"}
+    nodes, _ = deduplicate_by_label([jp, a, b], [])
+    assert "flow_x_label" in {n["id"] for n in nodes}
+
+
+def test_query_string_does_not_become_part_of_the_credential_name(tmp_path):
+    project = _project(
+        tmp_path,
+        {
+            "Svc": "public class Svc { void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('callout:My_NC?api=1'); } }"
+        },
+    )
+    data = _build(project, tmp_path / "out")
+    assert [e["target"] for e in _callouts(data)] == ["namedcredential_my_nc"]
+
+
+def test_batchable_header_and_inner_types_do_not_rename_the_outer_class(tmp_path):
+    body = """
+global class Nightly implements Database.Batchable<sObject> {
+  public class Inner { }
+  global Database.QueryLocator start(Database.BatchableContext bc) { return null; }
+}
+"""
+    project = _project(tmp_path, {"Nightly": body})
+    data = _build(project, tmp_path / "out")
+    node = _node(data, "apex_nightly")
+    assert node["label"] == "Nightly" and node["declaration_unparsed"] is True
+
+
+def test_dotted_interface_header_keeps_its_real_kind(tmp_path):
+    project = _project(tmp_path, {"Contract": "public interface Contract extends Outer.Base { }"})
+    data = _build(project, tmp_path / "out")
+    assert next(n for n in data["nodes"] if n["label"] == "Contract")["sf_type"] == "ApexInterface"
+
+
+def test_a_cls_file_that_is_not_apex_makes_no_node(tmp_path):
+    project = _project(
+        tmp_path,
+        {"Paper": "\\documentclass{article}\n\\begin{document}hi\\end{document}", "Real": "public class Real { }"},
+    )
+    data = _build(project, tmp_path / "out")
+    assert not [n for n in data["nodes"] if n["label"] == "Paper"]
+
+
+def test_flow_literal_urls_are_deduped_and_merge_fields_are_skipped(tmp_path):
+    action = (
+        "<actionCalls><name>{n}</name><actionType>httpCallout</actionType><inputParameters><name>url</name>"
+        "<value><stringValue>{u}</stringValue></value></inputParameters></actionCalls>"
+    )
+    body = "".join(
+        action.format(n=f"a{i}", u=u)
+        for i, u in enumerate(["https://api.example.com/a", "https://api.example.com/b", "https://{!Host}/x"])
+    )
+    project = _project(tmp_path, flows={"F": _flow(body)})
+    data = _build(project, tmp_path / "out")
+    assert [e["target"] for e in _callouts(data)] == ["externalendpoint_api_example_com"]
+    assert len([n for n in data["nodes"] if n["sf_type"] == "ExternalEndpoint"]) == 1
+
+
+def test_stub_label_is_independent_of_edge_order():
+    from graphify_sf.extract import _stub_missing_endpoints
+
+    def run(names):
+        edges = [
+            {"source": f"apexclass_{i}", "target": "namedcredential_my_nc", "relation": "makes_callout", "_tgt_name": n}
+            for i, n in enumerate(names)
+        ]
+        nodes: list[dict] = []
+        _stub_missing_endpoints(nodes, edges)
+        return nodes[0]["label"]
+
+    assert run(["MY_NC", "My_Nc"]) == run(["My_Nc", "MY_NC"]) == "MY_NC"

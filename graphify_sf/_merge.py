@@ -133,7 +133,11 @@ def three_way_merge(
     for nid in [*o_nodes, *(n for n in t_nodes if n not in o_nodes)]:
         if keep(nid in o_nodes, nid in t_nodes, nid in b_nodes):
             ours_node, theirs_node = o_nodes.get(nid, {}), t_nodes.get(nid, {})
-            real = prefer_real(ours_node, theirs_node) if ours_node and theirs_node else None
+            # Real-over-stub is for add/add (no base entry). With a base, exactly one side changed the node's
+            # stub-ness, and the per-attribute merge below takes that side, so a deletion of a metadata file is
+            # not undone by the other branch still holding the old real node.
+            both_new = bool(ours_node and theirs_node) and nid not in b_nodes
+            real = prefer_real(ours_node, theirs_node) if both_new else None
             nodes.append(dict(real) if real is not None else merge_attrs(b_nodes.get(nid), ours_node, theirs_node))
 
     b_edges, o_edges, t_edges = _index_edges(base), _index_edges(ours), _index_edges(theirs)

@@ -362,6 +362,10 @@ def _norm_label(label: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", label.lower()).strip()
 
 
+def _is_endpoint_stub(node: dict) -> bool:
+    return bool(node.get("stub")) and node.get("sf_type") in ("NamedCredential", "ExternalEndpoint")
+
+
 def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
     """Merge nodes that share a normalised label AND sf_type, rewriting edge references.
 
@@ -377,10 +381,14 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
     _CHUNK_SUFFIX = re.compile(r"_c\d+$")
     canonical: dict[tuple[str, str], dict] = {}
     remap: dict[str, str] = {}
+    unkeyed: list[dict] = []
 
     for node in nodes:
         label_key = _norm_label(node.get("label", node.get("id", "")))
         if not label_key:
+            unkeyed.append(
+                node
+            )  # a label with no ASCII letters/digits (e.g. Japanese) is never merged, but never dropped
             continue
         # Only nodes of the same sf_type may merge, so distinct components that
         # happen to share a normalised label are not conflated. When sf_type is
@@ -391,8 +399,14 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
         existing = canonical.get(key)
         if existing is None:
             canonical[key] = node
-        elif (winner := prefer_real(existing, node)) is not None:
-            # A real node always beats a stub for the same entity, regardless of order or id length.
+        elif existing["id"] != node["id"] and (_is_endpoint_stub(existing) or _is_endpoint_stub(node)):
+            # A missing credential/host is a statement about that exact name: ``MyNC`` must not fold into a real
+            # ``My_NC`` just because both normalise alike.
+            unkeyed.append(node)
+        elif existing["id"] == node["id"] and (winner := prefer_real(existing, node)) is not None:
+            # A real node beats a stub carrying the same id, regardless of order. Different ids are never
+            # promoted this way: a stub ``MyNC`` must not be folded into a real ``My_NC``, nor an
+            # LLM-invented node replace ``object_account``.
             loser = existing if winner is node else node
             canonical[key] = winner
             remap[loser["id"]] = winner["id"]
@@ -413,7 +427,7 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
     if not remap:
         return nodes, edges
 
-    deduped_nodes = list(canonical.values())
+    deduped_nodes = [*canonical.values(), *unkeyed]
     deduped_edges = []
     for edge in edges:
         e = dict(edge)

@@ -385,18 +385,32 @@ def extract_apex_class(path: Path) -> dict:
     nodes: list[dict] = []
     edges: list[dict] = []
 
-    # Find the class declaration
-    m = _CLASS_RE.search(scrubbed)
-    declaration_unparsed = m is None
+    # Find the class declaration. Prefer the header named after the file: an inner type with an access modifier
+    # must not rename the outer class.
+    stem = path.stem
+    headers = list(_CLASS_RE.finditer(scrubbed))
+    m = next((h for h in headers if h.group(2).lower() == stem.lower()), None)
+    declaration_unparsed = False
     if m:
         kind = m.group(1).lower()  # class / interface / enum
         class_name = m.group(2)
         superclass = (m.group(3) or "").strip()
         interfaces_raw = (m.group(4) or "").strip()
     else:
-        # The declaration regex missed (an unusual header). A .cls file still declares an Apex class, so name it
-        # after the file and analyse it like any other: it is neither invisible nor counted as a failed file.
-        kind, class_name, superclass, interfaces_raw = "class", path.stem, "", ""
+        own = re.search(rf"\b(class|interface|enum)\s+{re.escape(stem)}\b", scrubbed, re.IGNORECASE)
+        if own:
+            # The header regex missed the file's own declaration (typically a dotted
+            # `implements Database.Batchable<...>`): name it after the file, take the kind from the declaration
+            # itself, and analyse it like any other class instead of leaving it invisible.
+            kind, class_name, superclass, interfaces_raw = own.group(1).lower(), stem, "", ""
+            declaration_unparsed = True
+        elif headers:
+            m = headers[0]  # a file whose declared name differs from its file name: legacy behaviour
+            kind, class_name = m.group(1).lower(), m.group(2)
+            superclass, interfaces_raw = (m.group(3) or "").strip(), (m.group(4) or "").strip()
+        else:
+            # Not an Apex declaration at all (a LaTeX or VB6 ``.cls``): no node.
+            return {"nodes": [], "edges": []}
 
     class_nid = apex_class_id(class_name)
     sf_type = "ApexInterface" if kind == "interface" else "ApexEnum" if kind == "enum" else "ApexClass"
@@ -594,7 +608,7 @@ def extract_apex_class(path: Path) -> dict:
     seen_callout_targets: set[str] = set()
     for em in _ENDPOINT_RE.finditer(scrubbed):
         endpoint = text[em.start(2) : em.end(2)].strip()
-        nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
+        nc_match = re.match(r"callout:([^/?#\s]+)", endpoint, re.IGNORECASE)
         if nc_match:
             nc_name = nc_match.group(1).strip()
             tgt_id = make_sf_id("namedcredential", nc_name)

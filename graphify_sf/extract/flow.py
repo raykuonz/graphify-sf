@@ -129,6 +129,7 @@ def extract_flow(path: Path) -> dict:
             edges.append(trigger_edge)
 
     # Action calls (Apex, email alerts, HTTP callouts, etc.)
+    seen_callouts: set[str] = set()
     for action in _find_all(root_el, "actionCalls", ns):
         action_type = _find_text(action, "actionType", ns)
         if action_type == "apex":
@@ -144,12 +145,14 @@ def extract_flow(path: Path) -> dict:
             if not sv_el.text:
                 continue
             endpoint = sv_el.text.strip()
-            nc_match = re.match(r"callout:([^/]+)", endpoint, re.IGNORECASE)
+            nc_match = re.match(r"callout:([^/?#\s]+)", endpoint, re.IGNORECASE)
             if nc_match:
                 nc_name = nc_match.group(1).strip()
-                nc_edge = _make_edge(
-                    flow_nid, make_sf_id("namedcredential", nc_name), "makes_callout", "EXTRACTED", str_path
-                )
+                nc_id = make_sf_id("namedcredential", nc_name)
+                if nc_id in seen_callouts:
+                    continue
+                seen_callouts.add(nc_id)
+                nc_edge = _make_edge(flow_nid, nc_id, "makes_callout", "EXTRACTED", str_path)
                 nc_edge["_tgt_name"] = nc_name  # original-case label for a stub node; consumed in extract()
                 edges.append(nc_edge)
             elif endpoint.startswith(("http://", "https://")):
@@ -157,7 +160,12 @@ def extract_flow(path: Path) -> dict:
                     host = urlparse(endpoint).hostname or endpoint
                 except Exception:
                     host = endpoint
+                if "{!" in host or "{" in host:
+                    continue  # a merge-field host is not a host
                 ep_id = make_sf_id("externalendpoint", host)
+                if ep_id in seen_callouts:
+                    continue
+                seen_callouts.add(ep_id)
                 # The Flow creates the endpoint node itself, as Apex does, so the edge survives even when no
                 # Apex class calls the same host.
                 nodes.append(

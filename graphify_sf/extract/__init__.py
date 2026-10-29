@@ -184,7 +184,6 @@ def _extract_file(path: Path) -> dict:
 # Endpoint-like targets for which a missing entity gets a stub node: id prefix -> (sf_type, file_type).
 _ENDPOINT_STUBS = {
     "namedcredential_": ("NamedCredential", "config"),
-    "externalendpoint_": ("ExternalEndpoint", "config"),
 }
 
 
@@ -206,11 +205,30 @@ def _stub_missing_endpoints(nodes: list, edges: list) -> None:
         if node.get("sf_type") == "ExternalEndpoint" and node.get("label"):
             hosts_by_id.setdefault(node["id"], set()).add(node["label"])
             endpoint_nodes.setdefault(node["id"], []).append(node)
+    # Apex and Flow can both emit the node for one host; keep one copy chosen by content, not arrival order.
+    drop = set()
+    for copies in endpoint_nodes.values():
+        if len(copies) > 1:
+            keep = min(
+                copies, key=lambda n: (n.get("file_type") or "", n.get("source_file") or "", n.get("label") or "")
+            )
+            drop.update(id(n) for n in copies if n is not keep)
+    if drop:
+        nodes[:] = [n for n in nodes if id(n) not in drop]
+        endpoint_nodes = {k: [n for n in v if id(n) not in drop] for k, v in endpoint_nodes.items()}
     ambiguous = {nid for nid, hosts in hosts_by_id.items() if len(hosts) > 1}
     for nid in ambiguous:
         for node in endpoint_nodes[nid]:
             node["hosts"] = sorted(hosts_by_id[nid])
             node["identity_ambiguous"] = True
+
+    # Several edges may name the same target in different cases; the label must not depend on which worker
+    # finished first, so use the smallest name in sorted order.
+    names: dict[str, str] = {}
+    for edge in edges:
+        name = edge.get("_tgt_name")
+        if name and (edge.get("target") not in names or name < names[edge["target"]]):
+            names[edge["target"]] = name
 
     known = {n["id"] for n in nodes}
     for edge in edges:
@@ -223,7 +241,7 @@ def _stub_missing_endpoints(nodes: list, edges: list) -> None:
                 nodes.append(
                     {
                         "id": target,
-                        "label": edge.get("_tgt_name") or target[len(prefix) :],
+                        "label": names.get(target) or target[len(prefix) :],
                         "sf_type": sf_type,
                         "file_type": file_type,
                         "source_file": None,
