@@ -425,13 +425,18 @@ def extract(
     eligible_paths = set().union(*eligible_by_analyzer.values())
     outcomes: dict[Path, tuple[bool, int, int]] = {}
 
+    marker_by_path: dict[Path, str | None] = {}
+    for name, paths in eligible_by_analyzer.items():
+        for p in paths:
+            marker_by_path[p] = _ledger.ANALYZERS[name].get("marker")
+
     def _record(path: Path, result: dict) -> None:
         if path in eligible_paths:
-            outcomes[path] = (
-                not result.get("_failed"),
-                int(result.get("_sites", 0)),
-                int(result.get("_unresolved", 0)),
-            )
+            marker = marker_by_path.get(path)
+            # analysed = the extractor did not flag a failure AND, when the analyzer names a scan marker,
+            # reported that its scan ran (fail closed: a path that skips the scan is not "analysed")
+            ok = not result.get("_failed") and (marker is None or marker in result)
+            outcomes[path] = (ok, int(result.get("_sites", 0)), int(result.get("_unresolved", 0)))
 
     lwc_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("lwc", [])]
     aura_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("aura", [])]

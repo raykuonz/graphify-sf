@@ -99,14 +99,15 @@ def test_a1_external_endpoint_node_exists(a1_result):
     assert "netsuite" in ep["id"]
 
 
-def test_a1_calloutliteral_makes_callout_inferred(a1_result):
+def test_a1_calloutliteral_makes_callout_extracted(a1_result):
+    """A literal https:// URL states its host in the source, so the edge is EXTRACTED (it was INFERRED before 0.6.0)."""
     edges = _edges(a1_result)
     edge = next(
         (e for e in edges if e.get("source") == "apex_calloutliteral" and e.get("relation") == "makes_callout"),
         None,
     )
     assert edge is not None, "expected makes_callout edge from CalloutLiteral"
-    assert edge["confidence"] == "INFERRED"
+    assert edge["confidence"] == "EXTRACTED"
 
 
 def test_a1_no_callout_class_emits_no_makes_callout_edge(a1_result):
