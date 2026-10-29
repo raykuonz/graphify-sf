@@ -495,7 +495,7 @@ graphify-sf serve --graph path/to/graph.json
 
 | Tool | Description |
 |------|-------------|
-| `graph_stats` | Node/edge/community counts, community labels, top sf_types |
+| `graph_stats` | Node/edge/community counts, community labels, top sf_types, and the analysis coverage ledger (`analysis`, `capabilities`; `null` for graphs built before 0.6.0) |
 | `query` | BFS or DFS traversal for a natural-language question |
 | `get_node` | Full details for a single node (type, file, degree, all neighbors) |
 | `get_neighbors` | Connections of a node (up to N, sorted by degree, optional `relation_filter`) |
@@ -600,6 +600,39 @@ graphify-sf check-update . || graphify-sf . --update --no-viz
 | `extends` | Apex class extends a superclass |
 | `implements` | Apex class implements an interface |
 | `invokes` | Flow calls a subflow, or Agentforce action calls an Apex class / Flow |
+| `makes_callout` | Apex class/trigger or Flow calls a Named Credential or an external host (see below) |
+
+### Integration endpoints and the coverage ledger
+
+`makes_callout` edges run from an Apex class, Apex trigger or Flow `httpCallout` action to a `NamedCredential` or an
+`ExternalEndpoint` node. The edge says how sure the tool is:
+
+- `EXTRACTED`: the target is proven by the source. `setEndpoint('callout:Acme_NC/v1')`, a `static final String` constant
+  of the same file plus a path, `'callout:Acme' + '_ERP'`, a literal `https://host/...`, or a Flow's `callout:Name`.
+- `INFERRED` with an `inference_reason`: `dynamic_suffix` / `non_final_static` (`'callout:Acme' + env`: the suffix could extend the
+  name), `receiver_unproven` (the type of the object calling `setEndpoint` is not visible), `host_id_collision`
+  (two hosts share one node id).
+- No edge: a partial host (`'https://api' + sub`), an argument the resolver does not model (a method call, a ternary,
+  a shadowed name), or an object declared as a type other than `HttpRequest`.
+
+Edges carry `site_count` (call sites merged into the edge), `source_location` (first line, or the Flow action name) and
+`test_context: true` when every site is inside `@IsTest` code. A callout target whose metadata is not in the repo is a
+stub node (`stub: true`, no `source_file`); a real node always replaces a stub.
+
+`graph.json` also carries a top-level `graphify_sf` block saying which analyses ran:
+
+```json
+"graphify_sf": {
+  "version": "0.6.0",
+  "analysis": {"callout-edges.apex": {"status": "complete", "eligible": 120, "analyzed": 120, "failed": 0, "sites": 14, "unresolved": 2}},
+  "capabilities": ["callout-edges.apex", "callout-edges.flow-http"]
+}
+```
+
+`status` is `complete` when no file failed, `partial` or `failed` otherwise, and `not_run` when the analyzer did not run
+(a merged graph carries statuses only). `capabilities` lists the complete analyzers. A graph without the block was never
+analysed. `unresolved` counts call sites that did not end in an EXTRACTED edge, so when it is above zero read "nothing
+calls this endpoint" as a candidate, not a fact. `graphify-sf stats` and the MCP `graph_stats` tool show the ledger.
 
 ---
 
@@ -733,6 +766,7 @@ Read this before you trust the graph in anger. graphify-sf is honest about what 
 ### What's a heuristic, not a fact
 
 - **`INFERRED` edges are guesses.** They come from pattern-matching source code and prose, not declared metadata. They can be wrong. The provenance tag exists precisely so you can filter them out when you need certainty — check the `EXTRACTED/INFERRED` breakdown in the report before betting on an inferred relationship.
+- **Callout edges are static.** `makes_callout` reads literals, same-file constants and `+` concatenation. Anything computed at runtime (a custom setting, a method result, another class's constant) is not resolved, and `unresolved` in the coverage ledger counts those sites. Named Credentials and external hosts that exist only in the org appear as stubs.
 - **Apex `calls` edges are noisy.** Resolving `Foo.bar()` to the right Apex class from source alone is genuinely hard. A heuristic filters out obvious local-variable calls and cuts the false-positive rate from roughly 96% to roughly 36%, but a third of the remaining `calls` edges may still be spurious. Treat call graphs as a lead, not a proof.
 - **Reference-file mention detection is regex-based.** Cross-references from docs/PDFs/spreadsheets to SF components rely on a `PascalCase`/`__c` heuristic. It misses lowercase or unconventional names and can match coincidental words; unresolved mentions are dropped silently.
 - **Community detection is unsupervised.** Louvain (and optional Leiden) cluster the graph by structure. The communities are a useful lens, not ground-truth modules — and Louvain results vary slightly between runs.

@@ -9,6 +9,22 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.6.0] — 2026-10-29
+
+Integration endpoints: `makes_callout` edges now say which Named Credential or external host an Apex class, trigger
+or Flow calls and how sure the tool is, targets missing from the repo become stub nodes, and `graph.json` records
+which analyses ran (the coverage ledger). Three bugs found along the way are fixed here too.
+
+**Upgrade notes.** Graphs built by 0.6.0 differ from 0.5.0 ones in a few visible ways: literal `https://` callouts are
+EXTRACTED instead of INFERRED; new stub nodes (`NamedCredential`, `ExternalEndpoint`) appear, which can shift community
+ids and counts; Apex files with unparseable headers now have nodes; Apex triggers are scanned for callouts; and
+`graph.json` has a top-level `graphify_sf` block. A consumer that wants to draw conclusions from the absence of a
+callout should gate on `graphify_sf.capabilities` containing both `callout-edges.apex` and `callout-edges.flow-http`,
+treat INFERRED edges as candidates, and ignore `test_context: true` edges when it only cares about production code.
+Graphs without the block were not analysed; rebuild them.
+
 ### Fixed
 - **`deduplicate_by_label` no longer drops nodes whose label has no ASCII letters or digits** (for example Japanese Flow element labels) when any other pair of nodes was merged.
 - **A commented-out or quoted `setEndpoint(...)` no longer creates an EXTRACTED callout edge.** The Apex callout
@@ -1029,7 +1045,8 @@ pairs ever survived).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/raykuonz/graphify-sf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/raykuonz/graphify-sf/compare/v0.4.7...v0.5.0
 [0.4.7]: https://github.com/raykuonz/graphify-sf/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/raykuonz/graphify-sf/compare/v0.4.5...v0.4.6
