@@ -19,7 +19,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture
 def enabled(monkeypatch):
-    """Turn both callout analyzers on (they ship disabled until their extractors land)."""
+    """Turn both callout analyzers on (a no-op while both ship enabled)."""
     for spec in _ledger.ANALYZERS.values():
         monkeypatch.setitem(spec, "enabled", True)
 
@@ -118,7 +118,9 @@ def test_merged_ledger_tolerates_malformed_blocks_and_records_versions():
 # ── coordinator accounting ───────────────────────────────────────────────────────────
 
 
-def test_disabled_analyzers_report_not_run(tmp_path):
+def test_disabled_analyzers_report_not_run(tmp_path, monkeypatch):
+    for spec in _ledger.ANALYZERS.values():
+        monkeypatch.setitem(spec, "enabled", False)
     result = extract(detect(_project(tmp_path)), parallel=False)
     assert result["analysis"] == {name: {"status": "not_run"} for name in _ledger.ANALYZERS}
 
@@ -265,11 +267,12 @@ def test_pipeline_writes_the_block_once_at_the_top_level(tmp_path, enabled):
     _assert_invariant(block["analysis"])
 
 
-def test_default_build_records_not_run_and_advertises_nothing(tmp_path):
+def test_default_build_advertises_only_the_shipped_analyzers(tmp_path):
+    """Apex callout analysis ships in 0.6.0; the Flow HTTP analyzer is not_run until its extractor lands."""
     _, out = _build(tmp_path)
     block = _graph_json(out)["graphify_sf"]
-    assert block["capabilities"] == []
-    assert {e["status"] for e in block["analysis"].values()} == {"not_run"}
+    assert block["capabilities"] == ["callout-edges.apex"]
+    assert block["analysis"]["callout-edges.flow-http"] == {"status": "not_run"}
 
 
 def test_cluster_only_and_export_json_pass_the_block_through(tmp_path, enabled):

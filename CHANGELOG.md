@@ -45,9 +45,31 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   status per analyzer, an input without a block counts as `not_run`, no counters). `graphify-sf stats` and the
   MCP `graph_stats` tool show it (the MCP fields are `null` when a graph has no block). "Complete" is relative to what
   graphify-sf scanned: files skipped by `.gitignore` / `.forceignore` and bundle or document extraction are not part of an
-  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The two callout analyzers report `not_run` in this build until their extractors
-  ship, so no capability is advertised yet.
+  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The Apex analyzer (`callout-edges.apex`) is live; the Flow analyzer (`callout-edges.flow-http`) reports `not_run`
+  until its extractor ships, so only `callout-edges.apex` is advertised as a capability.
 
+- **Apex callout endpoints are resolved statically, with a stated confidence.** `setEndpoint(...)` is evaluated as a
+  `+` concatenation of string literals and the file's own `String` constants (`static final`, `final`, or instance).
+  The edge is EXTRACTED when the target is proven: the whole expression is constant (`'callout:Acme' + '_ERP'` →
+  `Acme_ERP`; `BASE + '/v1'` with `BASE = 'callout:Acme_NC'`), or the known prefix already has a delimiter after the
+  credential or host (`'callout:Acme/v1/' + id`). A literal `https://host/...` is now EXTRACTED (it was INFERRED).
+  `'callout:Acme' + env` is INFERRED with `inference_reason: "dynamic_suffix"` (`"non_final_static"` when the dynamic
+  part is a non-final field), because the suffix could extend the credential name; a partial host such as
+  `'https://api' + sub` yields no edge. The receiver is classified: a proven `HttpRequest` keeps those rules, a
+  receiver declared as another type is not a callout and is ignored, and an unknown receiver is INFERRED
+  (`receiver_unproven`). Sites are grouped per `(target, confidence, test_context, inference_reason)` into one edge
+  with `site_count` and the first `source_location`, so production and test calls, or EXTRACTED and INFERRED calls to
+  one target, stay separate parallel edges. Sites in `@IsTest` classes or methods and in `testMethod` methods carry
+  `test_context: true`. Apex triggers are scanned too. The `callout-edges.apex` ledger entry counts `sites` and
+  `unresolved` (sites that did not end in an EXTRACTED edge); a file whose extractor does not report its sites counts
+  as failed. When `unresolved > 0`, treat "no callers" findings as candidates. Counts are taken per site by the
+  extractor, before cross-file adjustments (a host-id collision later downgrades its edges to INFERRED without
+  changing `unresolved`). A name resolves to a constant only if the file declares it exactly once in any form
+  (field, property, local, parameter, for-each variable, later declarator); a shadowed or redeclared name is dynamic.
+  An argument with a ternary, comparison or assignment (`?`, `:`, `=`, `!`, `<`, `>`, `&`, `|`) is dynamic as a whole.
+  `this.a.b.setEndpoint(...)` and `obj.field.setEndpoint(...)` have an unknown receiver; `new Other().setEndpoint(...)`
+  is not a callout. A target known only by a prefix (`'callout:Acme' + env`) keeps its INFERRED edge but never gets a
+  stub node, because the real credential is probably `Acme_Something`.
 - **Callout targets that are not in the repo now appear in the graph.** A `makes_callout` (Apex, Flow) or `uses`
   (External Service, External Data Source) edge to a Named Credential whose metadata is not in the project used to be
   dropped when the graph was built, so a class calling `callout:Not_In_Repo` showed no callout at all. The target is

@@ -54,7 +54,10 @@ def _node(data: dict, nid: str) -> dict:
 
 def test_missing_named_credential_becomes_a_stub_and_the_edge_stays_extracted(tmp_path):
     project = _project(
-        tmp_path, {"Svc": "public class Svc { public void go() { req.setEndpoint('callout:Not_In_Repo/orders'); } }"}
+        tmp_path,
+        {
+            "Svc": "public class Svc { public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('callout:Not_In_Repo/orders'); } }"
+        },
     )
     data = _build(project, tmp_path / "out")
     stub = _node(data, "namedcredential_not_in_repo")
@@ -112,9 +115,9 @@ def test_flow_literal_url_creates_its_endpoint_node_without_any_apex(tmp_path):
 
 def test_hosts_that_share_an_id_are_marked_ambiguous_and_their_calls_inferred(tmp_path):
     classes = {
-        "DotCaller": "public class DotCaller { public void go() { req.setEndpoint('https://api.example.com/a'); } }",
-        "DashCaller": "public class DashCaller { public void go() { req.setEndpoint('https://api-example.com/b'); } }",
-        "Other": "public class Other { public void go() { req.setEndpoint('https://clean.example.org/c'); } }",
+        "DotCaller": "public class DotCaller { public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('https://api.example.com/a'); } }",
+        "DashCaller": "public class DashCaller { public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('https://api-example.com/b'); } }",
+        "Other": "public class Other { public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('https://clean.example.org/c'); } }",
     }
     data = _build(_project(tmp_path, classes), tmp_path / "out")
     ep = _node(data, "externalendpoint_api_example_com")
@@ -128,8 +131,8 @@ def test_hosts_that_share_an_id_are_marked_ambiguous_and_their_calls_inferred(tm
 
 def test_a_named_credential_edge_is_never_downgraded_by_a_host_collision(tmp_path):
     classes = {
-        "A": "public class A { public void go() { req.setEndpoint('https://api.example.com/a'); } }",
-        "B": "public class B { public void go() { req.setEndpoint('https://api-example.com/b'); req.setEndpoint('callout:Keep_NC/x'); } }",
+        "A": "public class A { public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('https://api.example.com/a'); } }",
+        "B": "public class B { public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('https://api-example.com/b'); req.setEndpoint('callout:Keep_NC/x'); } }",
     }
     data = _build(_project(tmp_path, classes), tmp_path / "out")
     keep = [e for e in _callouts(data) if e["target"] == "namedcredential_keep_nc"]
@@ -197,7 +200,7 @@ def test_merge_graphs_union_keeps_the_real_node_in_either_order(tmp_path):
 
 
 def test_a_class_with_an_unrecognised_header_still_gets_a_node_and_is_analysed(tmp_path):
-    body = "class Legacy {\n  public void go() { req.setEndpoint('callout:Legacy_NC/x'); }\n}\n"
+    body = "class Legacy {\n  public void go() { HttpRequest req = new HttpRequest(); req.setEndpoint('callout:Legacy_NC/x'); }\n}\n"
     data = _build(_project(tmp_path, {"Legacy": body}), tmp_path / "out")
     node = _node(data, "apex_legacy")
     assert node["sf_type"] == "ApexClass" and node["declaration_unparsed"] is True

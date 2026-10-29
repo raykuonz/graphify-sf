@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import urlparse
 
+from ._apex_endpoints import analyze_callouts
 from ._ids import apex_class_id, apex_method_id, flow_id, make_sf_id, object_id, trigger_id
 
 # ---------------------------------------------------------------------------
@@ -46,12 +46,6 @@ _TRIGGER_RE = re.compile(
 
 # Apex → Flow: Flow.Interview.FlowApiName
 _FLOW_INVOKE_RE = re.compile(r"Flow\.Interview\.(\w+)", re.IGNORECASE)
-
-# A1: HTTP callout detection — endpoint literal in setEndpoint('...'). Matched on the SCRUBBED text
-# (comments and string contents blanked, delimiters kept), so a call that sits in a comment or a string
-# never matches and an unclosed quote in a comment cannot run on into the next real call; the literal
-# itself is then read from the raw text at the same offsets.
-_ENDPOINT_RE = re.compile(r'\.setEndpoint\s*\(\s*(["\'])([^"\']+)\1', re.IGNORECASE)
 
 # A5: EventBus.publish(new SomeEvent__e(...)) — extract the platform event type name
 _EVENT_BUS_PUBLISH_RE = re.compile(r"EventBus\.publish\s*\(\s*new\s+(\w+__e)\s*\(", re.IGNORECASE)
@@ -367,6 +361,52 @@ def _make_edge(
     return edge
 
 
+def _add_callout_edges(owner_id: str, callouts, nodes: list[dict], edges: list[dict], str_path: str) -> None:
+    """Turn resolved call sites into ``makes_callout`` edges, one per (target, confidence, test, reason).
+
+    Sites that agree on all four are one edge carrying ``site_count`` and the first line; sites that differ
+    (a production and a test call, or an EXTRACTED and an INFERRED one) stay separate parallel edges so
+    neither is hidden. ``ExternalEndpoint`` nodes are created inline for hosts.
+    """
+    groups: dict[tuple, dict] = {}
+    endpoint_confidence: dict[str, str] = {}
+    for c in callouts.callouts:
+        tgt_id = make_sf_id(c.kind, c.name)
+        key = (tgt_id, c.confidence, c.test_context, c.reason)
+        if key in groups:
+            groups[key]["site_count"] += 1
+            continue
+        edge = _make_edge(owner_id, tgt_id, "makes_callout", c.confidence, str_path)
+        edge["source_location"] = f"L{c.line}"
+        edge["site_count"] = 1
+        edge["_tgt_name"] = c.name  # original-case label for a stub node; consumed in extract()
+        if c.test_context:
+            edge["test_context"] = True
+        if c.reason:
+            edge["inference_reason"] = c.reason
+        groups[key] = edge
+        edges.append(edge)
+        if c.kind == "externalendpoint":
+            endpoint_confidence[tgt_id] = (
+                "EXTRACTED" if "EXTRACTED" in (c.confidence, endpoint_confidence.get(tgt_id)) else "INFERRED"
+            )
+            if not any(n["id"] == tgt_id for n in nodes):
+                nodes.append(
+                    {
+                        "id": tgt_id,
+                        "label": c.name,
+                        "sf_type": "ExternalEndpoint",
+                        "file_type": "apex",
+                        "source_file": str_path,
+                        "source_location": None,
+                        "confidence": endpoint_confidence[tgt_id],
+                    }
+                )
+    for node in nodes:
+        if node["id"] in endpoint_confidence and node.get("sf_type") == "ExternalEndpoint":
+            node["confidence"] = endpoint_confidence[node["id"]]
+
+
 def extract_apex_class(path: Path) -> dict:
     """Extract nodes and edges from an Apex class (.cls) file."""
     str_path = str(path)
@@ -409,8 +449,10 @@ def extract_apex_class(path: Path) -> dict:
             kind, class_name = m.group(1).lower(), m.group(2)
             superclass, interfaces_raw = (m.group(3) or "").strip(), (m.group(4) or "").strip()
         else:
-            # Not an Apex declaration at all (a LaTeX or VB6 ``.cls``): no node.
-            return {"nodes": [], "edges": []}
+            # No recognisable Apex declaration (a LaTeX or VB6 ``.cls``, or a header this tool cannot read): there is
+            # no node to hang edges on, so any setEndpoint call here is a site we could not resolve.
+            stray = analyze_callouts(text, scrubbed, method_re=_METHOD_RE, brace_end=_matching_brace_end)
+            return {"nodes": [], "edges": [], "_sites": stray.sites, "_unresolved": stray.sites}
 
     class_nid = apex_class_id(class_name)
     sf_type = "ApexInterface" if kind == "interface" else "ApexEnum" if kind == "enum" else "ApexClass"
@@ -602,42 +644,10 @@ def extract_apex_class(path: Path) -> dict:
                 )
             )
 
-    # A1: HTTP callout detection via .setEndpoint('...'). The call is located on the
-    # scrubbed text (so comments and string contents cannot match) and the endpoint
-    # URL is read from the raw text at the same offsets.
-    seen_callout_targets: set[str] = set()
-    for em in _ENDPOINT_RE.finditer(scrubbed):
-        endpoint = text[em.start(2) : em.end(2)].strip()
-        nc_match = re.match(r"callout:([^/?#\s]+)", endpoint, re.IGNORECASE)
-        if nc_match:
-            nc_name = nc_match.group(1).strip()
-            tgt_id = make_sf_id("namedcredential", nc_name)
-            if tgt_id not in seen_callout_targets:
-                seen_callout_targets.add(tgt_id)
-                nc_edge = _make_edge(class_nid, tgt_id, "makes_callout", "EXTRACTED", str_path)
-                nc_edge["_tgt_name"] = nc_name  # original-case label for a stub node; consumed in extract()
-                edges.append(nc_edge)
-        elif endpoint.startswith(("http://", "https://")):
-            try:
-                host = urlparse(endpoint).hostname or endpoint
-            except Exception:
-                host = endpoint
-            tgt_id = make_sf_id("externalendpoint", host)
-            if tgt_id not in seen_callout_targets:
-                seen_callout_targets.add(tgt_id)
-                # Create ExternalEndpoint node inline
-                nodes.append(
-                    {
-                        "id": tgt_id,
-                        "label": host,
-                        "sf_type": "ExternalEndpoint",
-                        "file_type": "apex",
-                        "source_file": str_path,
-                        "source_location": None,
-                        "confidence": "INFERRED",
-                    }
-                )
-                edges.append(_make_edge(class_nid, tgt_id, "makes_callout", "INFERRED", str_path))
+    # A1: HTTP callout detection (see _apex_endpoints): every <receiver>.setEndpoint(<expr>) in real code,
+    # resolved statically; EXTRACTED only when the target is proven.
+    callouts = analyze_callouts(text, scrubbed, method_re=_METHOD_RE, brace_end=_matching_brace_end)
+    _add_callout_edges(class_nid, callouts, nodes, edges, str_path)
 
     # A5: EventBus.publish(new X__e(...)) → publishes edge
     seen_publishes: set[str] = set()
@@ -667,7 +677,7 @@ def extract_apex_class(path: Path) -> dict:
     if raw_calls and nodes:
         nodes[0]["_raw_calls"] = raw_calls
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "_sites": callouts.sites, "_unresolved": callouts.unresolved}
 
 
 def extract_apex_trigger(path: Path) -> dict:
@@ -678,6 +688,7 @@ def extract_apex_trigger(path: Path) -> dict:
     except OSError:
         return {"nodes": [], "edges": [], "_failed": True}
 
+    scrubbed = _scrub_comments_and_strings(text)
     nodes: list[dict] = []
     edges: list[dict] = []
 
@@ -695,7 +706,9 @@ def extract_apex_trigger(path: Path) -> dict:
                 "source_location": None,
             }
         )
-        return {"nodes": nodes, "edges": edges}
+        callouts = analyze_callouts(text, scrubbed, method_re=_METHOD_RE, brace_end=_matching_brace_end)
+        _add_callout_edges(trigger_nid, callouts, nodes, edges, str_path)
+        return {"nodes": nodes, "edges": edges, "_sites": callouts.sites, "_unresolved": callouts.unresolved}
 
     trigger_name = m.group(1)
     obj_name = m.group(2)
@@ -754,4 +767,6 @@ def extract_apex_trigger(path: Path) -> dict:
     if raw_calls:
         nodes[0]["_raw_calls"] = raw_calls
 
-    return {"nodes": nodes, "edges": edges}
+    callouts = analyze_callouts(text, scrubbed, method_re=_METHOD_RE, brace_end=_matching_brace_end)
+    _add_callout_edges(trigger_nid, callouts, nodes, edges, str_path)
+    return {"nodes": nodes, "edges": edges, "_sites": callouts.sites, "_unresolved": callouts.unresolved}

@@ -22,9 +22,13 @@ from __future__ import annotations
 
 # Analyzers the coordinator accounts for. ``enabled`` flips to True when the extractor that does the
 # work ships; until then the analyzer reports ``not_run`` and no capability is advertised.
+#
+# ``marker`` is an envelope key the extractor must return when its scan actually ran. A file whose result lacks it
+# counts as failed, so an extractor path that skips the scan silently (an early return, a new code path) fails
+# closed instead of being reported as analysed.
 ANALYZERS: dict[str, dict] = {
-    "callout-edges.apex": {"suffixes": (".cls", ".trigger"), "enabled": False},
-    "callout-edges.flow-http": {"suffixes": (".flow-meta.xml",), "enabled": False},
+    "callout-edges.apex": {"suffixes": (".cls", ".trigger"), "enabled": True, "marker": "_sites"},
+    "callout-edges.flow-http": {"suffixes": (".flow-meta.xml",), "enabled": False, "marker": None},
 }
 
 # Worst to best. A merge keeps the lowest rank.

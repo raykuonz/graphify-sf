@@ -187,6 +187,9 @@ _ENDPOINT_STUBS = {
 }
 
 
+_PREFIX_ONLY_REASONS = frozenset({"dynamic_suffix", "non_final_static"})
+
+
 def _stub_missing_endpoints(nodes: list, edges: list) -> None:
     """Make callout targets that are not in the repo visible, and keep colliding host ids honest.
 
@@ -230,11 +233,21 @@ def _stub_missing_endpoints(nodes: list, edges: list) -> None:
         if name and (edge.get("target") not in names or name < names[edge["target"]]):
             names[edge["target"]] = name
 
+    # A target reached only through a known *prefix* ('callout:Acme' + env) is a guess at a name, not a statement
+    # that a credential called "Acme" exists, so it never gets a stub.
+    prefix_only: dict[str, bool] = {}
+    for edge in edges:
+        if edge.get("relation") == "makes_callout":
+            guess = edge.get("inference_reason") in _PREFIX_ONLY_REASONS
+            prefix_only[edge["target"]] = prefix_only.get(edge["target"], True) and guess
+
     known = {n["id"] for n in nodes}
     for edge in edges:
         if edge.get("relation") not in ("makes_callout", "uses"):
             continue
         target = edge.get("target", "")
+        if prefix_only.get(target):
+            continue
         for prefix, (sf_type, file_type) in _ENDPOINT_STUBS.items():
             if target.startswith(prefix) and target not in known:
                 known.add(target)
@@ -425,13 +438,18 @@ def extract(
     eligible_paths = set().union(*eligible_by_analyzer.values())
     outcomes: dict[Path, tuple[bool, int, int]] = {}
 
+    marker_by_path: dict[Path, str | None] = {}
+    for name, paths in eligible_by_analyzer.items():
+        for p in paths:
+            marker_by_path[p] = _ledger.ANALYZERS[name].get("marker")
+
     def _record(path: Path, result: dict) -> None:
         if path in eligible_paths:
-            outcomes[path] = (
-                not result.get("_failed"),
-                int(result.get("_sites", 0)),
-                int(result.get("_unresolved", 0)),
-            )
+            marker = marker_by_path.get(path)
+            # analysed = the extractor did not flag a failure AND, when the analyzer names a scan marker,
+            # reported that its scan ran (fail closed: a path that skips the scan is not "analysed")
+            ok = not result.get("_failed") and (marker is None or marker in result)
+            outcomes[path] = (ok, int(result.get("_sites", 0)), int(result.get("_unresolved", 0)))
 
     lwc_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("lwc", [])]
     aura_dirs = [Path(d) for d in detect_result.get("bundle_dirs", {}).get("aura", [])]
