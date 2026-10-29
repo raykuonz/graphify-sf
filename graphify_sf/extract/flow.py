@@ -12,7 +12,7 @@ from ._ids import apex_class_id, flow_id, make_sf_id, object_id
 _SF_NS = "http://soap.sforce.com/2006/04/metadata"
 
 # ``callout:Name/...`` or the action-reference form ``callout:{{Name}}``; the name ends at a path/query delimiter.
-_NC_RE = re.compile(r"callout:\s*\{{0,2}([^/?#\s{}]+)\}{0,2}", re.IGNORECASE)
+_NC_RE = re.compile(r"callout:\s*(?:\{\{(\w+)\}\}|(\w+)(?=$|[/?#\s]))", re.IGNORECASE)
 
 
 def _strip_ns(tag: str) -> str:
@@ -160,7 +160,7 @@ def extract_flow(path: Path) -> dict:
         for endpoint in candidates:
             nc_match = _NC_RE.match(endpoint)
             if nc_match:
-                nc_name = nc_match.group(1).strip()
+                nc_name = (nc_match.group(1) or nc_match.group(2)).strip()
                 nc_id = make_sf_id("namedcredential", nc_name)
                 resolved = True
                 if nc_id in seen_callouts:

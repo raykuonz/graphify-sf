@@ -111,3 +111,10 @@ def test_truncated_flow_withholds_the_capability(tmp_path):
     assert block["status"] == "partial"
     assert (block["eligible"], block["analyzed"], block["failed"]) == (2, 1, 1)
     assert block["sites"] == 1
+
+
+def test_merge_field_credential_name_is_unresolved(tmp_path):
+    for ref in ("callout:{!var}/x", "callout:Pay_NC{!suffix}", "callout:{{!var}}"):
+        r = _flow(tmp_path, _action("Call", "httpCallout", None, ref))
+        assert _callouts(r) == [], ref
+        assert r["_unresolved"] == 1, ref
