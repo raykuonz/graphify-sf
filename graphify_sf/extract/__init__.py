@@ -181,6 +181,81 @@ def _extract_file(path: Path) -> dict:
     return {"nodes": [], "edges": []}
 
 
+# Endpoint-like targets for which a missing entity gets a stub node: id prefix -> (sf_type, file_type).
+_ENDPOINT_STUBS = {
+    "namedcredential_": ("NamedCredential", "config"),
+}
+
+
+def _stub_missing_endpoints(nodes: list, edges: list) -> None:
+    """Make callout targets that are not in the repo visible, and keep colliding host ids honest.
+
+    * A ``makes_callout`` / ``uses`` edge to a Named Credential or external endpoint with no node (the
+      credential's metadata is not in this repo) gets a stub node (``stub: true``, no source file) carrying
+      the original-case name from the edge, so the edge survives the build and stays EXTRACTED. Runs before
+      ``_resolve_cross_references`` for the same reason ``_ensure_stub_nodes`` does.
+    * ``make_sf_id`` is lossy (``api.example.com`` and ``api-example.com`` share an id). Ids stay as they are, but
+      when more than one host maps to one id the node is marked ``identity_ambiguous`` with its ``hosts`` and the
+      calls to it are INFERRED (``inference_reason: host_id_collision``), because the edge cannot say which host.
+    * The private ``_tgt_name`` edge key is consumed here and never reaches the graph.
+    """
+    hosts_by_id: dict[str, set[str]] = {}
+    endpoint_nodes: dict[str, list[dict]] = {}
+    for node in nodes:
+        if node.get("sf_type") == "ExternalEndpoint" and node.get("label"):
+            hosts_by_id.setdefault(node["id"], set()).add(node["label"])
+            endpoint_nodes.setdefault(node["id"], []).append(node)
+    # Apex and Flow can both emit the node for one host; keep one copy chosen by content, not arrival order.
+    drop = set()
+    for copies in endpoint_nodes.values():
+        if len(copies) > 1:
+            keep = min(
+                copies, key=lambda n: (n.get("file_type") or "", n.get("source_file") or "", n.get("label") or "")
+            )
+            drop.update(id(n) for n in copies if n is not keep)
+    if drop:
+        nodes[:] = [n for n in nodes if id(n) not in drop]
+        endpoint_nodes = {k: [n for n in v if id(n) not in drop] for k, v in endpoint_nodes.items()}
+    ambiguous = {nid for nid, hosts in hosts_by_id.items() if len(hosts) > 1}
+    for nid in ambiguous:
+        for node in endpoint_nodes[nid]:
+            node["hosts"] = sorted(hosts_by_id[nid])
+            node["identity_ambiguous"] = True
+
+    # Several edges may name the same target in different cases; the label must not depend on which worker
+    # finished first, so use the smallest name in sorted order.
+    names: dict[str, str] = {}
+    for edge in edges:
+        name = edge.get("_tgt_name")
+        if name and (edge.get("target") not in names or name < names[edge["target"]]):
+            names[edge["target"]] = name
+
+    known = {n["id"] for n in nodes}
+    for edge in edges:
+        if edge.get("relation") not in ("makes_callout", "uses"):
+            continue
+        target = edge.get("target", "")
+        for prefix, (sf_type, file_type) in _ENDPOINT_STUBS.items():
+            if target.startswith(prefix) and target not in known:
+                known.add(target)
+                nodes.append(
+                    {
+                        "id": target,
+                        "label": names.get(target) or target[len(prefix) :],
+                        "sf_type": sf_type,
+                        "file_type": file_type,
+                        "source_file": None,
+                        "source_location": None,
+                        "stub": True,
+                    }
+                )
+        if target in ambiguous and edge.get("relation") == "makes_callout":
+            edge["confidence"] = "INFERRED"
+            edge["inference_reason"] = "host_id_collision"
+    for edge in edges:
+        edge.pop("_tgt_name", None)
+
+
 def _resolve_cross_references(nodes: list, edges: list) -> tuple[list, list]:
     """Mark edges to unknown targets as INFERRED instead of EXTRACTED.
 
@@ -450,6 +525,7 @@ def extract(
     # objects are not downgraded from EXTRACTED to INFERRED.
     from ..build import _ensure_stub_nodes
 
+    _stub_missing_endpoints(all_nodes, all_edges)
     _ensure_stub_nodes(all_nodes, all_edges)
 
     # Phase 2b: Cross-file resolution

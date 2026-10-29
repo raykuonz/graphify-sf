@@ -10,6 +10,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`deduplicate_by_label` no longer drops nodes whose label has no ASCII letters or digits** (for example Japanese Flow element labels) when any other pair of nodes was merged.
 - **A commented-out or quoted `setEndpoint(...)` no longer creates an EXTRACTED callout edge.** The Apex callout
   scan read the raw source, so `// req.setEndpoint('callout:Old_NC');`, a block comment, or the same text inside
   a string literal produced a `makes_callout` edge to `Old_NC`. The call must now be real code.
@@ -47,7 +48,30 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The two callout analyzers report `not_run` in this build until their extractors
   ship, so no capability is advertised yet.
 
+- **Callout targets that are not in the repo now appear in the graph.** A `makes_callout` (Apex, Flow) or `uses`
+  (External Service, External Data Source) edge to a Named Credential whose metadata is not in the project used to be
+  dropped when the graph was built, so a class calling `callout:Not_In_Repo` showed no callout at all. The target is
+  now a stub node (`stub: true`, no `source_file`, exact `sf_type`, original-case label) and the edge stays
+  EXTRACTED. A real node always replaces a stub with the same id, in either order (in a 3-way merge only when both sides added it; a deleted metadata file stays deleted). A stub is never folded into a different node that merely has a similar label.
+- **A Flow that calls a literal URL now creates the `ExternalEndpoint` node itself.** Before, the edge survived only
+  if some Apex class happened to call the same host; otherwise it was dropped.
+- **`ExternalEndpoint` ids that collide are flagged instead of silently conflated.** `make_sf_id` is lossy, so
+  `api.example.com` and `api-example.com` share an id. Ids are unchanged, but such a node now carries
+  `identity_ambiguous: true` and `hosts: [...]`, and calls to it are INFERRED with
+  `inference_reason: "host_id_collision"`; do not read "unreferenced" off an ambiguous node. Adding a second host
+  that collides with an existing one can therefore turn an earlier EXTRACTED edge INFERRED.
+- **Apex files whose class header the declaration regex misses are no longer invisible.** A `.cls` file whose own
+  declaration the header regex cannot parse (typically a dotted `implements Database.Batchable<sObject>`, or a
+  header without an access modifier) produced no node and no analysis, and an inner type with an access modifier
+  could rename the outer class. The header named after the file is now preferred; when it cannot be parsed, the file
+  gets a node named after it (`declaration_unparsed: true`, kind taken from the `class`/`interface`/`enum` keyword)
+  and is analysed like any other class. A `.cls` file that declares no Apex type (LaTeX, VB6) still produces
+  nothing. Many more real ApexClass nodes can appear (every Batchable); no existing id changes, and ApexClass inbound
+  EXTRACTED counts are identical to 0.5.0 on every test fixture. Classes started only through
+  `Database.executeBatch(new X())` have no inbound edge, so an orphan list will list them.
+
 ### Changed
+- Flow literal-URL callouts are deduplicated per flow and a merge-field host such as `https://{!Host}/x` is ignored; a Named Credential name ends at `/`, `?` or `#`.
 - `merge-graphs` now fails on a malformed input where it used to skip it silently.
 - The merge driver takes no output-directory lock: git hands it its own temporary `.merge_file_*` files, never the
   live `graph.json`, so there is nothing to serialise against.

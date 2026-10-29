@@ -55,6 +55,19 @@ def edge_datas(G: nx.Graph, u: str, v: str) -> list[dict]:
     return [raw]
 
 
+def prefer_real(a: dict, b: dict) -> dict | None:
+    """The real node when exactly one of two same-id nodes is a stub, else None.
+
+    A stub (``stub: true``) only stands in for metadata that is not in the repo, so whenever a real
+    node for the same entity exists it wins whole, whatever the order the two arrive in, and none of the
+    stub's fields (``stub``, null ``source_file``) leak into it.
+    """
+    a_stub, b_stub = bool(a.get("stub")), bool(b.get("stub"))
+    if a_stub == b_stub:
+        return None
+    return b if a_stub else a
+
+
 def build_from_json(extraction: dict, *, directed: bool = False, multigraph: bool = True) -> nx.Graph:
     """Build a NetworkX graph from an extraction dict.
 
@@ -85,7 +98,15 @@ def build_from_json(extraction: dict, *, directed: bool = False, multigraph: boo
         if "source_file" in node:
             node = dict(node)
             node["source_file"] = _norm_source_file(node["source_file"])
-        G.add_node(node["id"], **{k: v for k, v in node.items() if k != "id"})
+        attrs = {k: v for k, v in node.items() if k != "id"}
+        if G.has_node(node["id"]):
+            # Same id twice: a real node replaces a stub whole, a stub never overwrites a real node.
+            winner = prefer_real(G.nodes[node["id"]], attrs)
+            if winner is attrs:
+                G.nodes[node["id"]].clear()
+            elif winner is not None:
+                continue
+        G.add_node(node["id"], **attrs)
 
     node_set = set(G.nodes())
     norm_to_id: dict[str, str] = {_normalize_id(nid): nid for nid in node_set}
@@ -341,6 +362,10 @@ def _norm_label(label: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", label.lower()).strip()
 
 
+def _is_endpoint_stub(node: dict) -> bool:
+    return bool(node.get("stub")) and node.get("sf_type") in ("NamedCredential", "ExternalEndpoint")
+
+
 def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
     """Merge nodes that share a normalised label AND sf_type, rewriting edge references.
 
@@ -356,10 +381,14 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
     _CHUNK_SUFFIX = re.compile(r"_c\d+$")
     canonical: dict[tuple[str, str], dict] = {}
     remap: dict[str, str] = {}
+    unkeyed: list[dict] = []
 
     for node in nodes:
         label_key = _norm_label(node.get("label", node.get("id", "")))
         if not label_key:
+            unkeyed.append(
+                node
+            )  # a label with no ASCII letters/digits (e.g. Japanese) is never merged, but never dropped
             continue
         # Only nodes of the same sf_type may merge, so distinct components that
         # happen to share a normalised label are not conflated. When sf_type is
@@ -370,6 +399,17 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
         existing = canonical.get(key)
         if existing is None:
             canonical[key] = node
+        elif existing["id"] != node["id"] and (_is_endpoint_stub(existing) or _is_endpoint_stub(node)):
+            # A missing credential/host is a statement about that exact name: ``MyNC`` must not fold into a real
+            # ``My_NC`` just because both normalise alike.
+            unkeyed.append(node)
+        elif existing["id"] == node["id"] and (winner := prefer_real(existing, node)) is not None:
+            # A real node beats a stub carrying the same id, regardless of order. Different ids are never
+            # promoted this way: a stub ``MyNC`` must not be folded into a real ``My_NC``, nor an
+            # LLM-invented node replace ``object_account``.
+            loser = existing if winner is node else node
+            canonical[key] = winner
+            remap[loser["id"]] = winner["id"]
         else:
             has_suffix = bool(_CHUNK_SUFFIX.search(node["id"]))
             existing_has_suffix = bool(_CHUNK_SUFFIX.search(existing["id"]))
@@ -387,7 +427,7 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
     if not remap:
         return nodes, edges
 
-    deduped_nodes = list(canonical.values())
+    deduped_nodes = [*canonical.values(), *unkeyed]
     deduped_edges = []
     for edge in edges:
         e = dict(edge)
