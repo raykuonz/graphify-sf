@@ -25,7 +25,8 @@ import re
 from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlparse
+
+from ._ids import endpoint_host
 
 _SET_ENDPOINT_RE = re.compile(r"\.\s*setEndpoint\s*\(", re.IGNORECASE)
 _ANY_CLASS_HEADER_RE = re.compile(r"\b(?:class|interface|enum)\s+\w+[^{;]*\{", re.IGNORECASE)
@@ -324,11 +325,13 @@ def _resolve(value: _Val) -> tuple[str, str, str, str | None] | None:
     low = prefix.lower()
     if low.startswith("callout:"):
         rest = prefix[len("callout:") :]
-        name_m = re.match(r"[^/?#\s]+", rest)
+        name_m = re.match(r"[A-Za-z0-9_]+", rest)
         if not name_m:
             return None
         name = name_m.group(0)
         terminated = len(rest) > len(name)
+        if terminated and rest[len(name)] not in "/?#":
+            return None  # 'callout:Pay NC' / 'callout:Pay.NC': not a Named Credential name
         if value.complete or terminated:
             return "namedcredential", name, "EXTRACTED", None
         return "namedcredential", name, "INFERRED", value.reason or "dynamic_suffix"
@@ -337,10 +340,7 @@ def _resolve(value: _Val) -> tuple[str, str, str, str | None] | None:
         terminated = authority_end is not None
         if not (value.complete or terminated):
             return None  # a partial host is not an endpoint
-        try:
-            host = urlparse(prefix).hostname
-        except ValueError:
-            host = None
+        host = endpoint_host(prefix)
         if not host:
             return None
         return "externalendpoint", host, "EXTRACTED", None

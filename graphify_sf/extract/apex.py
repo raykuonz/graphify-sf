@@ -390,7 +390,7 @@ def _add_callout_edges(owner_id: str, callouts, nodes: list[dict], edges: list[d
             endpoint_confidence[tgt_id] = (
                 "EXTRACTED" if "EXTRACTED" in (c.confidence, endpoint_confidence.get(tgt_id)) else "INFERRED"
             )
-            if not any(n["id"] == tgt_id for n in nodes):
+            if not any(n["id"] == tgt_id and n.get("label") == c.name for n in nodes):
                 nodes.append(
                     {
                         "id": tgt_id,

@@ -70,15 +70,19 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `this.a.b.setEndpoint(...)` and `obj.field.setEndpoint(...)` have an unknown receiver; `new Other().setEndpoint(...)`
   is not a callout. A target known only by a prefix (`'callout:Acme' + env`) keeps its INFERRED edge but never gets a
   stub node, because the real credential is probably `Acme_Something`.
-- **Flow HTTP callouts are read from `httpCallout` actions only, in both shapes.** `<stringValue>callout:Name/path`
-  under an input parameter and `<actionName>callout:{{Name}}` (or `callout:Name`) on the action itself resolve to a
-  `makes_callout` edge to the Named Credential, EXTRACTED, with `source_location` set to the action name and
-  `site_count` when several actions share a target. A literal `https://host/...` is EXTRACTED too and creates its
-  `ExternalEndpoint` node. A `callout:` string inside any other action type (an email body, a chatter post) no longer
-  produces an edge. Every `httpCallout` action is a site in the `callout-edges.flow-http` ledger entry; one that
-  yields no edge (a merge-field host, a form this version does not read) counts as `unresolved`, so a Flow-only
-  consumer can tell "no callers" from "callers we could not read". Modern External Service / Named Credential
-  action forms are not guessed.
+- **Flow HTTP callouts are read from `httpCallout` actions, with the target taken from the place that names it.**
+  The Named Credential is `<actionName>callout:{{Name}}</actionName>` (the shape Flow Builder writes); when the action
+  has no such name, the `url` / `endpoint` input is used (`callout:Name/path`, or a literal `https://host/...`, which
+  creates its `ExternalEndpoint` node). Other string inputs are query, header or body values and are ignored, and an
+  action that names more than one target is not resolved. Resolved targets are EXTRACTED, with `source_location` set
+  to the action name and `site_count` counting actions. A `callout:` string in any other action type (an email body,
+  an Apex invocable action's input) no longer produces an edge. Names must be exactly `[A-Za-z0-9_]+` followed by
+  `/`, `?`, `#` or the end; hosts with merge fields, escapes, spaces, backslashes or non-ASCII characters are not
+  trusted (a trailing dot is dropped). The Apex resolver applies the same name and host rules. Every `httpCallout` action
+  is a site in the `callout-edges.flow-http` ledger entry, and so is every `externalService` action, which is counted
+  but not resolved in this version; sites that yield no edge count as `unresolved`, so a Flow-only consumer can tell
+  "no callers" from "callers we could not read". Hosts that share an id (`api.example.com`, `api-example.com`) each
+  get their node, so the collision is flagged even inside one file.
 - **Callout targets that are not in the repo now appear in the graph.** A `makes_callout` (Apex, Flow) or `uses`
   (External Service, External Data Source) edge to a Named Credential whose metadata is not in the project used to be
   dropped when the graph was built, so a class calling `callout:Not_In_Repo` showed no callout at all. The target is

@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urlparse
 
 
 def make_sf_id(*parts: str) -> str:
@@ -81,3 +82,24 @@ def gen_ai_planner_id(name: str) -> str:
 
 def prompt_template_id(name: str) -> str:
     return make_sf_id("prompttemplate", name)
+
+
+_HOST_RE = re.compile(r"[a-z0-9.-]+|[0-9a-f:]+")
+
+
+def endpoint_host(url: str) -> str | None:
+    """The host of an ``http(s)`` URL, or None when it cannot be stated with certainty.
+
+    Rejects anything the id scheme would conflate or that parsers disagree on: merge fields, percent-escapes,
+    backslashes, spaces, non-ASCII (IDN) hosts. A trailing dot is dropped (``api.example.com.`` is the same host).
+    """
+    if "\\" in url or " " in url.strip():
+        return None
+    try:
+        host = urlparse(url.strip()).hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    host = host.rstrip(".")
+    return host if host and _HOST_RE.fullmatch(host) else None

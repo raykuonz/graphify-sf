@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from graphify_sf.extract.flow import extract_flow
 
 
@@ -19,7 +21,7 @@ def _flow(tmp_path: Path, actions: str, name: str = "F") -> dict:
 
 def _action(name: str, action_type: str = "httpCallout", action_name: str | None = None, *values: str) -> str:
     params = "".join(
-        f"<inputParameters><name>p{i}</name><value><stringValue>{v}</stringValue></value></inputParameters>"
+        f"<inputParameters><name>{'url' if i == 0 else f'p{i}'}</name><value><stringValue>{v}</stringValue></value></inputParameters>"
         for i, v in enumerate(values)
     )
     ref = f"<actionName>{action_name}</actionName>" if action_name else ""
@@ -59,9 +61,10 @@ def test_unmatched_http_callout_is_an_unresolved_site(tmp_path):
 
 
 def test_callout_text_in_other_actions_is_not_a_callout(tmp_path):
-    r = _flow(tmp_path, _action("Mail", "emailSimple", None, "see callout:Foo for details"))
-    assert _callouts(r) == []
-    assert (r["_sites"], r["_unresolved"]) == (0, 0)
+    for action_type in ("emailSimple", "apex", "chatterPost"):
+        r = _flow(tmp_path, _action("Other", action_type, None, "callout:Foo/x", "https://x.example.com/y"))
+        assert _callouts(r) == [], action_type
+        assert (r["_sites"], r["_unresolved"]) == (0, 0), action_type
 
 
 def test_two_actions_to_one_credential_become_one_edge_with_a_site_count(tmp_path):
@@ -118,3 +121,79 @@ def test_merge_field_credential_name_is_unresolved(tmp_path):
         r = _flow(tmp_path, _action("Call", "httpCallout", None, ref))
         assert _callouts(r) == [], ref
         assert r["_unresolved"] == 1, ref
+
+
+def test_action_name_wins_and_other_string_values_are_ignored(tmp_path):
+    r = _flow(
+        tmp_path,
+        _action("Call", "httpCallout", "callout:{{Pay_NC}}", "callout:Pay_NC/v1", "https://callback.example.com/hook"),
+    )
+    (edge,) = _callouts(r)
+    assert edge["target"] == "namedcredential_pay_nc" and edge["site_count"] == 1
+    assert [n for n in r["nodes"] if n["sf_type"] == "ExternalEndpoint"] == []
+    assert (r["_sites"], r["_unresolved"]) == (1, 0)
+
+
+def test_non_endpoint_url_parameter_does_not_make_the_site_resolved(tmp_path):
+    action = (
+        "<actionCalls><name>Call</name><actionType>httpCallout</actionType>"
+        "<inputParameters><name>url</name><value><elementReference>endpoint_var</elementReference></value></inputParameters>"
+        "<inputParameters><name>callback</name><value><stringValue>https://callback.example.com/hook</stringValue></value></inputParameters>"
+        "</actionCalls>"
+    )
+    r = _flow(tmp_path, action)
+    assert _callouts(r) == [] and (r["_sites"], r["_unresolved"]) == (1, 1)
+
+
+def test_an_action_naming_two_targets_is_unresolved(tmp_path):
+    action = (
+        "<actionCalls><name>Call</name><actionType>httpCallout</actionType>"
+        "<inputParameters><name>url</name><value><stringValue>callout:A_NC/x</stringValue></value></inputParameters>"
+        "<inputParameters><name>endpoint</name><value><stringValue>callout:B_NC/y</stringValue></value></inputParameters>"
+        "</actionCalls>"
+    )
+    r = _flow(tmp_path, action)
+    assert _callouts(r) == [] and r["_unresolved"] == 1
+
+
+def test_external_service_actions_are_unresolved_sites(tmp_path):
+    r = _flow(tmp_path, _action("Svc", "externalService", "MyService.getOrder"))
+    assert _callouts(r) == [] and (r["_sites"], r["_unresolved"]) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    "ref", ["callout:Pay NC/x", "callout: Pay_NC/x", "callout:{{Pay_NC}}x", "callout:Pä/x", "callout:Pay.NC/x"]
+)
+def test_partial_or_invalid_credential_names_are_unresolved(tmp_path, ref):
+    r = _flow(tmp_path, _action("Call", "httpCallout", None, ref))
+    assert _callouts(r) == [], ref
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https:// api.example.com/x",
+        "https://api.example.com\\@evil.com/",
+        "https://%7B!Host%7D/x",
+        "https://bücher.example/x",
+    ],
+)
+def test_untrustworthy_hosts_are_unresolved(tmp_path, url):
+    r = _flow(tmp_path, _action("Call", "httpCallout", None, url))
+    assert _callouts(r) == [], url
+
+
+def test_trailing_dot_host_is_normalised(tmp_path):
+    r = _flow(tmp_path, _action("Call", "httpCallout", None, "https://api.example.com./x"))
+    (node,) = [n for n in r["nodes"] if n["sf_type"] == "ExternalEndpoint"]
+    assert node["label"] == "api.example.com"
+
+
+def test_colliding_hosts_in_one_flow_are_both_visible(tmp_path):
+    r = _flow(
+        tmp_path,
+        _action("A", "httpCallout", None, "https://api.example.com/a")
+        + _action("B", "httpCallout", None, "https://api-example.com/b"),
+    )
+    labels = sorted(n["label"] for n in r["nodes"] if n["sf_type"] == "ExternalEndpoint")
+    assert labels == ["api-example.com", "api.example.com"]
