@@ -267,12 +267,12 @@ def test_pipeline_writes_the_block_once_at_the_top_level(tmp_path, enabled):
     _assert_invariant(block["analysis"])
 
 
-def test_default_build_advertises_only_the_shipped_analyzers(tmp_path):
-    """Apex callout analysis ships in 0.6.0; the Flow HTTP analyzer is not_run until its extractor lands."""
+def test_default_build_advertises_both_shipped_analyzers(tmp_path):
+    """Both callout analyzers ship in 0.6.0; a clean build advertises both."""
     _, out = _build(tmp_path)
     block = _graph_json(out)["graphify_sf"]
-    assert block["capabilities"] == ["callout-edges.apex"]
-    assert block["analysis"]["callout-edges.flow-http"] == {"status": "not_run"}
+    assert block["capabilities"] == ["callout-edges.apex", "callout-edges.flow-http"]
+    assert {v["status"] for v in block["analysis"].values()} == {"complete"}
 
 
 def test_cluster_only_and_export_json_pass_the_block_through(tmp_path, enabled):

@@ -28,7 +28,7 @@ from __future__ import annotations
 # closed instead of being reported as analysed.
 ANALYZERS: dict[str, dict] = {
     "callout-edges.apex": {"suffixes": (".cls", ".trigger"), "enabled": True, "marker": "_sites"},
-    "callout-edges.flow-http": {"suffixes": (".flow-meta.xml",), "enabled": False, "marker": None},
+    "callout-edges.flow-http": {"suffixes": (".flow-meta.xml",), "enabled": True, "marker": "_sites"},
 }
 
 # Worst to best. A merge keeps the lowest rank.

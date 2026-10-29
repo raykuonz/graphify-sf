@@ -45,8 +45,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   status per analyzer, an input without a block counts as `not_run`, no counters). `graphify-sf stats` and the
   MCP `graph_stats` tool show it (the MCP fields are `null` when a graph has no block). "Complete" is relative to what
   graphify-sf scanned: files skipped by `.gitignore` / `.forceignore` and bundle or document extraction are not part of an
-  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. The Apex analyzer (`callout-edges.apex`) is live; the Flow analyzer (`callout-edges.flow-http`) reports `not_run`
-  until its extractor ships, so only `callout-edges.apex` is advertised as a capability.
+  analyzer. Only the top-level block counts; a nested `graph.graphify_sf` is ignored and never promoted. Both callout analyzers (`callout-edges.apex`, `callout-edges.flow-http`) are live, so a clean build advertises both
+  capabilities.
 
 - **Apex callout endpoints are resolved statically, with a stated confidence.** `setEndpoint(...)` is evaluated as a
   `+` concatenation of string literals and the file's own `String` constants (`static final`, `final`, or instance).
@@ -70,6 +70,19 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `this.a.b.setEndpoint(...)` and `obj.field.setEndpoint(...)` have an unknown receiver; `new Other().setEndpoint(...)`
   is not a callout. A target known only by a prefix (`'callout:Acme' + env`) keeps its INFERRED edge but never gets a
   stub node, because the real credential is probably `Acme_Something`.
+- **Flow HTTP callouts are read from `httpCallout` actions, with the target taken from the place that names it.**
+  The Named Credential is `<actionName>callout:{{Name}}</actionName>` (the shape Flow Builder writes); when the action
+  has no such name, the `url` / `endpoint` input is used (`callout:Name/path`, or a literal `https://host/...`, which
+  creates its `ExternalEndpoint` node). Other string inputs are query, header or body values and are ignored, and an
+  action that names more than one target is not resolved. Resolved targets are EXTRACTED, with `source_location` set
+  to the action name and `site_count` counting actions. A `callout:` string in any other action type (an email body,
+  an Apex invocable action's input) no longer produces an edge. Names must be exactly `[A-Za-z0-9_]+` followed by
+  `/`, `?`, `#` or the end; hosts with merge fields, escapes, spaces, backslashes or non-ASCII characters are not
+  trusted (a trailing dot is dropped). The Apex resolver applies the same name and host rules. Every `httpCallout` action
+  is a site in the `callout-edges.flow-http` ledger entry, and so is every `externalService` action, which is counted
+  but not resolved in this version; sites that yield no edge count as `unresolved`, so a Flow-only consumer can tell
+  "no callers" from "callers we could not read". Hosts that share an id (`api.example.com`, `api-example.com`) each
+  get their node, so the collision is flagged even inside one file.
 - **Callout targets that are not in the repo now appear in the graph.** A `makes_callout` (Apex, Flow) or `uses`
   (External Service, External Data Source) edge to a Named Credential whose metadata is not in the project used to be
   dropped when the graph was built, so a class calling `callout:Not_In_Repo` showed no callout at all. The target is
@@ -93,7 +106,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Database.executeBatch(new X())` have no inbound edge, so an orphan list will list them.
 
 ### Changed
-- Flow literal-URL callouts are deduplicated per flow and a merge-field host such as `https://{!Host}/x` is ignored; a Named Credential name ends at `/`, `?` or `#`.
+- A Named Credential name in a callout ends at `/`, `?` or `#`; a merge-field host such as `https://{!Host}/x` is not an endpoint.
 - `merge-graphs` now fails on a malformed input where it used to skip it silently.
 - The merge driver takes no output-directory lock: git hands it its own temporary `.merge_file_*` files, never the
   live `graph.json`, so there is nothing to serialise against.
