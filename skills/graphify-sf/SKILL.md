@@ -331,7 +331,7 @@ $(cat graphify-sf-out/.graphify_sf_cmd) explain "NODE_NAME" --relation queries -
 
 Replace `NODE_NAME` with the metadata name the user asked about. Use `--relation` when the question is specifically about one kind of dependency — for example, "what triggers on Account?" → `--relation triggers`. Then write a 3–5 sentence explanation: what this node is, what it connects to, and why those connections are significant in the org's metadata dependency graph.
 
-**Common relation values:** `triggers`, `invokes`, `calls`, `references`, `contains`, `queries`, `dml`, `extends`, `implements`
+**Common relation values:** `triggers`, `invokes`, `calls`, `references`, `contains`, `queries`, `dml`, `extends`, `implements`, `makes_callout`
 
 ---
 
@@ -376,7 +376,8 @@ When presenting graph findings, translate node types into plain language:
 | `PermissionSet` | Additive permissions that extend profiles |
 | `CustomLabel` | Translatable text constant |
 | `CustomMetadata` | Configuration metadata record |
-| `NamedCredential` | External service endpoint definition |
+| `NamedCredential` | External service endpoint definition (a `stub: true` node means its metadata is not in the repo) |
+| `ExternalEndpoint` | External host called by Apex or a Flow |
 | `ExternalService` | OpenAPI-based external service integration |
 | `Bot` | Agentforce agent definition |
 | `BotVersion` | Agent version — links to orchestrator flow, topics, planner |
@@ -399,6 +400,7 @@ Edge relations and what they mean:
 | `extends` | Apex class extends a superclass |
 | `implements` | Apex class implements an interface |
 | `invokes` | Flow calls a subflow, or Agentforce action calls Apex/Flow |
+| `makes_callout` | Apex class/trigger or Flow calls a Named Credential or external host (EXTRACTED = proven target; INFERRED has an `inference_reason`) |
 
 ---
 
@@ -408,5 +410,6 @@ Edge relations and what they mean:
 - Always show token cost (0 for graphify-sf — extraction is local, no LLM needed).
 - Never hide cohesion scores — show the raw number.
 - Never run HTML viz on a graph with more than 5,000 nodes without warning the user.
+- Before saying nothing calls an endpoint or a Named Credential, check `graphify-sf stats`: the `graphify_sf` coverage ledger must list `callout-edges.apex` and `callout-edges.flow-http` as capabilities and `unresolved` must be 0; otherwise say "no callers found" and name the gap. Ignore `test_context: true` edges when the question is about production code.
 - If a metadata node has `confidence: INFERRED`, tell the user — that relationship was inferred from source patterns, not from an explicit XML tag.
 - **Never write Python (heredocs, inline scripts, or `-c` one-liners) to detect the interpreter, read `.graphify_sf_python`, or invoke graphify-sf.** The only correct invocation pattern is `$(cat graphify-sf-out/.graphify_sf_cmd) <subcommand>`. If `.graphify_sf_cmd` is missing, run the resolver block in the fast-path section — never improvise.
