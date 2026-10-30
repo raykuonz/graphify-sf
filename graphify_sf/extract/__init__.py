@@ -201,36 +201,47 @@ def _compose_external_service_callouts(nodes: list, edges: list) -> dict[str, in
     ``via_external_service``. The Flow -> service edge is kept (two hops stay visible).
 
     Returns, per Flow source file, the number of call sites that could not be composed (the service is not in the
-    repo, its registration names no credential, or it names several), so the coverage ledger counts them as
+    repo, a registration names no credential or several, or registrations disagree), so the coverage ledger counts them as
     unresolved. Runs before ``_stub_missing_endpoints`` so a credential missing from the repo still gets a stub.
     """
-    credentials: dict[str, set[str]] = {}
-    credential_names: dict[tuple[str, str], str] = {}
+    # service id -> {registration file -> credential ids it names}. A service id can come from several files (a legacy
+    # and a current suffix, two package directories); the edge is composed only when every real registration file
+    # for the id names exactly one credential and they all name the same one.
+    registrations: dict[str, dict[str, set[str]]] = {}
+    labels: dict[str, str] = {}
+    for node in nodes:
+        if node.get("sf_type") == "ExternalService" and not node.get("stub"):
+            registrations.setdefault(node["id"], {}).setdefault(node.get("source_file") or "", set())
+            labels.setdefault(node["id"], node.get("label") or node["id"][len("externalservice_") :])
     for edge in edges:
         src, tgt = edge.get("source", ""), edge.get("target", "")
-        if edge.get("relation") == "uses" and src.startswith("externalservice_") and tgt.startswith("namedcredential_"):
-            credentials.setdefault(src, set()).add(tgt)
-            credential_names[(src, tgt)] = edge.get("_tgt_name") or tgt[len("namedcredential_") :]
-    services = {n["id"] for n in nodes if n.get("sf_type") == "ExternalService" and not n.get("stub")}
+        if edge.get("relation") == "uses" and tgt.startswith("namedcredential_") and src in registrations:
+            registrations[src].setdefault(edge.get("source_file") or "", set()).add(tgt)
+
+    def _credential(svc: str) -> str | None:
+        files = registrations.get(svc)
+        if not files or any(len(ids) != 1 for ids in files.values()):
+            return None
+        distinct = set().union(*files.values())
+        return next(iter(distinct)) if len(distinct) == 1 else None
 
     unresolved: dict[str, int] = {}
-    composed: list[dict] = []
+    composed: dict[tuple, dict] = {}
     for edge in edges:
         svc = edge.get("target", "")
         if edge.get("relation") != "makes_callout" or not svc.startswith("externalservice_"):
             continue
-        targets = credentials.get(svc, set()) if svc in services else set()
-        if len(targets) != 1:
+        nc_id = _credential(svc)
+        if nc_id is None:
             path = edge.get("source_file") or ""
             unresolved[path] = unresolved.get(path, 0) + int(edge.get("site_count", 1))
             continue
-        (nc_id,) = targets
         new_edge = dict(edge)
         new_edge["target"] = new_edge["_tgt"] = nc_id
-        new_edge["via_external_service"] = edge.get("_tgt_name") or svc[len("externalservice_") :]
-        new_edge["_tgt_name"] = credential_names[(svc, nc_id)]
-        composed.append(new_edge)
-    edges.extend(composed)
+        new_edge["via_external_service"] = labels[svc]  # the registration's own spelling, not the Flow's
+        new_edge.pop("_tgt_name", None)  # the registration's `uses` edge already carries the credential's name
+        composed.setdefault((edge["source"], nc_id, labels[svc]), new_edge)
+    edges.extend(composed.values())
     return unresolved
 
 
@@ -281,8 +292,9 @@ def _stub_missing_endpoints(nodes: list, edges: list) -> None:
     # that a credential called "Acme" exists, so it never gets a stub.
     prefix_only: dict[str, bool] = {}
     for edge in edges:
-        if edge.get("relation") == "makes_callout":
-            guess = edge.get("inference_reason") in _PREFIX_ONLY_REASONS
+        if edge.get("relation") in ("makes_callout", "uses"):
+            # an edge that states the name outright (a registration's ``uses``, an exact callout) is not a guess
+            guess = edge.get("relation") == "makes_callout" and edge.get("inference_reason") in _PREFIX_ONLY_REASONS
             prefix_only[edge["target"]] = prefix_only.get(edge["target"], True) and guess
 
     known = {n["id"] for n in nodes}

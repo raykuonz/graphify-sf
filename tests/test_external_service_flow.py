@@ -90,27 +90,109 @@ def test_legacy_suffix_still_works(tmp_path):
     assert "namedcredential_pay_nc" in {e["target"] for e in _callouts(data)}
 
 
-def test_two_credentials_in_one_registration_are_not_guessed(tmp_path):
-    project = _copy(tmp_path)
-    reg = project / "force-app/main/default/externalServiceRegistrations/Pay_Svc.externalServiceRegistration-meta.xml"
-    # the extractor reads the first <namedCredential>; add a second service file naming another credential via a
-    # duplicate registration id is impossible, so exercise the composer directly
-    from graphify_sf.extract import _compose_external_service_callouts
+def _reg(project: Path, rel: str, body: str) -> None:
+    path = project / "force-app/main/default" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<ExternalServiceRegistration xmlns="http://soap.sforce.com/2006/04/metadata">'
+        f"<label>x</label>{body}<operations><active>true</active><name>charge</name></operations></ExternalServiceRegistration>",
+        encoding="utf-8",
+    )
 
-    nodes = [{"id": "externalservice_pay_svc", "sf_type": "ExternalService"}]
-    edges = [
-        {"source": "externalservice_pay_svc", "target": "namedcredential_a", "relation": "uses"},
-        {"source": "externalservice_pay_svc", "target": "namedcredential_b", "relation": "uses"},
-        {
-            "source": "flow_f",
-            "target": "externalservice_pay_svc",
-            "relation": "makes_callout",
-            "source_file": "/x/F.flow-meta.xml",
-            "site_count": 3,
-        },
-    ]
-    assert _compose_external_service_callouts(nodes, edges) == {"/x/F.flow-meta.xml": 3}
-    assert len(edges) == 3 and reg.exists()
+
+def test_current_registrations_name_the_credential_in_namedcredentialreference(tmp_path):
+    project = _copy(tmp_path)
+    _reg(
+        project,
+        "externalServiceRegistrations/Pay_Svc.externalServiceRegistration-meta.xml",
+        "<namedCredentialReference>Pay_NC</namedCredentialReference>",
+    )
+    data = _build(project, tmp_path / "out")
+    assert "namedcredential_pay_nc" in {e["target"] for e in _callouts(data)}
+    assert _flow_block(data)["unresolved"] == 0
+
+
+def test_two_files_for_one_service_where_one_names_no_credential_are_not_composed(tmp_path):
+    project = _copy(tmp_path)
+    _reg(project, "legacy/Pay_Svc.externalService-meta.xml", "")  # same service id, no credential stated
+    data = _build(project, tmp_path / "out")
+    assert [e["target"] for e in _callouts(data)] == ["externalservice_pay_svc"]
+    assert _flow_block(data)["unresolved"] == 2
+
+
+def test_two_files_for_one_service_naming_different_credentials_are_not_composed(tmp_path):
+    project = _copy(tmp_path)
+    _reg(project, "legacy/Pay_Svc.externalService-meta.xml", "<namedCredential>Other_NC</namedCredential>")
+    data = _build(project, tmp_path / "out")
+    assert "namedcredential_pay_nc" not in {e["target"] for e in _callouts(data)}
+    assert _flow_block(data)["unresolved"] == 2
+
+
+def test_a_registration_naming_two_credentials_is_not_composed(tmp_path):
+    project = _copy(tmp_path)
+    _reg(
+        project,
+        "externalServiceRegistrations/Pay_Svc.externalServiceRegistration-meta.xml",
+        "<namedCredential>Pay_NC</namedCredential><namedCredentialReference>Other_NC</namedCredentialReference>",
+    )
+    data = _build(project, tmp_path / "out")
+    assert [e["target"] for e in _callouts(data)] == ["externalservice_pay_svc"]
+    assert _flow_block(data)["unresolved"] == 2
+
+
+def test_via_external_service_uses_the_registrations_spelling(tmp_path):
+    from graphify_sf.extract.flow import extract_flow
+
+    project = _copy(tmp_path)
+    flow = project / "force-app/main/default/flows/Charge_Customer.flow-meta.xml"
+    flow.write_text(flow.read_text().replace("Pay_Svc.charge", "PAY_SVC.charge"), encoding="utf-8")
+    data = _build(project, tmp_path / "out")
+    (nc_edge,) = [e for e in _callouts(data) if e["target"] == "namedcredential_pay_nc"]
+    assert nc_edge["via_external_service"] == "Pay_Svc"
+    assert extract_flow(flow)  # still parses
+
+
+def test_multi_dot_or_bare_action_names_are_unresolved_sites(tmp_path):
+    from graphify_sf.extract.flow import extract_flow
+
+    for name in ("acme.Pay_Svc.charge", "Pay_Svc"):
+        p = tmp_path / "F.flow-meta.xml"
+        p.write_text(
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata"><actionCalls><name>A</name>'
+            f"<actionName>{name}</actionName><actionType>externalService</actionType></actionCalls></Flow>",
+            encoding="utf-8",
+        )
+        r = extract_flow(p)
+        assert [e for e in r["edges"] if e["relation"] == "makes_callout"] == [], name
+        assert (r["_sites"], r["_unresolved"]) == (1, 1), name
+
+
+def test_registration_uses_edge_survives_a_prefix_guess_at_the_same_name(tmp_path):
+    project = _copy(
+        tmp_path, ("namedCredentials/Pay_NC.namedCredential-meta.xml", "flows/Charge_Customer.flow-meta.xml")
+    )
+    classes = project / "force-app/main/default/classes"
+    classes.mkdir(parents=True)
+    (classes / "Guess.cls").write_text(
+        "public class Guess { String env; void go() { HttpRequest r = new HttpRequest(); r.setEndpoint('callout:Pay_NC' + env); } }",
+        encoding="utf-8",
+    )
+    (classes / "Guess.cls-meta.xml").write_text("<ApexClass/>", encoding="utf-8")
+    data = _build(project, tmp_path / "out")
+    assert any(
+        e["relation"] == "uses" and e["source"] == "externalservice_pay_svc" and e["target"] == "namedcredential_pay_nc"
+        for e in data["links"]
+    )
+    assert any(n["id"] == "namedcredential_pay_nc" and n.get("stub") for n in data["nodes"])
+
+
+def test_label_dedup_does_not_merge_two_real_credentials_with_similar_names():
+    from graphify_sf.build import deduplicate_by_label
+
+    a = {"id": "namedcredential_pay_nc", "label": "Pay_NC", "sf_type": "NamedCredential", "source_file": "/r/a"}
+    b = {"id": "namedcredential_paync", "label": "PayNC", "sf_type": "NamedCredential", "source_file": "/r/b"}
+    nodes, _ = deduplicate_by_label([a, b], [])
+    assert {n["id"] for n in nodes} == {"namedcredential_pay_nc", "namedcredential_paync"}
 
 
 def test_operation_name_with_an_escaped_dot_keeps_its_service(tmp_path):

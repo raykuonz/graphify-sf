@@ -23,8 +23,11 @@ unresolved site and produced no edge.
   per action, `source_location` = action name) to an `ExternalService` node named by the part of `actionName` before
   the first dot. If that service's registration is in the repo and names exactly one Named Credential, a second,
   composed `makes_callout` edge (EXTRACTED) goes from the Flow to the credential with `via_external_service` naming the
-  service; the two hops stay visible. If the registration is missing, names no credential or several, the sites count
-  as `unresolved` in `callout-edges.flow-http` and no credential is guessed. A service whose registration is not in
+  service; the two hops stay visible. If the registration is missing, names no credential or several, or two files for
+  the same service disagree (a legacy and a current suffix, two package directories), the sites count as `unresolved`
+  in `callout-edges.flow-http` and no credential is guessed. Registrations name the credential in
+  `<namedCredentialReference>` (current) or `<namedCredential>` (older); both are read. `actionName` must be exactly
+  `Service.operation`. A service whose registration is not in
   the repo becomes a stub node, like a missing Named Credential. An action name without a usable service part is an
   unresolved site.
 - **External Service registrations are now read.** Real SFDX source is
@@ -104,7 +107,7 @@ Graphs without the block were not analysed; rebuild them.
   with `site_count` and the first `source_location`, so production and test calls, or EXTRACTED and INFERRED calls to
   one target, stay separate parallel edges. Sites in `@IsTest` classes or methods and in `testMethod` methods carry
   `test_context: true`. Apex triggers are scanned too. The `callout-edges.apex` ledger entry counts `sites` and
-  `unresolved` (sites that did not end in an EXTRACTED edge); a file whose extractor does not report its sites counts
+  `unresolved` (sites that did not reach a credential or host); a file whose extractor does not report its sites counts
   as failed. When `unresolved > 0`, treat "no callers" findings as candidates. Counts are taken per site by the
   extractor, before cross-file adjustments (a host-id collision later downgrades its edges to INFERRED without
   changing `unresolved`). A name resolves to a constant only if the file declares it exactly once in any form

@@ -154,8 +154,11 @@ def extract_flow(path: Path) -> dict:
         if action_type == "externalService":
             http_sites += 1
             action_name = _find_text(action, "name", ns) or _find_text(action, "actionName", ns)
-            service = (_find_text(action, "actionName", ns) or "").split(".", 1)[0].strip()
-            if not _SERVICE_NAME_RE.fullmatch(service):
+            qualified = (_find_text(action, "actionName", ns) or "").strip()
+            # ``Service.operation``: exactly one dot (a literal dot never occurs in an operation name; it is escaped as
+            # ``x2e``), so ``a.b.c`` or a bare ``Service`` is not read as a service name.
+            service = qualified.split(".", 1)[0] if qualified.count(".") == 1 else ""
+            if not _SERVICE_NAME_RE.fullmatch(service) or not qualified.split(".", 1)[1]:
                 http_unresolved += 1
                 continue
             svc_id = make_sf_id("externalservice", service)

@@ -578,7 +578,7 @@ graphify-sf check-update . || graphify-sf . --update --no-viz
 | `PermissionSet` | `.permissionset-meta.xml` | Permission set name, granted permissions |
 | `CustomLabel` | `.labels-meta.xml` | Label names |
 | `NamedCredential` | `.namedCredential-meta.xml` | Credential name, endpoint |
-| `ExternalService` | `.externalServiceRegistration-meta.xml` | Service name, the Named Credential it uses (also accepts the legacy `.externalService-meta.xml`) |
+| `ExternalService` | `.externalServiceRegistration-meta.xml` | Service name, the Named Credential it uses (`namedCredentialReference` or `namedCredential`; also accepts the legacy `.externalService-meta.xml`) |
 | `Bot` | `.bot-meta.xml` | Agentforce agent definition — label, bot user |
 | `BotVersion` | `.botVersion-meta.xml` | Agent version — links to orchestrator flow, topics, planner |
 | `GenAiPlugin` | `.genAiPlugin-meta.xml` | Agentforce Topic — groups actions, contains GenAiFunctions |
@@ -633,7 +633,7 @@ stub node (`stub: true`, no `source_file`); a real node always replaces a stub.
 
 `status` is `complete` when no file failed, `partial` or `failed` otherwise, and `not_run` when the analyzer did not run
 (a merged graph carries statuses only). `capabilities` lists the complete analyzers. A graph without the block was never
-analysed. `unresolved` counts call sites that did not end in an EXTRACTED edge, so when it is above zero read "nothing
+analysed. `unresolved` counts call sites that did not reach a credential or host, so when it is above zero read "nothing
 calls this endpoint" as a candidate, not a fact. `graphify-sf stats` and the MCP `graph_stats` tool show the ledger.
 
 ---
