@@ -11,6 +11,33 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.1] — 2026-10-30
+
+Corrects how Flow HTTP callouts are read. 0.6.0 resolved `actionType=httpCallout`, but Flow Builder's HTTP Callout is
+stored as `actionType=externalService` (`actionName` is `Service.operation`; the Metadata API `InvocableActionType`
+list has `externalService` and no `httpCallout`). In a real org nearly every Flow callout therefore counted as an
+unresolved site and produced no edge.
+
+### Fixed
+- **Flow `externalService` actions now produce edges.** The Flow gets a `makes_callout` edge (EXTRACTED, `site_count`
+  per action, `source_location` = action name) to an `ExternalService` node named by the part of `actionName` before
+  the first dot. If that service's registration is in the repo and names exactly one Named Credential, a second,
+  composed `makes_callout` edge (EXTRACTED) goes from the Flow to the credential with `via_external_service` naming the
+  service; the two hops stay visible. If the registration is missing, names no credential or several, the sites count
+  as `unresolved` in `callout-edges.flow-http` and no credential is guessed. A service whose registration is not in
+  the repo becomes a stub node, like a missing Named Credential. An action name without a usable service part is an
+  unresolved site.
+- **External Service registrations are now read.** Real SFDX source is
+  `externalServiceRegistrations/<Name>.externalServiceRegistration-meta.xml`; only the unused
+  `.externalService-meta.xml` was recognised, so real registrations (and their `uses` edge to the Named Credential)
+  were ignored. Both suffixes are accepted now, and the node carries `named_credential_type` when the registration
+  states it. Graphs gain `ExternalService` nodes and `uses` edges on projects that have registrations, which can
+  shift community ids.
+- The 0.6.0 wording that Flow callouts are read from `httpCallout` actions only was wrong. `httpCallout` (the
+  hand-written shape with `callout:{{Name}}` in the action name or a `url` input) is still read.
+
+---
+
 ## [0.6.0] — 2026-10-29
 
 Integration endpoints: `makes_callout` edges now say which Named Credential or external host an Apex class, trigger
@@ -1045,7 +1072,8 @@ pairs ever survived).
 - File watcher with debounce and incremental rebuild
 - `.graphifysfignore` for exclude patterns (gitignore syntax)
 
-[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/raykuonz/graphify-sf/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/raykuonz/graphify-sf/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/raykuonz/graphify-sf/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/raykuonz/graphify-sf/compare/v0.4.7...v0.5.0
 [0.4.7]: https://github.com/raykuonz/graphify-sf/compare/v0.4.6...v0.4.7

@@ -578,7 +578,7 @@ graphify-sf check-update . || graphify-sf . --update --no-viz
 | `PermissionSet` | `.permissionset-meta.xml` | Permission set name, granted permissions |
 | `CustomLabel` | `.labels-meta.xml` | Label names |
 | `NamedCredential` | `.namedCredential-meta.xml` | Credential name, endpoint |
-| `ExternalService` | `.externalService-meta.xml` | Service name, referenced schema |
+| `ExternalService` | `.externalServiceRegistration-meta.xml` | Service name, the Named Credential it uses (also accepts the legacy `.externalService-meta.xml`) |
 | `Bot` | `.bot-meta.xml` | Agentforce agent definition — label, bot user |
 | `BotVersion` | `.botVersion-meta.xml` | Agent version — links to orchestrator flow, topics, planner |
 | `GenAiPlugin` | `.genAiPlugin-meta.xml` | Agentforce Topic — groups actions, contains GenAiFunctions |
@@ -600,12 +600,14 @@ graphify-sf check-update . || graphify-sf . --update --no-viz
 | `extends` | Apex class extends a superclass |
 | `implements` | Apex class implements an interface |
 | `invokes` | Flow calls a subflow, or Agentforce action calls an Apex class / Flow |
-| `makes_callout` | Apex class/trigger or Flow calls a Named Credential or an external host (see below) |
+| `makes_callout` | Apex class/trigger or Flow calls a Named Credential, External Service or external host (see below) |
 
 ### Integration endpoints and the coverage ledger
 
-`makes_callout` edges run from an Apex class, Apex trigger or Flow `httpCallout` action to a `NamedCredential` or an
-`ExternalEndpoint` node. The edge says how sure the tool is:
+`makes_callout` edges run from an Apex class, Apex trigger or Flow HTTP callout action to a `NamedCredential`, an
+`ExternalService` or an `ExternalEndpoint` node. A Flow's HTTP Callout is an `externalService` action: the Flow gets an
+edge to the service and, when the service's registration is in the repo, a second edge to its Named Credential with
+`via_external_service`. The edge says how sure the tool is:
 
 - `EXTRACTED`: the target is proven by the source. `setEndpoint('callout:Acme_NC/v1')`, a `static final String` constant
   of the same file plus a path, `'callout:Acme' + '_ERP'`, a literal `https://host/...`, or a Flow's `callout:Name`.

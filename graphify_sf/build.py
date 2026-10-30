@@ -363,7 +363,7 @@ def _norm_label(label: str) -> str:
 
 
 def _is_endpoint_stub(node: dict) -> bool:
-    return bool(node.get("stub")) and node.get("sf_type") in ("NamedCredential", "ExternalEndpoint")
+    return bool(node.get("stub")) and node.get("sf_type") in ("NamedCredential", "ExternalEndpoint", "ExternalService")
 
 
 def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
