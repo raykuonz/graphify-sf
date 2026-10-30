@@ -50,7 +50,8 @@ _COMPOUND_EXT_MAP = {
     ".md-meta.xml": SFFileType.CONFIG,
     ".settings-meta.xml": SFFileType.CONFIG,
     ".namedCredential-meta.xml": SFFileType.CONFIG,
-    ".externalService-meta.xml": SFFileType.CONFIG,
+    ".externalService-meta.xml": SFFileType.CONFIG,  # legacy alias
+    ".externalServiceRegistration-meta.xml": SFFileType.CONFIG,  # the real ExternalServiceRegistration suffix
     ".connectedApp-meta.xml": SFFileType.CONFIG,
     ".app-meta.xml": SFFileType.CONFIG,
     ".tab-meta.xml": SFFileType.CONFIG,

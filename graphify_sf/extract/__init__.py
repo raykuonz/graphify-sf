@@ -111,7 +111,8 @@ _DISPATCH: dict[str, object] = {
     ".labels-meta.xml": extract_custom_labels,
     ".md-meta.xml": extract_custom_metadata_record,
     ".namedCredential-meta.xml": extract_named_credential,
-    ".externalService-meta.xml": extract_external_service,
+    ".externalService-meta.xml": extract_external_service,  # legacy alias
+    ".externalServiceRegistration-meta.xml": extract_external_service,
     ".settings-meta.xml": extract_generic_config,
     ".connectedApp-meta.xml": extract_generic_config,
     ".app-meta.xml": extract_custom_app,  # D3: CustomApplication with contains edges
@@ -184,10 +185,64 @@ def _extract_file(path: Path) -> dict:
 # Endpoint-like targets for which a missing entity gets a stub node: id prefix -> (sf_type, file_type).
 _ENDPOINT_STUBS = {
     "namedcredential_": ("NamedCredential", "config"),
+    "externalservice_": ("ExternalService", "config"),
 }
 
 
 _PREFIX_ONLY_REASONS = frozenset({"dynamic_suffix", "non_final_static"})
+
+
+def _compose_external_service_callouts(nodes: list, edges: list) -> dict[str, int]:
+    """Connect Flow callouts to the Named Credential behind the External Service they invoke.
+
+    A Flow ``externalService`` action names only the service (``Service.operation``); the credential is stated by
+    the service's registration (its ``uses`` edge). Both links are facts in the source, so the composed
+    ``Flow --makes_callout--> NamedCredential`` edge is EXTRACTED and records the service it went through in
+    ``via_external_service``. The Flow -> service edge is kept (two hops stay visible).
+
+    Returns, per Flow source file, the number of call sites that could not be composed (the service is not in the
+    repo, a registration names no credential or several, or registrations disagree), so the coverage ledger counts them as
+    unresolved. Runs before ``_stub_missing_endpoints`` so a credential missing from the repo still gets a stub.
+    """
+    # service id -> {registration file -> credential ids it names}. A service id can come from several files (a legacy
+    # and a current suffix, two package directories); the edge is composed only when every real registration file
+    # for the id names exactly one credential and they all name the same one.
+    registrations: dict[str, dict[str, set[str]]] = {}
+    labels: dict[str, str] = {}
+    for node in nodes:
+        if node.get("sf_type") == "ExternalService" and not node.get("stub"):
+            registrations.setdefault(node["id"], {}).setdefault(node.get("source_file") or "", set())
+            labels.setdefault(node["id"], node.get("label") or node["id"][len("externalservice_") :])
+    for edge in edges:
+        src, tgt = edge.get("source", ""), edge.get("target", "")
+        if edge.get("relation") == "uses" and tgt.startswith("namedcredential_") and src in registrations:
+            registrations[src].setdefault(edge.get("source_file") or "", set()).add(tgt)
+
+    def _credential(svc: str) -> str | None:
+        files = registrations.get(svc)
+        if not files or any(len(ids) != 1 for ids in files.values()):
+            return None
+        distinct = set().union(*files.values())
+        return next(iter(distinct)) if len(distinct) == 1 else None
+
+    unresolved: dict[str, int] = {}
+    composed: dict[tuple, dict] = {}
+    for edge in edges:
+        svc = edge.get("target", "")
+        if edge.get("relation") != "makes_callout" or not svc.startswith("externalservice_"):
+            continue
+        nc_id = _credential(svc)
+        if nc_id is None:
+            path = edge.get("source_file") or ""
+            unresolved[path] = unresolved.get(path, 0) + int(edge.get("site_count", 1))
+            continue
+        new_edge = dict(edge)
+        new_edge["target"] = new_edge["_tgt"] = nc_id
+        new_edge["via_external_service"] = labels[svc]  # the registration's own spelling, not the Flow's
+        new_edge.pop("_tgt_name", None)  # the registration's `uses` edge already carries the credential's name
+        composed.setdefault((edge["source"], nc_id, labels[svc]), new_edge)
+    edges.extend(composed.values())
+    return unresolved
 
 
 def _stub_missing_endpoints(nodes: list, edges: list) -> None:
@@ -237,8 +292,9 @@ def _stub_missing_endpoints(nodes: list, edges: list) -> None:
     # that a credential called "Acme" exists, so it never gets a stub.
     prefix_only: dict[str, bool] = {}
     for edge in edges:
-        if edge.get("relation") == "makes_callout":
-            guess = edge.get("inference_reason") in _PREFIX_ONLY_REASONS
+        if edge.get("relation") in ("makes_callout", "uses"):
+            # an edge that states the name outright (a registration's ``uses``, an exact callout) is not a guess
+            guess = edge.get("relation") == "makes_callout" and edge.get("inference_reason") in _PREFIX_ONLY_REASONS
             prefix_only[edge["target"]] = prefix_only.get(edge["target"], True) and guess
 
     known = {n["id"] for n in nodes}
@@ -543,6 +599,12 @@ def extract(
     # objects are not downgraded from EXTRACTED to INFERRED.
     from ..build import _ensure_stub_nodes
 
+    # Flow -> External Service -> Named Credential composition adds ledger-visible unresolved sites per Flow file.
+    for path, extra in _compose_external_service_callouts(all_nodes, all_edges).items():
+        key = Path(path)
+        if key in outcomes:
+            ok, sites, unresolved = outcomes[key]
+            outcomes[key] = (ok, sites, unresolved + extra)
     _stub_missing_endpoints(all_nodes, all_edges)
     _ensure_stub_nodes(all_nodes, all_edges)
 

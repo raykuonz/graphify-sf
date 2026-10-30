@@ -362,8 +362,11 @@ def _norm_label(label: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", label.lower()).strip()
 
 
+_ENDPOINT_TYPES = ("NamedCredential", "ExternalEndpoint", "ExternalService")
+
+
 def _is_endpoint_stub(node: dict) -> bool:
-    return bool(node.get("stub")) and node.get("sf_type") in ("NamedCredential", "ExternalEndpoint")
+    return bool(node.get("stub")) and node.get("sf_type") in _ENDPOINT_TYPES
 
 
 def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -399,9 +402,9 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
         existing = canonical.get(key)
         if existing is None:
             canonical[key] = node
-        elif existing["id"] != node["id"] and (_is_endpoint_stub(existing) or _is_endpoint_stub(node)):
-            # A missing credential/host is a statement about that exact name: ``MyNC`` must not fold into a real
-            # ``My_NC`` just because both normalise alike.
+        elif existing["id"] != node["id"] and node.get("sf_type") in _ENDPOINT_TYPES:
+            # A credential, service or host is identified by its exact name: ``MyNC`` must not fold into ``My_NC``
+            # (stub or real) just because both normalise alike, or edges would be re-pointed at the wrong target.
             unkeyed.append(node)
         elif existing["id"] == node["id"] and (winner := prefer_real(existing, node)) is not None:
             # A real node beats a stub carrying the same id, regardless of order. Different ids are never

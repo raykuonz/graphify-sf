@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExternalServiceRegistration xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Pay Svc</label>
+    <namedCredential>Pay_NC</namedCredential>
+    <namedCredentialType>Legacy</namedCredentialType>
+    <operations>
+        <active>true</active>
+        <name>charge</name>
+    </operations>
+    <operations>
+        <active>true</active>
+        <name>refund</name>
+    </operations>
+    <registrationProviderType>Custom</registrationProviderType>
+    <schemaType>OpenApi</schemaType>
+    <schemaUploadFileExtension>json</schemaUploadFileExtension>
+    <schema>{"openapi": "3.0.0", "info": {"title": "Pay", "version": "1.0.0"}, "paths": {}}</schema>
+    <status>Complete</status>
+</ExternalServiceRegistration>

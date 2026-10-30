@@ -156,9 +156,30 @@ def test_an_action_naming_two_targets_is_unresolved(tmp_path):
     assert _callouts(r) == [] and r["_unresolved"] == 1
 
 
-def test_external_service_actions_are_unresolved_sites(tmp_path):
+def test_external_service_action_edges_to_the_service(tmp_path):
     r = _flow(tmp_path, _action("Svc", "externalService", "MyService.getOrder"))
-    assert _callouts(r) == [] and (r["_sites"], r["_unresolved"]) == (1, 1)
+    (edge,) = _callouts(r)
+    assert (edge["target"], edge["confidence"], edge["_tgt_name"]) == (
+        "externalservice_myservice",
+        "EXTRACTED",
+        "MyService",
+    )
+    assert edge["source_location"] == "Svc" and (r["_sites"], r["_unresolved"]) == (1, 0)
+
+
+def test_external_service_action_without_a_service_part_is_unresolved(tmp_path):
+    for name in ("", ".op", "bad name.op"):
+        r = _flow(tmp_path, _action("Svc", "externalService", name or None))
+        assert _callouts(r) == [] and (r["_sites"], r["_unresolved"]) == (1, 1), name
+
+
+def test_two_operations_of_one_service_aggregate(tmp_path):
+    r = _flow(
+        tmp_path,
+        _action("A", "externalService", "Pay_Svc.charge") + _action("B", "externalService", "Pay_Svc.refund"),
+    )
+    (edge,) = _callouts(r)
+    assert edge["site_count"] == 2 and edge["source_location"] == "A"
 
 
 @pytest.mark.parametrize(

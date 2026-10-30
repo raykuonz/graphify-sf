@@ -12,6 +12,7 @@ _SF_NS = "http://soap.sforce.com/2006/04/metadata"
 
 # ``callout:Name/...`` or the action-reference form ``callout:{{Name}}``; the name ends at a path/query delimiter.
 _NC_RE = re.compile(r"callout:(?:\{\{(\w+)\}\}|(\w+))(?=$|[/?#])", re.IGNORECASE | re.ASCII)
+_SERVICE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*", re.ASCII)  # an External Service API name, no namespace dots
 _ENDPOINT_PARAMS = frozenset({"url", "endpoint", "endpointurl"})
 
 
@@ -145,12 +146,31 @@ def extract_flow(path: Path) -> dict:
             sub_name = _find_text(action, "actionName", ns)
             if sub_name:
                 edges.append(_make_edge(flow_nid, flow_id(sub_name), "invokes", "EXTRACTED", str_path))
-        # A2: HTTP callout actions. ``httpCallout`` actions are callout sites. So are ``externalService`` actions, which
-        # this version does not resolve (counted unresolved, so the ledger never claims to have read them). A
-        # ``callout:`` string inside any other action type (an email body, a chatter post) is not a callout.
+        # A2: HTTP callout actions. ``externalService`` is what Flow Builder writes for an HTTP Callout (``actionName``
+        # is ``Service.operation``; the Named Credential lives in the service's registration, so the edge here goes to
+        # the External Service and a later pass composes it with the registration's credential). ``httpCallout``
+        # (``callout:`` in the action name or a ``url`` input) is kept for the hand-written shape. A ``callout:``
+        # string inside any other action type (an email body, a chatter post) is not a callout.
         if action_type == "externalService":
             http_sites += 1
-            http_unresolved += 1
+            action_name = _find_text(action, "name", ns) or _find_text(action, "actionName", ns)
+            qualified = (_find_text(action, "actionName", ns) or "").strip()
+            # ``Service.operation``: exactly one dot (a literal dot never occurs in an operation name; it is escaped as
+            # ``x2e``), so ``a.b.c`` or a bare ``Service`` is not read as a service name.
+            service = qualified.split(".", 1)[0] if qualified.count(".") == 1 else ""
+            if not _SERVICE_NAME_RE.fullmatch(service) or not qualified.split(".", 1)[1]:
+                http_unresolved += 1
+                continue
+            svc_id = make_sf_id("externalservice", service)
+            if svc_id in seen_callouts:
+                seen_callouts[svc_id]["site_count"] += 1
+                continue
+            svc_edge = _make_edge(flow_nid, svc_id, "makes_callout", "EXTRACTED", str_path)
+            svc_edge["_tgt_name"] = service  # original-case label for a stub node; consumed in extract()
+            svc_edge["source_location"] = action_name
+            svc_edge["site_count"] = 1
+            seen_callouts[svc_id] = svc_edge
+            edges.append(svc_edge)
             continue
         if action_type != "httpCallout":
             continue

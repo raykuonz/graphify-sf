@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <actionCalls>
+        <name>Charge_Card</name>
+        <label>Charge Card</label>
+        <locationX>176</locationX>
+        <locationY>158</locationY>
+        <actionName>Pay_Svc.charge</actionName>
+        <actionType>externalService</actionType>
+        <connector>
+            <targetReference>Refund_Card</targetReference>
+        </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>amount</name>
+            <value>
+                <elementReference>Amount</elementReference>
+            </value>
+        </inputParameters>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </actionCalls>
+    <actionCalls>
+        <name>Refund_Card</name>
+        <label>Refund Card</label>
+        <locationX>176</locationX>
+        <locationY>278</locationY>
+        <actionName>Pay_Svc.refund</actionName>
+        <actionType>externalService</actionType>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </actionCalls>
+    <apiVersion>62.0</apiVersion>
+    <label>Charge Customer</label>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Charge_Card</targetReference>
+        </connector>
+    </start>
+    <status>Active</status>
+    <variables>
+        <name>Amount</name>
+        <dataType>Number</dataType>
+        <isCollection>false</isCollection>
+        <isInput>true</isInput>
+        <isOutput>false</isOutput>
+        <scale>2</scale>
+    </variables>
+</Flow>

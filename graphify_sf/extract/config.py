@@ -128,8 +128,10 @@ def extract_external_service(path: Path) -> dict:
     """Extract an ExternalService node and its uses edge to NamedCredential."""
     str_path = str(path)
     stem = path.stem
-    if stem.endswith(".externalService-meta"):
-        stem = stem[: -len(".externalService-meta")]
+    for suffix in (".externalServiceRegistration-meta", ".externalService-meta"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
     nid = make_sf_id("externalservice", stem)
 
     nodes: list[dict] = [
@@ -148,8 +150,17 @@ def extract_external_service(path: Path) -> dict:
         tree = ET.parse(str_path)
         root_el = tree.getroot()
         ns = _get_ns(root_el)
-        nc = _find_text(root_el, "namedCredential", ns)
-        if nc:
+        nc_type = _find_text(root_el, "namedCredentialType", ns)
+        if nc_type:
+            nodes[0]["named_credential_type"] = nc_type
+        # Older registrations state ``<namedCredential>``; current ones ``<namedCredentialReference>``. One edge per
+        # distinct credential the file names (a file naming two is not composed later).
+        names = dict.fromkeys(
+            n
+            for n in (_find_text(root_el, "namedCredential", ns), _find_text(root_el, "namedCredentialReference", ns))
+            if n
+        )
+        for nc in names:
             nc_edge = _make_edge(nid, make_sf_id("namedcredential", nc), "uses", "EXTRACTED", str_path)
             nc_edge["_tgt_name"] = nc  # original-case label for a stub node; consumed in extract()
             edges.append(nc_edge)

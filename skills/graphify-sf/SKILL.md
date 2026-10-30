@@ -400,7 +400,7 @@ Edge relations and what they mean:
 | `extends` | Apex class extends a superclass |
 | `implements` | Apex class implements an interface |
 | `invokes` | Flow calls a subflow, or Agentforce action calls Apex/Flow |
-| `makes_callout` | Apex class/trigger or Flow calls a Named Credential or external host (EXTRACTED = proven target; INFERRED has an `inference_reason`) |
+| `makes_callout` | Apex class/trigger or Flow calls a Named Credential, External Service or external host (a Flow HTTP Callout reaches its credential via the ExternalService node; `via_external_service` names it) (EXTRACTED = proven target; INFERRED has an `inference_reason`) |
 
 ---
 
